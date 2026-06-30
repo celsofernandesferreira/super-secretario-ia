@@ -6,8 +6,7 @@ import glob
 import streamlit.components.v1 as components
 import logging
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
-# Cria um ficheiro local que regista quem usou e o que foi processado
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica e Monitorização)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -45,7 +44,7 @@ try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
     st.error("Erro: Chave API em falta nos Secrets do Streamlit.")
-    logging.error("Falha ao inicializar a aplicação: Chave API ausente.")
+    logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
     st.stop()
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
@@ -71,8 +70,9 @@ def obter_dados_guimabus():
             
             media = total_atraso / count if count > 0 else 0
             resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
-            logging.info("Ferramenta Guimabus executada com sucesso.")
+            logging.info("Ferramenta Guimabus executada com sucesso pelo modelo.")
             return resumo
+        logging.warning(f"API Guimabus devolveu status code HTTP {response.status_code}")
         return "Tracking da Guimabus temporariamente indisponível."
     except Exception as e:
         logging.error(f"Erro ao chamar API Guimabus: {e}")
@@ -126,9 +126,11 @@ def renderizar_jogo():
     """
     components.html(html_jogo, height=450)
 
-# --- INICIALIZAÇÃO DE ESTADOS ---
+# --- INICIALIZAÇÃO DE ESTADOS E LOG DE ENTRADA ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
+    # Como esta chave não existia, significa que é um novo acesso ou refresh de página
+    logging.info("Nova sessão de utilizador iniciada no ecossistema do agente.")
 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
@@ -139,7 +141,7 @@ with st.sidebar:
     if st.button("🗑️ Limpar Histórico / Reset Memória", use_container_width=True):
         st.session_state.messages = []
         st.session_state.jogo_ativo = False
-        logging.info("Histórico de conversa limpo pelo utilizador.")
+        logging.info("Histórico de conversa limpo manualmente pelo painel.")
         st.rerun()
     st.divider()
     st.subheader("🕹️ Entretenimento")
@@ -150,6 +152,19 @@ with st.sidebar:
     st.divider()
     st.write("Estado: **Online**")
     st.write("Modelo Nativo: `Gemini-3.5-Flash`")
+    st.divider()
+    
+    # VISUALIZADOR DE AUDITORIA INTERNO
+    st.subheader("📊 Telemetria e Auditoria")
+    with st.expander("👁️ Ver Logs do Sistema (Audit)"):
+        if os.path.exists("auditoria_agente.log"):
+            with open("auditoria_agente.log", "r", encoding="utf-8") as f:
+                # Exibe as últimas 15 linhas para acompanhar as ações e erros
+                linhas_log = f.readlines()[-15:]
+                for linha in linhas_log:
+                    st.caption(linha.strip())
+        else:
+            st.caption("Ainda sem registos gerados.")
 
 # --- PARAMETRIZAÇÃO DO AGENTE ---
 PROMPT_SISTEMA = """
@@ -181,8 +196,8 @@ elif audio_file:
 
 # --- FLUXO PRINCIPAL DO AGENTE ---
 if prompt:
-    # Regista o input na auditoria local
-    logging.info(f"Input recebido [{tipo_input}]: {prompt}")
+    # Grava a telemetria do prompt de entrada
+    logging.info(f"Input processado [{tipo_input}]: {prompt}")
     
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -191,16 +206,20 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Agente a processar contexto e ferramentas..."):
             try:
+                # 1. Extração do Contexto Local (RAG Estático)
                 contexto_base = ler_knowledge_base()
                 
+                # 2. Mapeamento da Memória Histórica de Conversação para a API
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     role_api = "model" if msg["role"] == "assistant" else "user"
                     historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
+                # Enriquecimento do Prompt Principal com a RAG
                 prompt_enriquecido = f"{contexto_base}\n\nPergunta Atual do Utilizador: {prompt}"
                 ferramentas_agente = [obter_dados_guimabus]
                 
+                # 3. Execução da LLM com Fallback de Cota (Resiliência)
                 try:
                     model = genai.GenerativeModel(
                         model_name="gemini-3.5-flash",
@@ -227,7 +246,7 @@ if prompt:
                 st.markdown(full_response)
                 
                 # Regista o sucesso do processamento do agente
-                logging.info(f"Resposta do Agente gerada com sucesso ({len(full_response)} caracteres).")
+                logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
                 
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
