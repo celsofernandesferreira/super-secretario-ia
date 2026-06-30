@@ -4,12 +4,23 @@ import requests
 import os
 import glob
 import streamlit.components.v1 as components
+import logging
 
-# 1. Configuração da página (Layout Wide mantido para acomodar o jogo e dados se necessário)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
+# Cria um ficheiro local que regista quem usou e o que foi processado
+logging.basicConfig(
+    filename="auditoria_agente.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    encoding="utf-8"
+)
+
+# 2. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
-# 2. Injeção de CSS Customizado (Mantém o microfone perfeitamente encaixado à direita)
+# 3. Injeção de CSS Customizado (Microfone encaixado à direita)
 st.markdown("""
     <style>
         .stChatInputContainer {
@@ -29,11 +40,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 3. Inicialização e Configuração Segura da API
+# 4. Inicialização da API do Gemini
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
     st.error("Erro: Chave API em falta nos Secrets do Streamlit.")
+    logging.error("Falha ao inicializar a aplicação: Chave API ausente.")
     st.stop()
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
@@ -59,9 +71,11 @@ def obter_dados_guimabus():
             
             media = total_atraso / count if count > 0 else 0
             resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
+            logging.info("Ferramenta Guimabus executada com sucesso.")
             return resumo
         return "Tracking da Guimabus temporariamente indisponível."
     except Exception as e:
+        logging.error(f"Erro ao chamar API Guimabus: {e}")
         return f"Erro na ligação ao tracking: {e}"
 
 def ler_knowledge_base():
@@ -125,6 +139,7 @@ with st.sidebar:
     if st.button("🗑️ Limpar Histórico / Reset Memória", use_container_width=True):
         st.session_state.messages = []
         st.session_state.jogo_ativo = False
+        logging.info("Histórico de conversa limpo pelo utilizador.")
         st.rerun()
     st.divider()
     st.subheader("🕹️ Entretenimento")
@@ -148,7 +163,6 @@ Responde sempre de forma executiva, breve e certeira, consultando os ficheiros e
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
-# Desenha o histórico de mensagens guardadas no ecrã
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -158,13 +172,18 @@ prompt_texto = st.chat_input("Como posso ajudar hoje?")
 audio_file = st.audio_input("Falar")
 
 prompt = None
+tipo_input = "Texto"
 if prompt_texto:
     prompt = prompt_texto
 elif audio_file:
     prompt = "Ficheiro de áudio registado na interface."
+    tipo_input = "Áudio"
 
 # --- FLUXO PRINCIPAL DO AGENTE ---
 if prompt:
+    # Regista o input na auditoria local
+    logging.info(f"Input recebido [{tipo_input}]: {prompt}")
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -172,33 +191,27 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Agente a processar contexto e ferramentas..."):
             try:
-                # 1. Extração do Contexto Local (RAG Estático)
                 contexto_base = ler_knowledge_base()
                 
-                # 2. Mapeamento da Memória Histórica de Conversação para a API
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     role_api = "model" if msg["role"] == "assistant" else "user"
                     historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
-                # Enriquecimento do Prompt Principal com a RAG
                 prompt_enriquecido = f"{contexto_base}\n\nPergunta Atual do Utilizador: {prompt}"
-                
-                # 3. Definição de Ferramentas Disponíveis para o Modelo (Native Function Calling)
                 ferramentas_agente = [obter_dados_guimabus]
                 
-                # 4. Execução da LLM com Estratégia de Resiliência (Fallback)
                 try:
                     model = genai.GenerativeModel(
                         model_name="gemini-3.5-flash",
                         system_instruction=PROMPT_SISTEMA,
                         tools=ferramentas_agente
                     )
-                    # O chat inicia com histórico ativo e execução automática de ferramentas
                     chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                     response = chat.send_message(prompt_enriquecido)
                 except Exception as e:
                     if "429" in str(e):
+                        logging.warning("Cota 429 atingida no modelo principal. Ativando fallback económico.")
                         st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
                         model = genai.GenerativeModel(
                             model_name="gemini-2.0-flash-lite",
@@ -213,9 +226,12 @@ if prompt:
                 full_response = response.text
                 st.markdown(full_response)
                 
-                # Elementos de fecho e download
+                # Regista o sucesso do processamento do agente
+                logging.info(f"Resposta do Agente gerada com sucesso ({len(full_response)} caracteres).")
+                
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 
             except Exception as e:
                 st.error(f"Erro detetado no pipeline do agente: {e}")
+                logging.error(f"Falha crítica no pipeline do agente: {e}")
