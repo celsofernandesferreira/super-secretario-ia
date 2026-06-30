@@ -5,7 +5,7 @@ import os
 import glob
 
 # Configuração da página
-st.set_page_config(page_title="Super Secretário IA", page_icon="💼")
+st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
 # Configuração da API
@@ -16,11 +16,12 @@ except Exception:
     st.stop()
 
 # --- FUNÇÕES DE CONTEXTO ---
+@st.cache_data(ttl=60)
 def obter_dados_guimabus():
     url = "https://tracking.elevensystems.pt/api/gmr/vehicles"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=5)
         if response.status_code == 200:
             dados = response.json()
             if not dados: return "Nenhum autocarro detetado no momento."
@@ -42,7 +43,6 @@ def obter_dados_guimabus():
         return f"Erro no tracking: {e}"
 
 def ler_knowledge_base():
-    # Lê todos os ficheiros .md na pasta 'knowledge/'
     contexto = ""
     files = glob.glob("knowledge/*.md")
     for file in files:
@@ -50,16 +50,26 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "\n--- Nota: Sem documentos na pasta 'knowledge/'. ---"
 
+# --- SIDEBAR DE ELITE ---
+with st.sidebar:
+    st.header("⚙️ Configurações")
+    if st.button("🗑️ Limpar Histórico de Conversa"):
+        st.session_state.messages = []
+        st.rerun()
+    st.divider()
+    st.write("Estado: **Online**")
+    st.write("Modelo: `Gemini-Flash-3.5`")
+
 # --- CONFIGURAÇÃO ---
-PROMPT_SISTEMA = "Tu és um Assistente Executivo de Elite que consulta sempre o contexto fornecido (Bio e Dados de Tracking) antes de responder."
+PROMPT_SISTEMA = """
+Tu és o Assistente Executivo de Elite do Celso Ferreira.
+Teu objetivo é ser breve, preciso e profissional. 
+Consulta sempre o contexto fornecido (Bio e Dados de Tracking).
+Se o utilizador pedir dados de autocarros, apresenta os dados e faz uma pequena sugestão proativa.
+"""
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-# --- INTERFACE ---
-if st.button("🗑️ Limpar Histórico de Conversa"):
-    st.session_state.messages = []
-    st.rerun()
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -74,19 +84,20 @@ if prompt := st.chat_input("Como posso ajudar hoje?"):
     with st.chat_message("assistant"):
         with st.spinner("A consultar dados..."):
             try:
-                # Montar contexto enriquecido
+                # 1. Montar contexto enriquecido
                 contexto = ler_knowledge_base()
                 if any(word in prompt.lower() for word in ["autocarro", "horário", "tracking", "onde está"]):
                     contexto += "\n" + obter_dados_guimabus()
                 
                 prompt_enriquecido = f"{contexto}\n\nPergunta do Utilizador: {prompt}"
                 
-                # Estratégia de Fallback
+                # 2. Estratégia de Fallback
                 try:
                     model = genai.GenerativeModel("gemini-3.5-flash", system_instruction=PROMPT_SISTEMA)
                     response = model.generate_content(prompt_enriquecido)
                 except Exception as e:
                     if "429" in str(e):
+                        st.warning("⚠️ Cota atingida. A usar modo económico...")
                         model = genai.GenerativeModel("gemini-2.0-flash-lite", system_instruction=PROMPT_SISTEMA)
                         response = model.generate_content(prompt_enriquecido)
                     else:
