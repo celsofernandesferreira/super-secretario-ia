@@ -1,6 +1,8 @@
 import streamlit as st
 import google.generativeai as genai
 import requests
+import os
+import glob
 
 # Configuração da página
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼")
@@ -10,7 +12,7 @@ st.title("💼 O Teu Super Secretário de Produtividade")
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
-    st.error("Erro: Chave API em falta nos Secrets.")
+    st.error("Erro: Chave API em falta.")
     st.stop()
 
 # --- FUNÇÕES DE CONTEXTO ---
@@ -23,31 +25,41 @@ def obter_dados_guimabus():
             dados = response.json()
             if not dados: return "Nenhum autocarro detetado no momento."
             
+            total_atraso = 0
+            count = 0
             resumo = "Dados de frota em tempo real:\n"
             for bus in dados:
-                resumo += f"- Autocarro {bus.get('id', 'N/A')}: Status {bus.get('busStatus', 'N/A')} (Atraso: {bus.get('delay', 0)}min)\n"
+                atraso = bus.get('delay', 0)
+                resumo += f"- Autocarro {bus.get('id', 'N/A')}: Status {bus.get('busStatus', 'N/A')} (Atraso: {atraso}min)\n"
+                total_atraso += atraso
+                count += 1
+            
+            media = total_atraso / count if count > 0 else 0
+            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
             return resumo
-        else:
-            return f"Erro de ligação: {response.status_code}"
+        return "Tracking indisponível."
     except Exception as e:
-        return f"Tracking temporariamente indisponível. Erro: {e}"
+        return f"Erro no tracking: {e}"
 
-def ler_ficheiros_pessoais():
-    try:
-        with open("biografia.md", "r", encoding="utf-8") as f:
-            return f"\n--- BIOGRAFIA DO CELSO ---\n{f.read()}"
-    except FileNotFoundError:
-        return "\n--- Nota: Ficheiro biografia.md não encontrado. ---"
+def ler_knowledge_base():
+    # Lê todos os ficheiros .md na pasta 'knowledge/'
+    contexto = ""
+    files = glob.glob("knowledge/*.md")
+    for file in files:
+        with open(file, "r", encoding="utf-8") as f:
+            contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
+    return contexto if contexto else "\n--- Nota: Sem documentos na pasta 'knowledge/'. ---"
 
 # --- CONFIGURAÇÃO ---
-PROMPT_SISTEMA = """
-Tu és um Assistente Executivo de Elite. 
-Sempre que o utilizador perguntar por algo, consulta primeiro o contexto fornecido (Bio e Dados de Tracking). 
-Se perguntarem sobre o Celso Ferreira: Tem 34 anos, reside em Guimarães, profissional de Infraestrutura IT, Cloud e Automação.
-"""
+PROMPT_SISTEMA = "Tu és um Assistente Executivo de Elite que consulta sempre o contexto fornecido (Bio e Dados de Tracking) antes de responder."
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# --- INTERFACE ---
+if st.button("🗑️ Limpar Histórico de Conversa"):
+    st.session_state.messages = []
+    st.rerun()
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -62,31 +74,27 @@ if prompt := st.chat_input("Como posso ajudar hoje?"):
     with st.chat_message("assistant"):
         with st.spinner("A consultar dados..."):
             try:
-                # 1. Montar contexto
-                contexto = ler_ficheiros_pessoais()
+                # Montar contexto enriquecido
+                contexto = ler_knowledge_base()
                 if any(word in prompt.lower() for word in ["autocarro", "horário", "tracking", "onde está"]):
                     contexto += "\n" + obter_dados_guimabus()
                 
                 prompt_enriquecido = f"{contexto}\n\nPergunta do Utilizador: {prompt}"
                 
-                # 2. Estratégia de Fallback (Plano B)
+                # Estratégia de Fallback
                 try:
-                    # Tentar modelo principal
                     model = genai.GenerativeModel("gemini-3.5-flash", system_instruction=PROMPT_SISTEMA)
                     response = model.generate_content(prompt_enriquecido)
                 except Exception as e:
-                    # Se houver erro de cota (429), tenta o plano B
                     if "429" in str(e):
-                        st.warning("⚠️ Cota atingida. A usar modo económico...")
                         model = genai.GenerativeModel("gemini-2.0-flash-lite", system_instruction=PROMPT_SISTEMA)
                         response = model.generate_content(prompt_enriquecido)
                     else:
-                        raise e # Se for outro erro, sobe para o except principal
+                        raise e
 
                 full_response = response.text
                 st.markdown(full_response)
-                st.download_button("📥 Descarregar resposta (.txt)", full_response, "resposta.txt")
+                st.download_button("📥 Descarregar (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
-                
             except Exception as e:
                 st.error(f"Erro ao processar: {e}")
