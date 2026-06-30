@@ -14,7 +14,7 @@ try:
     st.write(models)
     
     # Tentar gerar uma resposta curta
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model_name="gemini-3.5-flash"
     response = model.generate_content("Olá, estás a ouvir-me?")
     st.success("Sucesso! Resposta da IA: " + response.text)
     
