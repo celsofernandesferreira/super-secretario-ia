@@ -9,15 +9,13 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
-# --- INJEÇÃO DE CSS PARA ALINHAR O MICROFONE NA BARRA DE CHAT ---
+# --- INJEÇÃO DE CSS (ALINHAMENTO DO MICROFONE) ---
 st.markdown("""
     <style>
-        /* Cria um contentor relativo na zona inferior da página */
         .stChatInputContainer {
             position: relative;
             padding-right: 60px !important;
         }
-        /* Força o input de áudio a flutuar para o lado direito de forma absoluta */
         div[data-testid="stAudioInput"] {
             position: absolute;
             right: 15px;
@@ -25,7 +23,6 @@ st.markdown("""
             z-index: 999;
             width: auto !important;
         }
-        /* Ajustes visuais para remover labels desnecessárias do microfone */
         div[data-testid="stAudioInput"] label {
             display: none;
         }
@@ -74,34 +71,28 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "\n--- Nota: Sem documentos na pasta 'knowledge/'. ---"
 
-# --- JOGO EMBUTIDO (HTML5 + JAVASCRIPT LOCAL) ---
+# --- JOGO EMBUTIDO ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
         <h3 style="color:#ffe135; font-family:sans-serif; margin-top:0;">🕹️ Modo Pausa: Mini-Game Retro 🕹️</h3>
         <canvas id="stage" width="400" height="350" style="border:2px solid #ffe135; background-color:#000;"></canvas>
-        <p style="color:#aaa; font-family:sans-serif; font-size:14px;">Usa as setas do teclado para controlar o Snake.</p>
         <script>
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
             var tnt = 20, snake = [{x:160, y:160}], dx = tnt, dy = 0, apple = {x:80, y:80};
-            
             function game() {
                 var head = {x: snake[0].x + dx, y: snake[0].y + dy};
                 if (head.x < 0 || head.x >= canvas.width || head.y < 0 || head.y >= canvas.height) resetGame();
-                for (var i = 0; i < snake.length; i++) {
-                    if (snake[i].x === head.x && snake[i].y === head.y) resetGame();
-                }
+                for (var i = 0; i < snake.length; i++) { if (snake[i].x === head.x && snake[i].y === head.y) resetGame(); }
                 snake.unshift(head);
                 if (head.x === apple.x && head.y === apple.y) {
                     apple.x = Math.floor(Math.random() * (canvas.width/tnt)) * tnt;
                     apple.y = Math.floor(Math.random() * (canvas.height/tnt)) * tnt;
                 } else { snake.pop(); }
-                
                 ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
                 ctx.fillStyle = '#ffe135'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
-                ctx.fillStyle = '#00ff00';
-                for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
+                ctx.fillStyle = '#00ff00'; for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
             }
             function resetGame() { snake = [{x:160, y:160}]; dx = tnt; dy = 0; }
             document.addEventListener('keydown', function(e) {
@@ -116,51 +107,43 @@ def renderizar_jogo():
     """
     components.html(html_jogo, height=450)
 
-# --- INICIALIZAÇÃO DE ESTADOS DE SESSÃO ---
+# --- INICIALIZAÇÃO DE ESTADOS ---
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [] # Armazena o histórico no formato Streamlit
 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
 
 # --- SIDEBAR DE ELITE ---
 with st.sidebar:
-    st.header("⚙️ Painel de Controlo")
-    
-    if st.button("🗑️ Limpar Histórico de Conversa", use_container_width=True):
+    st.header("⚙️ Painel do Agente")
+    if st.button("🗑️ Limpar Histórico / Reset Memória", use_container_width=True):
         st.session_state.messages = []
         st.session_state.jogo_ativo = False
         st.rerun()
-        
     st.divider()
-    
     st.subheader("🕹️ Entretenimento")
     texto_botao_jogo = "Fechar Jogo X" if st.session_state.jogo_ativo else "Abrir Mini-Game 👾"
     if st.button(texto_botao_jogo, use_container_width=True):
         st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
-        
-    st.divider()
-    st.write("Estado do Agente: **Online**")
-    st.write("Modelo Base: `Gemini-3.5-Flash`")
 
-# --- CONFIGURAÇÃO DO PROMPT DO SISTEMA ---
 PROMPT_SISTEMA = """
-Tu és o Assistente Executivo de Elite do Celso Ferreira.
-Teu objetivo é ser breve, preciso e focado na produtividade com base no contexto fornecido.
-Consulta sempre o contexto da Knowledge Base e Dados de Tracking.
-Se o utilizador pedir dados de autocarros, apresenta os dados de forma limpa e faz uma pequena sugestão proativa baseada nos tempos de atraso.
+Tu és o Assistente Executivo de Elite do Celso Ferreira. 
+És um Agente focado em automação e suporte de infraestrutura.
+Responde de forma concisa utilizando sempre o contexto fornecido da Knowledge Base e o histórico da conversa para manter a continuidade do diálogo.
 """
 
 # --- INTERFACE PRINCIPAL ---
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
+# Mostrar mensagens anteriores
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- CAPTURA DE ENTRADA (Alinhadas por CSS) ---
+# --- CAPTURA DE ENTRADA ---
 prompt_texto = st.chat_input("Como posso ajudar hoje?")
 audio_file = st.audio_input("Falar")
 
@@ -170,36 +153,49 @@ if prompt_texto:
 elif audio_file:
     prompt = "Ficheiro de áudio registado na interface."
 
-# --- FLUXO DE PROCESSAMENTO DO CHAT ---
+# --- FLUXO DO AGENTE ---
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("A consultar dados..."):
+        with st.spinner("Agente a processar contexto..."):
             try:
+                # 1. Recuperação de Conhecimento (RAG)
                 contexto = ler_knowledge_base()
                 if any(word in prompt.lower() for word in ["autocarro", "horário", "tracking", "onde está"]):
                     contexto += "\n" + obter_dados_guimabus()
                 
-                prompt_enriquecido = f"{contexto}\n\nPergunta do Utilizador: {prompt}"
+                # 2. Construção da memória histórica para a API do Gemini
+                # Convertemos o histórico do Streamlit para o formato de conteúdos da API do Gemini
+                historico_api = []
+                for msg in st.session_state.messages[:-1]: # Tudo exceto a pergunta atual
+                    role_api = "model" if msg["role"] == "assistant" else "user"
+                    historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
+                # Adicionamos a pergunta atual enriquecida com os dados capturados
+                prompt_enriquecido = f"{contexto}\n\n[Histórico de Contexto Aplicado]\nPergunta Atual: {prompt}"
+                
+                # Execução resiliente com Fallback de Modelos
                 try:
                     model = genai.GenerativeModel("gemini-3.5-flash", system_instruction=PROMPT_SISTEMA)
-                    response = model.generate_content(prompt_enriquecido)
+                    # Iniciamos o chat diretamente com o histórico para simular memória contínua
+                    chat = model.start_chat(history=historico_api)
+                    response = chat.send_message(prompt_enriquecido)
                 except Exception as e:
                     if "429" in str(e):
-                        st.warning("⚠️ Cota atingida. A usar modo económico...")
+                        st.warning("⚠️ Cota atingida. A alternar para modelo secundário...")
                         model = genai.GenerativeModel("gemini-2.0-flash-lite", system_instruction=PROMPT_SISTEMA)
-                        response = model.generate_content(prompt_enriquecido)
+                        chat = model.start_chat(history=historico_api)
+                        response = chat.send_message(prompt_enriquecido)
                     else:
                         raise e
 
                 full_response = response.text
                 st.markdown(full_response)
                 
-                st.download_button("📥 Descarregar (.txt)", full_response, "resposta.txt")
+                st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
             except Exception as e:
-                st.error(f"Erro ao processar: {e}")
+                st.error(f"Erro no pipeline do agente: {e}")
