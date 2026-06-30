@@ -5,8 +5,10 @@ import os
 import glob
 import streamlit.components.v1 as components
 import logging
+import sqlite3
+from datetime import datetime
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica e Monitorização)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -15,11 +17,49 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-# 2. Configuração da página 
+# 2. CONFIGURAÇÃO DA BASE DE DADOS (SQLite Persistente)
+def inicializar_bd():
+    conn = sqlite3.connect("agente_memoria.db")
+    cursor = conn.cursor()
+    # Cria a tabela para armazenar o histórico global se não existir
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS historico_global (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            session_id TEXT,
+            role TEXT,
+            content TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def guardar_mensagem_bd(session_id, role, content):
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "INSERT INTO historico_global (timestamp, session_id, role, content) VALUES (?, ?, ?, ?)",
+            (timestamp, session_id, role, content)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Erro ao gravar na Base de Dados: {e}")
+
+# Inicializa a BD logo no arranque da app
+inicializar_bd()
+
+# 3. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
-# 3. Injeção de CSS Customizado (Microfone encaixado à direita)
+# Gerar um ID único para a sessão atual se não existir (para distinguir utilizadores)
+if "session_id" not in st.session_state:
+    st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
+
+# 4. Injeção de CSS Customizado (Microfone encaixado à direita)
 st.markdown("""
     <style>
         .stChatInputContainer {
@@ -39,7 +79,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 4. Inicialização da API do Gemini
+# 5. Inicialização da API do Gemini
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
@@ -126,11 +166,10 @@ def renderizar_jogo():
     """
     components.html(html_jogo, height=450)
 
-# --- INICIALIZAÇÃO DE ESTADOS E LOG DE ENTRADA ---
+# --- INICIALIZAÇÃO DE ESTADOS ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
-    # Como esta chave não existia, significa que é um novo acesso ou refresh de página
-    logging.info("Nova sessão de utilizador iniciada no ecossistema do agente.")
+    logging.info(f"Nova sessão de utilizador iniciada. ID Temporário: {st.session_state.session_id}")
 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
@@ -138,10 +177,10 @@ if "jogo_ativo" not in st.session_state:
 # --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
 with st.sidebar:
     st.header("⚙️ Painel do Agente")
-    if st.button("🗑️ Limpar Histórico / Reset Memória", use_container_width=True):
+    if st.button("🗑️ Limpar O Meu Histórico", use_container_width=True):
         st.session_state.messages = []
         st.session_state.jogo_ativo = False
-        logging.info("Histórico de conversa limpo manualmente pelo painel.")
+        logging.info(f"Histórico da sessão {st.session_state.session_id} limpo pelo utilizador.")
         st.rerun()
     st.divider()
     st.subheader("🕹️ Entretenimento")
@@ -154,17 +193,24 @@ with st.sidebar:
     st.write("Modelo Nativo: `Gemini-3.5-Flash`")
     st.divider()
     
-    # VISUALIZADOR DE AUDITORIA INTERNO
-    st.subheader("📊 Telemetria e Auditoria")
-    with st.expander("👁️ Ver Logs do Sistema (Audit)"):
+    # VISUALIZADOR DE LOGS E DE HISTÓRICO GLOBAL
+    st.subheader("📊 Telemetria e BD")
+    with st.expander("👁️ Ver Logs do Sistema"):
         if os.path.exists("auditoria_agente.log"):
             with open("auditoria_agente.log", "r", encoding="utf-8") as f:
-                # Exibe as últimas 15 linhas para acompanhar as ações e erros
-                linhas_log = f.readlines()[-15:]
-                for linha in linhas_log:
-                    st.caption(linha.strip())
-        else:
-            st.caption("Ainda sem registos gerados.")
+                linhas_log = f.readlines()[-10:]
+                for linha in linhas_log: st.caption(linha.strip())
+                
+    with st.expander("🗄️ Histórico Permanente Global (BD)"):
+        if os.path.exists("agente_memoria.db"):
+            conn = sqlite3.connect("agente_memoria.db")
+            cursor = conn.cursor()
+            # Puxa os últimos 10 registos inseridos por qualquer utilizador
+            cursor.execute("SELECT timestamp, role, content FROM historico_global ORDER BY id DESC LIMIT 10")
+            linhas_bd = cursor.fetchall()
+            conn.close()
+            for r in reversed(linhas_bd):
+                st.caption(f"[{r[0]}] {r[1].upper()}: {r[2]}")
 
 # --- PARAMETRIZAÇÃO DO AGENTE ---
 PROMPT_SISTEMA = """
@@ -196,8 +242,10 @@ elif audio_file:
 
 # --- FLUXO PRINCIPAL DO AGENTE ---
 if prompt:
-    # Grava a telemetria do prompt de entrada
     logging.info(f"Input processado [{tipo_input}]: {prompt}")
+    
+    # Grava na Base de Dados local a pergunta do utilizador antes de enviar para a API
+    guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
     
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -206,20 +254,16 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Agente a processar contexto e ferramentas..."):
             try:
-                # 1. Extração do Contexto Local (RAG Estático)
                 contexto_base = ler_knowledge_base()
                 
-                # 2. Mapeamento da Memória Histórica de Conversação para a API
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     role_api = "model" if msg["role"] == "assistant" else "user"
                     historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
-                # Enriquecimento do Prompt Principal com a RAG
                 prompt_enriquecido = f"{contexto_base}\n\nPergunta Atual do Utilizador: {prompt}"
                 ferramentas_agente = [obter_dados_guimabus]
                 
-                # 3. Execução da LLM com Fallback de Cota (Resiliência)
                 try:
                     model = genai.GenerativeModel(
                         model_name="gemini-3.5-flash",
@@ -230,7 +274,7 @@ if prompt:
                     response = chat.send_message(prompt_enriquecido)
                 except Exception as e:
                     if "429" in str(e):
-                        logging.warning("Cota 429 atingida no modelo principal. Ativando fallback económico.")
+                        logging.warning("Cota 429 atingida no modelo principal. Fallback ativo.")
                         st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
                         model = genai.GenerativeModel(
                             model_name="gemini-2.0-flash-lite",
@@ -245,8 +289,10 @@ if prompt:
                 full_response = response.text
                 st.markdown(full_response)
                 
-                # Regista o sucesso do processamento do agente
                 logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
+                
+                # Grava na Base de Dados a resposta oficial do modelo vinculada a esta sessão
+                guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
                 
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
