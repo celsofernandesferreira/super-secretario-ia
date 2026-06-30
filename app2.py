@@ -1,59 +1,67 @@
 import streamlit as st
 import google.generativeai as genai
+import requests
 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
-# Configuração da API
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# Definição do Prompt de Sistema
-PROMPT_SISTEMA = """
-Tu és um Assistente de Produtividade Executivo de Elite.
-Se o utilizador pedir para organizar tarefas/notas, usa:
-1. Lista de Tarefas (Prioridade)
-2. Rascunho de email/mensagem
-3. Resumo Executivo
+# --- FUNÇÕES DE CONTEXTO ---
+def obter_dados_guimabus():
+    # Substitui pelo URL real que encontraste no Network
+    url = "LINK_REAL_DO_JSON_QUE_ENCONTRASTE" 
+    try:
+        dados = requests.get(url).json()
+        resumo = "Horários/Tracking em tempo real:\n"
+        for bus in dados:
+            resumo += f"- Autocarro {bus['id']}: {bus['busStatus']} (Atraso: {bus['delay']}min)\n"
+        return resumo
+    except:
+        return "Tracking temporariamente indisponível."
 
-Se perguntarem sobre o Celso Ferreira: 
-Tem 34 anos, reside em Guimarães, profissional de Infraestrutura IT, Cloud e Automação. 
-Certificado Google IT Support, Nível 4 em Automação, estuda Engenharia Informática.
-"""
+def ler_ficheiros_pessoais():
+    # Lê a tua biografia/currículo
+    try:
+        with open("biografia.md", "r", encoding="utf-8") as f:
+            return f"\n--- BIOGRAFIA DO CELSO ---\n{f.read()}"
+    except:
+        return ""
 
-# Inicializar histórico
+# --- CONFIGURAÇÃO ---
+PROMPT_SISTEMA = "Tu és um Assistente Executivo de Elite que consulta sempre o contexto fornecido antes de responder."
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Mostrar histórico
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Criar o modelo (Estamos a usar o modelo 27 da tua lista: gemini-3.5-flash)
-model = genai.GenerativeModel(
-    model_name="gemini-3.5-flash",
-    system_instruction=PROMPT_SISTEMA
-)
+model = genai.GenerativeModel("gemini-3.5-flash", system_instruction=PROMPT_SISTEMA)
 
-# Input de chat
+# --- FLUXO DE CHAT ---
 if prompt := st.chat_input("Como posso ajudar hoje?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("O agente está a raciocinar..."):
+        with st.spinner("A consultar dados..."):
             try:
-                response = model.generate_content(prompt)
+                # 1. Montar o contexto dinâmico
+                contexto = ler_ficheiros_pessoais()
+                if "autocarro" in prompt.lower() or "horário" in prompt.lower():
+                    contexto += "\n" + obter_dados_guimabus()
+                
+                # 2. Enviar prompt enriquecido com os dados
+                prompt_enriquecido = f"{contexto}\n\nPergunta: {prompt}"
+                response = model.generate_content(prompt_enriquecido)
+                
                 full_response = response.text
                 st.markdown(full_response)
                 
-                st.download_button(
-                    label="📥 Descarregar esta resposta (.txt)",
-                    data=full_response,
-                    file_name="resposta_secretario.txt",
-                    mime="text/plain"
-                )
+                st.download_button("📥 Descarregar (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
             except Exception as e:
-                st.error(f"Erro ao gerar resposta: {e}")
+                st.error(f"Erro: {e}")
