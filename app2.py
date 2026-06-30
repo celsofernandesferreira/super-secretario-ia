@@ -1,22 +1,59 @@
 import streamlit as st
 import google.generativeai as genai
 
-st.title("Teste de Ligação")
+st.set_page_config(page_title="Super Secretário IA", page_icon="💼")
+st.title("💼 O Teu Super Secretário de Produtividade")
 
-# Configuração simples
-api_key = st.secrets["GOOGLE_API_KEY"]
-genai.configure(api_key=api_key)
+# Configuração da API
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# Testar apenas a lista de modelos disponíveis
-try:
-    models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-    st.write("Modelos disponíveis:")
-    st.write(models)
-    
-    # Tentar gerar uma resposta curta
-    model_name="gemini-3.5-flash"
-    response = model.generate_content("Olá, estás a ouvir-me?")
-    st.success("Sucesso! Resposta da IA: " + response.text)
-    
-except Exception as e:
-    st.error(f"Erro crítico: {e}")
+# Definição do Prompt de Sistema
+PROMPT_SISTEMA = """
+Tu és um Assistente de Produtividade Executivo de Elite.
+Se o utilizador pedir para organizar tarefas/notas, usa:
+1. Lista de Tarefas (Prioridade)
+2. Rascunho de email/mensagem
+3. Resumo Executivo
+
+Se perguntarem sobre o Celso Ferreira: 
+Tem 34 anos, reside em Guimarães, profissional de Infraestrutura IT, Cloud e Automação. 
+Certificado Google IT Support, Nível 4 em Automação, estuda Engenharia Informática.
+"""
+
+# Inicializar histórico
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Mostrar histórico
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Criar o modelo (Estamos a usar o modelo 27 da tua lista: gemini-3.5-flash)
+model = genai.GenerativeModel(
+    model_name="gemini-3.5-flash",
+    system_instruction=PROMPT_SISTEMA
+)
+
+# Input de chat
+if prompt := st.chat_input("Como posso ajudar hoje?"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("O agente está a raciocinar..."):
+            try:
+                response = model.generate_content(prompt)
+                full_response = response.text
+                st.markdown(full_response)
+                
+                st.download_button(
+                    label="📥 Descarregar esta resposta (.txt)",
+                    data=full_response,
+                    file_name="resposta_secretario.txt",
+                    mime="text/plain"
+                )
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+            except Exception as e:
+                st.error(f"Erro ao gerar resposta: {e}")
