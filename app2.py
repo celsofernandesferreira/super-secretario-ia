@@ -10,7 +10,7 @@ genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 # --- FUNÇÕES DE CONTEXTO ---
 def obter_dados_guimabus():
     # Substitui pelo URL real que encontraste no Network
-    url = "https://tracking.elevensystems.pt/gmr" 
+    url = "https://tracking.elevensystems.pt/api/gmr/vehicles" 
     try:
         dados = requests.get(url).json()
         resumo = "Horários/Tracking em tempo real:\n"
