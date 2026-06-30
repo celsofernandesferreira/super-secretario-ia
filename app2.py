@@ -21,7 +21,6 @@ logging.basicConfig(
 def inicializar_bd():
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
-    # Cria a tabela para armazenar o histórico global se não existir
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS historico_global (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,18 +47,18 @@ def guardar_mensagem_bd(session_id, role, content):
     except Exception as e:
         logging.error(f"Erro ao gravar na Base de Dados: {e}")
 
-# Inicializa a BD logo no arranque da app
+# Inicializa o armazenamento no arranque
 inicializar_bd()
 
 # 3. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
-# Gerar um ID único para a sessão atual se não existir (para distinguir utilizadores)
+# Identificador único de sessão
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# 4. Injeção de CSS Customizado (Microfone encaixado à direita)
+# 4. Injeção de CSS Customizado (Ajuste preciso do microfone à direita)
 st.markdown("""
     <style>
         .stChatInputContainer {
@@ -127,44 +126,73 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME RETRO ---
+# --- INTERFACE: MINI-GAME RETRO UPGRADED (CONTROLOS + SCOREBOARD) ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
-        <h3 style="color:#ffe135; font-family:sans-serif; margin-top:0;">🕹️ Modo Pausa: Mini-Game Retro 🕹️</h3>
-        <canvas id="stage" width="400" height="350" style="border:2px solid #ffe135; background-color:#000;"></canvas>
-        <p style="color:#aaa; font-family:sans-serif; font-size:14px;">Usa as setas do teclado para controlar a cobra.</p>
+        <h3 style="color:#ffe135; font-family:sans-serif; margin-top:0; margin-bottom:10px;">🕹️ Modo Pausa: Snake Arcade Retro 🕹️</h3>
+        <canvas id="stage" width="400" height="350" style="border:2px solid #ffe135; background-color:#000; display:block; margin:0 auto;"></canvas>
+        
+        <div style="margin-top: 15px; display: inline-block;">
+            <button onclick="mudarDirecao('cima')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▲</button><br>
+            <button onclick="mudarDirecao('esquerda')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">◀</button>
+            <button onclick="mudarDirecao('baixo')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
+            <button onclick="mudarDirecao('direita')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
+        </div>
+        <p style="color:#aaa; font-family:sans-serif; font-size:12px; margin-top:10px;">Usa as setas do teclado ou os botões do ecrã para controlar a cobra.</p>
+        
         <script>
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
-            var tnt = 20, snake = [{x:160, y:160}], dx = tnt, dy = 0, apple = {x:80, y:80};
+            var tnt = 20, snake = [{x:160, y:160}], dx = tnt, dy = 0, apple = {x:80, y:80}, score = 0;
             
             function game() {
                 var head = {x: snake[0].x + dx, y: snake[0].y + dy};
                 if (head.x < 0 || head.x >= canvas.width || head.y < 0 || head.y >= canvas.height) resetGame();
                 for (var i = 0; i < snake.length; i++) { if (snake[i].x === head.x && snake[i].y === head.y) resetGame(); }
+                
                 snake.unshift(head);
                 if (head.x === apple.x && head.y === apple.y) {
+                    score += 10;
                     apple.x = Math.floor(Math.random() * (canvas.width/tnt)) * tnt;
                     apple.y = Math.floor(Math.random() * (canvas.height/tnt)) * tnt;
                 } else { snake.pop(); }
                 
+                // Desenhar Fundo
                 ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
-                ctx.fillStyle = '#ffe135'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
-                ctx.fillStyle = '#00ff00'; for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
+                
+                // Desenhar Maçã
+                ctx.fillStyle = '#ff4444'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
+                
+                // Desenhar Cobra
+                ctx.fillStyle = '#00ff00'; 
+                for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
+                
+                // Desenhar Scoreboard Nativo no Canvas
+                ctx.fillStyle = '#ffffff'; ctx.font = '16px sans-serif';
+                ctx.fillText('Score: ' + score, 15, 25);
             }
-            function resetGame() { snake = [{x:160, y:160}]; dx = tnt; dy = 0; }
+            
+            function resetGame() { snake = [{x:160, y:160}]; dx = tnt; dy = 0; score = 0; }
+            
+            function mudarDirecao(dir) {
+                if(dir === 'esquerda' && dx == 0) { dx = -tnt; dy = 0; }
+                if(dir === 'cima' && dy == 0) { dx = 0; dy = -tnt; }
+                if(dir === 'direita' && dx == 0) { dx = tnt; dy = 0; }
+                if(dir === 'baixo' && dy == 0) { dx = 0; dy = tnt; }
+            }
+            
             document.addEventListener('keydown', function(e) {
-                if(e.keyCode == 37 && dx == 0) { dx = -tnt; dy = 0; }
-                if(e.keyCode == 38 && dy == 0) { dx = 0; dy = -tnt; }
-                if(e.keyCode == 39 && dx == 0) { dx = tnt; dy = 0; }
-                if(e.keyCode == 40 && dy == 0) { dx = 0; dy = tnt; }
+                if(e.keyCode == 37) mudarDirecao('esquerda');
+                if(e.keyCode == 38) mudarDirecao('cima');
+                if(e.keyCode == 39) mudarDirecao('direita');
+                if(e.keyCode == 40) mudarDirecao('baixo');
             });
-            setInterval(game, 100);
+            setInterval(game, 120);
         </script>
     </div>
     """
-    components.html(html_jogo, height=450)
+    components.html(html_jogo, height=540)
 
 # --- INICIALIZAÇÃO DE ESTADOS ---
 if "messages" not in st.session_state:
@@ -183,17 +211,19 @@ with st.sidebar:
         logging.info(f"Histórico da sessão {st.session_state.session_id} limpo pelo utilizador.")
         st.rerun()
     st.divider()
+    
     st.subheader("🕹️ Entretenimento")
     texto_botao_jogo = "Fechar Jogo X" if st.session_state.jogo_ativo else "Abrir Mini-Game 👾"
     if st.button(texto_botao_jogo, use_container_width=True):
         st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
     st.divider()
+    
     st.write("Estado: **Online**")
     st.write("Modelo Nativo: `Gemini-3.5-Flash`")
     st.divider()
     
-    # VISUALIZADOR DE LOGS E DE HISTÓRICO GLOBAL
+    # VISUALIZADOR DE LOGS E DE HISTÓRICO GLOBAL FORMATADO
     st.subheader("📊 Telemetria e BD")
     with st.expander("👁️ Ver Logs do Sistema"):
         if os.path.exists("auditoria_agente.log"):
@@ -205,12 +235,18 @@ with st.sidebar:
         if os.path.exists("agente_memoria.db"):
             conn = sqlite3.connect("agente_memoria.db")
             cursor = conn.cursor()
-            # Puxa os últimos 10 registos inseridos por qualquer utilizador
-            cursor.execute("SELECT timestamp, role, content FROM historico_global ORDER BY id DESC LIMIT 10")
+            cursor.execute("SELECT timestamp, role, content FROM historico_global ORDER BY id DESC LIMIT 15")
             linhas_bd = cursor.fetchall()
             conn.close()
+            
             for r in reversed(linhas_bd):
-                st.caption(f"[{r[0]}] {r[1].upper()}: {r[2]}")
+                # Extrai apenas a hora do timestamp para simplificar
+                hora_min = r[0].split(" ")[1] if " " in r[0] else r[0]
+                if r[1] == "user":
+                    st.markdown(f"**🟢 [{hora_min}] Tu:** {r[2]}")
+                else:
+                    st.markdown(f"**🤖 [{hora_min}] Agente:** {r[2]}")
+                st.divider()
 
 # --- PARAMETRIZAÇÃO DO AGENTE ---
 PROMPT_SISTEMA = """
@@ -244,7 +280,7 @@ elif audio_file:
 if prompt:
     logging.info(f"Input processado [{tipo_input}]: {prompt}")
     
-    # Grava na Base de Dados local a pergunta do utilizador antes de enviar para a API
+    # Grava na Base de Dados local a pergunta do utilizador antes do envio para a API
     guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
     
     st.session_state.messages.append({"role": "user", "content": prompt})
