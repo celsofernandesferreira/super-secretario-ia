@@ -9,26 +9,60 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
-# --- INJEÇÃO DE CSS PARA ALINHAR O MICROFONE NA BARRA DE CHAT ---
-st.markdown("""
+# --- INICIALIZAÇÃO DE ESTADOS DE SESSÃO ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "jogo_ativo" not in st.session_state:
+    st.session_state.jogo_ativo = False
+
+if "modo_noite" not in st.session_state:
+    st.session_state.modo_noite = False
+
+# --- INJEÇÃO DE CSS (ALINHAMENTO DO MICROFONE + MODO NOITE DINÂMICO) ---
+# Definimos as cores com base no estado do botão
+if st.session_state.modo_noite:
+    css_tema = """
+    /* Modo Noite Forçado */
+    .stApp {
+        background-color: #0e1117 !important;
+        color: #ffffff !important;
+    }
+    h1, h2, h3, h4, p, span, label {
+        color: #ffffff !important;
+    }
+    .stChatInputContainer {
+        background-color: #1a1c23 !important;
+    }
+    """
+else:
+    css_tema = """
+    /* Modo Claro Padrão */
+    .stApp {
+        background-color: #ffffff !important;
+        color: #31333F !important;
+    }
+    """
+
+st.markdown(f"""
     <style>
-        /* Cria um contentor relativo na zona inferior da página */
-        .stChatInputContainer {
+        {css_tema}
+        
+        /* Alinhamento do Microfone na Barra de Chat */
+        .stChatInputContainer {{
             position: relative;
             padding-right: 60px !important;
-        }
-        /* Força o input de áudio a flutuar para o lado direito de forma absoluta */
-        div[data-testid="stAudioInput"] {
+        }}
+        div[data-testid="stAudioInput"] {{
             position: absolute;
             right: 15px;
             bottom: 4px;
             z-index: 999;
             width: auto !important;
-        }
-        /* Ajustes visuais para remover labels desnecessárias do microfone */
-        div[data-testid="stAudioInput"] label {
+        }}
+        div[data-testid="stAudioInput"] label {{
             display: none;
-        }
+        }}
     </style>
 """, unsafe_allow_html=True)
 
@@ -116,13 +150,6 @@ def renderizar_jogo():
     """
     components.html(html_jogo, height=450)
 
-# --- INICIALIZAÇÃO DE ESTADOS DE SESSÃO ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "jogo_ativo" not in st.session_state:
-    st.session_state.jogo_ativo = False
-
 # --- SIDEBAR DE ELITE ---
 with st.sidebar:
     st.header("⚙️ Painel de Controlo")
@@ -134,10 +161,20 @@ with st.sidebar:
         
     st.divider()
     
+    # Botão Switch para o Jogo
     st.subheader("🕹️ Entretenimento")
     texto_botao_jogo = "Fechar Jogo X" if st.session_state.jogo_ativo else "Abrir Mini-Game 👾"
     if st.button(texto_botao_jogo, use_container_width=True):
         st.session_state.jogo_ativo = not st.session_state.jogo_ativo
+        st.rerun()
+        
+    st.divider()
+    
+    # NOVO: Botão Switch para Modo Noite / Modo Dia
+    st.subheader("🎨 Aparência")
+    texto_botao_tema = "☀️ Ativar Modo Dia" if st.session_state.modo_noite else "🌙 Ativar Modo Noite"
+    if st.button(texto_botao_tema, use_container_width=True):
+        st.session_state.modo_noite = not st.session_state.modo_noite
         st.rerun()
         
     st.divider()
@@ -160,7 +197,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- CAPTURA DE ENTRADA (Alinhadas por CSS) ---
+# --- CAPTURA DE ENTRADA ---
 prompt_texto = st.chat_input("Como posso ajudar hoje?")
 audio_file = st.audio_input("Falar")
 
