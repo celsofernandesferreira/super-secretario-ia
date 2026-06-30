@@ -38,7 +38,6 @@ model = genai.GenerativeModel(
     model_name="gemini-1.5-flash",
     system_instruction=PROMPT_SISTEMA
 )
-
 # Input de chat
 if prompt := st.chat_input("Como posso ajudar hoje?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
