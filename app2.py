@@ -126,7 +126,7 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME RETRO UPGRADED (CONTROLOS + SCOREBOARD) ---
+# --- INTERFACE: MINI-GAME RETRO UPGRADED ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
@@ -223,6 +223,13 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
+    # SECCÃO ADICIONADA: CONTACTO DIRETO E RECRUTAMENTO
+    st.subheader("👨‍💻 Desenvolvedor")
+    st.info("""**Celso Ferreira**
+*À procura de emprego na área de IT / Informática.*
+📞 Contacto: **917 486 683**""")
+    st.divider()
+    
     st.write("Estado: **Online**")
     st.write("Modelo Nativo: `Gemini-3.5-Flash`")
     st.divider()
@@ -255,128 +262,102 @@ with st.sidebar:
                     st.markdown(f"**🤖 [{hora_min}] Agente:** {r[2]}")
                 st.divider()
 
-# --- CRIAÇÃO DE SEPARADORES NA ÁREA PRINCIPAL (TABS) ---
-tab_chat, tab_about = st.tabs(["💬 Chat com o Agente", "ℹ️ Sobre o Projeto"])
+# --- ÁREA DO CHAT PRINCIPAL ---
+if st.session_state.jogo_ativo:
+    renderizar_jogo()
 
-# --- TAB 2: ABOUT ME & NETWORKING ---
-with tab_about:
-    st.header("ℹ️ Sobre o Projeto - Super Secretário IA")
-    st.markdown("""
-    Este agente inteligente foi inteiramente desenhado e construído por **Celso Ferreira** como parte de um ecossistema de produtividade avançado.
+# Mostrar histórico visual no chat
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# --- CAPTURA DE ENTRADA MULTIMODAL ---
+prompt_texto = st.chat_input("Como posso ajudar hoje?")
+audio_file = st.audio_input("Falar")
+
+prompt = None
+tipo_input = "Texto"
+if prompt_texto:
+    prompt = prompt_texto
+elif audio_file:
+    prompt = "Ficheiro de áudio registado na interface."
+    tipo_input = "Áudio"
+
+# --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER) ---
+if prompt:
+    logging.info(f"Input processado [{tipo_input}]: {prompt}")
+    guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
     
-    ### 🛠️ Arquitetura Técnica Aplicada:
-    * **RAG (Retrieval-Augmented Generation):** Consumos estruturados de bases de conhecimento locais.
-    * **Native Function Calling:** Capacidade de o modelo decidir autonomamente quando interagir com APIs em tempo real.
-    * **Persistência de Dados Relacional:** Monitorização e armazenamento global de interações via SQLite.
-    * **Telemetria Completa:** Logs de auditoria estruturados nativos para monitorização.
-    
-    ---
-    ### 🎯 Oportunidade de Mercado / Emprego:
-    Estou atualmente **à procura de emprego e aberto a novos desafios profissionais nas áreas de Informática, Cloud Infrastructure, Redes (Cisco) e System Administration**. 
-    
-    Se tem interesse no meu perfil técnico ou quer conhecer mais sobre as minhas competências de automação:
-    * 📞 **Contacto Direto:** `917 486 683`
-    * 💼 *Entre em contacto e vamos agendar uma conversa técnica!*
-    """)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-# --- TAB 1: CHAT PRINCIPAL ---
-with tab_chat:
-    # RENDERIZAÇÃO DA INTERFACE DO JOGO (Se ativo)
-    if st.session_state.jogo_ativo:
-        renderizar_jogo()
+    with st.chat_message("assistant"):
+        with st.spinner("Agente a processar contexto e ferramentas..."):
+            try:
+                contexto_base = ler_knowledge_base()
+                
+                # CONFIGURAÇÃO DE PERSONAS DINÂMICAS (ROUTER DE PERSONAS)
+                PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
+                És um Agente focado em automação, suporte e infraestrutura IT.
+                Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas."""
+                
+                PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
+                Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
+                Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
+                
+                # Decidir qual a persona ativa com base no histórico recente
+                texto_historico_recente = " ".join([m["content"].lower() for m in st.session_state.messages])
+                if "entrevista" in texto_historico_recente or "interview" in texto_historico_recente:
+                    prompt_sistema_ativo = PROMPT_RECRUITER
+                    logging.info("Router ativou a Persona: IT Technical Recruiter (EN)")
+                else:
+                    prompt_sistema_ativo = PROMPT_EXECUTIVO
+                    logging.info("Router ativou a Persona: Assistente Executivo (PT)")
 
-    # Mostrar histórico visual no chat
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # --- CAPTURA DE ENTRADA MULTIMODAL ---
-    prompt_texto = st.chat_input("Como posso ajudar hoje?")
-    audio_file = st.audio_input("Falar")
-
-    prompt = None
-    tipo_input = "Texto"
-    if prompt_texto:
-        prompt = prompt_texto
-    elif audio_file:
-        prompt = "Ficheiro de áudio registado na interface."
-        tipo_input = "Áudio"
-
-    # --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER) ---
-    if prompt:
-        logging.info(f"Input processado [{tipo_input}]: {prompt}")
-        guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
-        
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Agente a processar contexto e ferramentas..."):
+                # Estruturar histórico sem a mensagem visual de boas-vindas estática
+                historico_api = []
+                for msg in st.session_state.messages[:-1]:
+                    if msg["content"] != MENSAGEM_INICIAL:
+                        role_api = "model" if msg["role"] == "assistant" else "user"
+                        historico_api.append({"role": role_api, "parts": [msg["content"]]})
+                
+                prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
+                ferramentas_agente = [obter_dados_guimabus]
+                
+                # Execução Resiliente com Fallback
                 try:
-                    contexto_base = ler_knowledge_base()
-                    
-                    # CONFIGURAÇÃO DE PERSONAS DINÂMICAS (ROUTER DE PERSONAS)
-                    PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
-                    És um Agente focado em automação, suporte e infraestrutura IT.
-                    Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas."""
-                    
-                    PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for a Cloud Infrastructure, DevOps or SysAdmin role.
-                    Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
-                    Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
-                    
-                    # Decidir qual a persona ativa com base no histórico recente
-                    texto_historico_recente = " ".join([m["content"].lower() for m in st.session_state.messages])
-                    if "entrevista" in texto_historico_recente or "interview" in texto_historico_recente:
-                        prompt_sistema_ativo = PROMPT_RECRUITER
-                        logging.info("Router ativou a Persona: IT Technical Recruiter (EN)")
-                    else:
-                        prompt_sistema_ativo = PROMPT_EXECUTIVO
-                        logging.info("Router ativou a Persona: Assistente Executivo (PT)")
-
-                    # Estruturar histórico sem a mensagem visual de boas-vindas estática
-                    historico_api = []
-                    for msg in st.session_state.messages[:-1]:
-                        if msg["content"] != MENSAGEM_INICIAL:
-                            role_api = "model" if msg["role"] == "assistant" else "user"
-                            historico_api.append({"role": role_api, "parts": [msg["content"]]})
-                    
-                    prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
-                    ferramentas_agente = [obter_dados_guimabus]
-                    
-                    # Execução Resiliente com Fallback
-                    try:
+                    model = genai.GenerativeModel(
+                        model_name="gemini-3.5-flash",
+                        system_instruction=prompt_sistema_ativo,
+                        tools=ferramentas_agente
+                    )
+                    chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
+                    response = chat.send_message(prompt_enriquecido)
+                except Exception as e:
+                    if "429" in str(e):
+                        logging.warning("Cota 429 atingida no modelo principal. Fallback ativo.")
+                        st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
                         model = genai.GenerativeModel(
-                            model_name="gemini-3.5-flash",
+                            model_name="gemini-2.0-flash-lite",
                             system_instruction=prompt_sistema_ativo,
                             tools=ferramentas_agente
                         )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         response = chat.send_message(prompt_enriquecido)
-                    except Exception as e:
-                        if "429" in str(e):
-                            logging.warning("Cota 429 atingida no modelo principal. Fallback ativo.")
-                            st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
-                            model = genai.GenerativeModel(
-                                model_name="gemini-2.0-flash-lite",
-                                system_instruction=prompt_sistema_ativo,
-                                tools=ferramentas_agente
-                            )
-                            chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                            response = chat.send_message(prompt_enriquecido)
-                        else:
-                            raise e
+                    else:
+                        raise e
 
-                    full_response = response.text
-                    st.markdown(full_response)
-                    
-                    logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
-                    guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
-                    
-                    st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Erro detetado no pipeline do agente: {e}")
-                    logging.error(f"Falha crítica no pipeline do agente: {e}")
+                full_response = response.text
+                st.markdown(full_response)
+                
+                logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
+                guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
+                
+                st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Erro detetado no pipeline do agente: {e}")
+                logging.error(f"Falha crítica no pipeline do agente: {e}")
