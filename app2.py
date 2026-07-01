@@ -380,3 +380,64 @@ if prompt:
                 Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
                 'O Celso faria desta maneira para resolver este problema de IT:'
                 Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
+
+                # LÓGICA DO ROUTER EM TEMPO DE EXECUÇÃO
+                prompt_normalizado = prompt.lower()
+                gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha"]
+                
+                if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
+                    prompt_sistema_ativo = PROMPT_RECRUITER
+                    logging.info("Router selecionou a Persona: IT Technical Recruiter (EN)")
+                elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
+                    prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
+                    logging.info("Router selecionou a Persona: Tutor de Helpdesk / Modo Celso (PT)")
+                else:
+                    prompt_sistema_ativo = PROMPT_EXECUTIVO
+                    logging.info("Router selecionou a Persona: Assistente Executivo (PT)")
+
+                # Estruturar histórico limpo para o payload da API
+                historico_api = []
+                for msg in st.session_state.messages[:-1]:
+                    if msg["content"] != MENSAGEM_INICIAL:
+                        role_api = "model" if msg["role"] == "assistant" else "user"
+                        historico_api.append({"role": role_api, "parts": [msg["content"]]})
+                
+                prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
+                ferramentas_agente = [obter_dados_guimabus]
+                
+                # Execução Resiliente com Fallback
+                try:
+                    model = genai.GenerativeModel(
+                        model_name="gemini-3.5-flash",
+                        system_instruction=prompt_sistema_ativo,
+                        tools=ferramentas_agente
+                    )
+                    chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
+                    response = chat.send_message(prompt_enriquecido)
+                except Exception as e:
+                    if "429" in str(e):
+                        logging.warning("Cota 429 atingida. Ativando fallback económico.")
+                        st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
+                        model = genai.GenerativeModel(
+                            model_name="gemini-2.0-flash-lite",
+                            system_instruction=prompt_sistema_ativo,
+                            tools=ferramentas_agente
+                        )
+                        chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
+                        response = chat.send_message(prompt_enriquecido)
+                    else:
+                        raise e
+
+                full_response = response.text
+                st.markdown(full_response)
+                
+                logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
+                guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
+                
+                st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Erro detetado no pipeline do agente: {e}")
+                logging.error(f"Falha crítica no pipeline do agente: {e}")
