@@ -58,22 +58,38 @@ st.title("💼 O Teu Super Secretário de Produtividade")
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# 4. Injeção de CSS Customizado (Microfone posicionado ACIMA da barra de escrita)
+# 4. Injeção de CSS Avançado (Microfone embutido DIRETAMENTE na barra de escrita)
 st.markdown("""
     <style>
+        /* Dá um espaçamento à esquerda no input de texto para o texto não sobrepor o microfone */
+        .stChatInputContainer textarea {
+            padding-left: 55px !important;
+        }
+        
+        /* Força a barra de escrita a ser o container de posicionamento principal */
         .stChatInputContainer {
             position: relative;
-            margin-top: 50px !important;
         }
+        
+        /* Posiciona e integra o microfone de forma invisível no canto esquerdo da barra */
         div[data-testid="stAudioInput"] {
             position: absolute;
-            left: 0px;
-            bottom: 54px;
-            z-index: 999;
-            width: auto !important;
+            left: 10px;
+            bottom: 6px;
+            z-index: 9999;
+            width: 40px !important;
+            background: transparent !important;
         }
+        
+        /* Remove o fundo, bordas e textos nativos do componente grande do Streamlit */
+        div[data-testid="stAudioInput"] > div {
+            background: transparent !important;
+            border: none !important;
+            padding: 0 !important;
+        }
+        
         div[data-testid="stAudioInput"] label {
-            display: none;
+            display: none !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -156,7 +172,6 @@ def renderizar_jogo():
             var gameStarted = false;
             var gameOver = false;
             
-            // Reduzir a luz de fundo aclarando suavemente as cores
             function drawScene() {
                 ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,0,canvas.width,canvas.height);
                 ctx.fillStyle = '#ff6666'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
@@ -345,7 +360,6 @@ elif audio_file:
     tipo_input = "Áudio"
     with st.spinner("A processar e a transcrever o teu áudio..."):
         try:
-            # Transcrever o áudio nativamente passando os bytes diretamente ao Gemini
             audio_data = audio_file.read()
             model_transcrever = genai.GenerativeModel("gemini-3.5-flash")
             audio_part = {"mime_type": "audio/wav", "data": audio_data}
