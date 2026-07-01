@@ -126,11 +126,16 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME RETRO UPGRADED ---
+# --- INTERFACE: MINI-GAME RETRO UPGRADED (PAREDES INFINITAS + BOTÃO START/RESET + VELOCIDADE 180MS) ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
         <h3 style="color:#ffe135; font-family:sans-serif; margin-top:0; margin-bottom:10px;">🕹️ Modo Pausa: Snake Arcade Retro 🕹️</h3>
+        
+        <div style="margin-bottom: 10px;">
+            <button id="btnAction" onclick="toggleGame()" style="padding: 8px 20px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer;">Play ▶</button>
+        </div>
+
         <canvas id="stage" width="400" height="350" style="border:2px solid #ffe135; background-color:#000; display:block; margin:0 auto;"></canvas>
         
         <div style="margin-top: 15px; display: inline-block;">
@@ -144,12 +149,48 @@ def renderizar_jogo():
         <script>
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
+            var btnAction = document.getElementById('btnAction');
+            
             var tnt = 20, snake = [{x:160, y:160}], dx = tnt, dy = 0, apple = {x:80, y:80}, score = 0;
+            var gameInterval = null;
+            var gameStarted = false;
+            var gameOver = false;
+            
+            function drawScene() {
+                ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                ctx.fillStyle = '#ff4444'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
+                ctx.fillStyle = '#00ff00'; 
+                for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
+                ctx.fillStyle = '#ffffff'; ctx.font = '16px sans-serif';
+                ctx.fillText('Score: ' + score, 15, 25);
+                
+                if (gameOver) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = '#ff4444'; ctx.font = '24px sans-serif'; ctx.textAlign = 'center';
+                    ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2);
+                    ctx.textAlign = 'start'; // reset text align
+                }
+            }
             
             function game() {
+                if (gameOver) return;
+                
                 var head = {x: snake[0].x + dx, y: snake[0].y + dy};
-                if (head.x < 0 || head.x >= canvas.width || head.y < 0 || head.y >= canvas.height) resetGame();
-                for (var i = 0; i < snake.length; i++) { if (snake[i].x === head.x && snake[i].y === head.y) resetGame(); }
+                
+                // Mapeamento de Paredes Infinitas (Atravessar limites do ecrã)
+                if (head.x < 0) head.x = canvas.width - tnt;
+                else if (head.x >= canvas.width) head.x = 0;
+                
+                if (head.y < 0) head.y = canvas.height - tnt;
+                else if (head.y >= canvas.height) head.y = 0;
+                
+                // Apenas morre se colidir consigo própria
+                for (var i = 0; i < snake.length; i++) { 
+                    if (snake[i].x === head.x && snake[i].y === head.y) {
+                        triggerGameOver();
+                        return;
+                    } 
+                }
                 
                 snake.unshift(head);
                 if (head.x === apple.x && head.y === apple.y) {
@@ -158,19 +199,44 @@ def renderizar_jogo():
                     apple.y = Math.floor(Math.random() * (canvas.height/tnt)) * tnt;
                 } else { snake.pop(); }
                 
-                ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
-                ctx.fillStyle = '#ff4444'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
-                
-                ctx.fillStyle = '#00ff00'; 
-                for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
-                
-                ctx.fillStyle = '#ffffff'; ctx.font = '16px sans-serif';
-                ctx.fillText('Score: ' + score, 15, 25);
+                drawScene();
             }
             
-            function resetGame() { snake = [{x:160, y:160}]; dx = tnt; dy = 0; score = 0; }
+            function toggleGame() {
+                if (gameOver) {
+                    resetGame();
+                    return;
+                }
+                if (!gameStarted) {
+                    gameStarted = true;
+                    btnAction.innerText = "Pause ⏸";
+                    gameInterval = setInterval(game, 180); // Velocidade reduzida para 180ms
+                } else {
+                    gameStarted = false;
+                    btnAction.innerText = "Play ▶";
+                    clearInterval(gameInterval);
+                }
+            }
+            
+            function triggerGameOver() {
+                gameOver = true;
+                gameStarted = false;
+                clearInterval(gameInterval);
+                btnAction.innerText = "Reset 🔄";
+                drawScene();
+            }
+            
+            function resetGame() { 
+                snake = [{x:160, y:160}]; dx = tnt; dy = 0; score = 0; 
+                gameOver = false;
+                gameStarted = true;
+                btnAction.innerText = "Pause ⏸";
+                gameInterval = setInterval(game, 180); // Velocidade contínua a 180ms
+                drawScene();
+            }
             
             function mudarDirecao(dir) {
+                if (!gameStarted || gameOver) return;
                 if(dir === 'esquerda' && dx == 0) { dx = -tnt; dy = 0; }
                 if(dir === 'cima' && dy == 0) { dx = 0; dy = -tnt; }
                 if(dir === 'direita' && dx == 0) { dx = tnt; dy = 0; }
@@ -183,11 +249,13 @@ def renderizar_jogo():
                 if(e.keyCode == 39) mudarDirecao('direita');
                 if(e.keyCode == 40) mudarDirecao('baixo');
             });
-            setInterval(game, 120);
+            
+            // Desenho inicial da cena com o jogo parado
+            drawScene();
         </script>
     </div>
     """
-    components.html(html_jogo, height=540)
+    components.html(html_jogo, height=600) # Ajustado ligeiramente a altura para incluir o novo botão superior
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -267,6 +335,7 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
+# Mostrar histórico visual no chat
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -306,68 +375,8 @@ if prompt:
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
                 Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
                 
-                PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico Sénior de Helpdesk e Suporte de IT.
+                PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico Técnico de Helpdesk e Suporte de IT.
                 O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
                 Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
                 'O Celso faria desta maneira para resolver este problema de IT:'
                 Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
-
-                # LÓGICA DO ROUTER EM TEMPO DE EXECUÇÃO
-                prompt_normalizado = prompt.lower()
-                gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha"]
-                
-                if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
-                    prompt_sistema_ativo = PROMPT_RECRUITER
-                    logging.info("Router selecionou a Persona: IT Technical Recruiter (EN)")
-                elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
-                    prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
-                    logging.info("Router selecionou a Persona: Tutor de Helpdesk / Modo Celso (PT)")
-                else:
-                    prompt_sistema_ativo = PROMPT_EXECUTIVO
-                    logging.info("Router selecionou a Persona: Assistente Executivo (PT)")
-
-                # Estruturar histórico limpo para o payload da API
-                historico_api = []
-                for msg in st.session_state.messages[:-1]:
-                    if msg["content"] != MENSAGEM_INICIAL:
-                        role_api = "model" if msg["role"] == "assistant" else "user"
-                        historico_api.append({"role": role_api, "parts": [msg["content"]]})
-                
-                prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
-                ferramentas_agente = [obter_dados_guimabus]
-                
-                try:
-                    model = genai.GenerativeModel(
-                        model_name="gemini-3.5-flash",
-                        system_instruction=prompt_sistema_ativo,
-                        tools=ferramentas_agente
-                    )
-                    chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                    response = chat.send_message(prompt_enriquecido)
-                except Exception as e:
-                    if "429" in str(e):
-                        logging.warning("Cota 429 atingida. Ativando fallback económico.")
-                        st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
-                        model = genai.GenerativeModel(
-                            model_name="gemini-2.0-flash-lite",
-                            system_instruction=prompt_sistema_ativo,
-                            tools=ferramentas_agente
-                        )
-                        chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                        response = chat.send_message(prompt_enriquecido)
-                    else:
-                        raise e
-
-                full_response = response.text
-                st.markdown(full_response)
-                
-                logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
-                guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
-                
-                st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Erro detetado no pipeline do agente: {e}")
-                logging.error(f"Falha crítica no pipeline do agente: {e}")
