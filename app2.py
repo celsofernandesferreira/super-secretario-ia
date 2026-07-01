@@ -168,23 +168,20 @@ def renderizar_jogo():
                     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                     ctx.fillStyle = '#ff4444'; ctx.font = '24px sans-serif'; ctx.textAlign = 'center';
                     ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2);
-                    ctx.textAlign = 'start'; // reset text align
+                    ctx.textAlign = 'start';
                 }
             }
             
             function game() {
                 if (gameOver) return;
-                
                 var head = {x: snake[0].x + dx, y: snake[0].y + dy};
                 
-                // Mapeamento de Paredes Infinitas (Atravessar limites do ecrã)
                 if (head.x < 0) head.x = canvas.width - tnt;
                 else if (head.x >= canvas.width) head.x = 0;
                 
                 if (head.y < 0) head.y = canvas.height - tnt;
                 else if (head.y >= canvas.height) head.y = 0;
                 
-                // Apenas morre se colidir consigo própria
                 for (var i = 0; i < snake.length; i++) { 
                     if (snake[i].x === head.x && snake[i].y === head.y) {
                         triggerGameOver();
@@ -203,14 +200,11 @@ def renderizar_jogo():
             }
             
             function toggleGame() {
-                if (gameOver) {
-                    resetGame();
-                    return;
-                }
+                if (gameOver) { resetGame(); return; }
                 if (!gameStarted) {
                     gameStarted = true;
                     btnAction.innerText = "Pause ⏸";
-                    gameInterval = setInterval(game, 180); // Velocidade reduzida para 180ms
+                    gameInterval = setInterval(game, 180);
                 } else {
                     gameStarted = false;
                     btnAction.innerText = "Play ▶";
@@ -219,8 +213,7 @@ def renderizar_jogo():
             }
             
             function triggerGameOver() {
-                gameOver = true;
-                gameStarted = false;
+                gameOver = true; gameStarted = false;
                 clearInterval(gameInterval);
                 btnAction.innerText = "Reset 🔄";
                 drawScene();
@@ -228,10 +221,9 @@ def renderizar_jogo():
             
             function resetGame() { 
                 snake = [{x:160, y:160}]; dx = tnt; dy = 0; score = 0; 
-                gameOver = false;
-                gameStarted = true;
+                gameOver = false; gameStarted = true;
                 btnAction.innerText = "Pause ⏸";
-                gameInterval = setInterval(game, 180); // Velocidade contínua a 180ms
+                gameInterval = setInterval(game, 180);
                 drawScene();
             }
             
@@ -249,13 +241,11 @@ def renderizar_jogo():
                 if(e.keyCode == 39) mudarDirecao('direita');
                 if(e.keyCode == 40) mudarDirecao('baixo');
             });
-            
-            // Desenho inicial da cena com o jogo parado
             drawScene();
         </script>
     </div>
     """
-    components.html(html_jogo, height=600) # Ajustado ligeiramente a altura para incluir o novo botão superior
+    components.html(html_jogo, height=600)
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -335,9 +325,10 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
-# Mostrar histórico visual no chat
+# Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
+    avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
+    with st.chat_message(message["role"], avatar=avatar_tipo):
         st.markdown(message["content"])
 
 # --- CAPTURA DE ENTRADA MULTIMODAL ---
@@ -358,10 +349,10 @@ if prompt:
     guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
     
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar="💼"):
         with st.spinner("Agente a processar contexto e ferramentas..."):
             try:
                 contexto_base = ler_knowledge_base()
@@ -436,7 +427,7 @@ if prompt:
                 
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
-                st.rerun()
+                st.refresh_data() # Método limpo de refresh em vez de rerun forçado do ecrã
                 
             except Exception as e:
                 st.error(f"Erro detetado no pipeline do agente: {e}")
