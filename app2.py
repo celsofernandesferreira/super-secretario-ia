@@ -126,7 +126,7 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME RETRO UPGRADED (PAREDES INFINITAS + BOTÃO START/RESET + VELOCIDADE 180MS) ---
+# --- INTERFACE: MINI-GAME RETRO UPGRADED ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
@@ -156,10 +156,11 @@ def renderizar_jogo():
             var gameStarted = false;
             var gameOver = false;
             
+            // Reduzir a luz de fundo aclarando suavemente as cores
             function drawScene() {
-                ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
-                ctx.fillStyle = '#ff4444'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
-                ctx.fillStyle = '#00ff00'; 
+                ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                ctx.fillStyle = '#ff6666'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
+                ctx.fillStyle = '#33ff33'; 
                 for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
                 ctx.fillStyle = '#ffffff'; ctx.font = '16px sans-serif';
                 ctx.fillText('Score: ' + score, 15, 25);
@@ -337,11 +338,27 @@ audio_file = st.audio_input("Falar")
 
 prompt = None
 tipo_input = "Texto"
+
 if prompt_texto:
     prompt = prompt_texto
 elif audio_file:
-    prompt = "Ficheiro de áudio registado na interface."
     tipo_input = "Áudio"
+    with st.spinner("A processar e a transcrever o teu áudio..."):
+        try:
+            # Transcrever o áudio nativamente passando os bytes diretamente ao Gemini
+            audio_data = audio_file.read()
+            model_transcrever = genai.GenerativeModel("gemini-3.5-flash")
+            audio_part = {"mime_type": "audio/wav", "data": audio_data}
+            
+            response_transcricao = model_transcrever.generate_content([
+                "Transcreve estritamente o áudio fornecido para texto, mantendo a pontuação correta e no idioma original. Não adiciones comentários extras.",
+                audio_part
+            ])
+            prompt = response_transcricao.text.strip()
+            logging.info(f"Transcrição de voz concluída com sucesso: '{prompt}'")
+        except Exception as e:
+            st.error(f"Erro ao processar o ficheiro de voz: {e}")
+            logging.error(f"Falha na transcrição de áudio: {e}")
 
 # --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER DE PERSONAS) ---
 if prompt:
@@ -427,7 +444,7 @@ if prompt:
                 
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
-                st.refresh_data() # Método limpo de refresh em vez de rerun forçado do ecrã
+                st.rerun()
                 
             except Exception as e:
                 st.error(f"Erro detetado no pipeline do agente: {e}")
