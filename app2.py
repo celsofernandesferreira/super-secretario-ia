@@ -58,17 +58,17 @@ st.title("💼 O Teu Super Secretário de Produtividade")
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# 4. Injeção de CSS Customizado (Ajuste do microfone)
+# 4. Injeção de CSS Customizado (Microfone posicionado ACIMA da barra de escrita)
 st.markdown("""
     <style>
         .stChatInputContainer {
             position: relative;
-            padding-right: 60px !important;
+            margin-top: 50px !important;
         }
         div[data-testid="stAudioInput"] {
             position: absolute;
-            right: 15px;
-            bottom: 4px;
+            left: 0px;
+            bottom: 54px;
             z-index: 999;
             width: auto !important;
         }
@@ -192,9 +192,10 @@ def renderizar_jogo():
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
 
-Estou pronto para te apoiar em duas frentes:
+Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
-2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* e passamos para um simulador técnico rigoroso em inglês.
+2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
+3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
 Como posso ajudar hoje?"""
 
@@ -223,7 +224,7 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
-    # SECCÃO ADICIONADA: CONTACTO DIRETO E RECRUTAMENTO
+    # SECÇÃO: CONTACTO DIRETO E RECRUTAMENTO
     st.subheader("👨‍💻 Desenvolvedor")
     st.info("""**Celso Ferreira**
 *À procura de emprego na área de IT / Informática.*
@@ -266,7 +267,6 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
-# Mostrar histórico visual no chat
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -283,7 +283,7 @@ elif audio_file:
     prompt = "Ficheiro de áudio registado na interface."
     tipo_input = "Áudio"
 
-# --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER) ---
+# --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER DE PERSONAS) ---
 if prompt:
     logging.info(f"Input processado [{tipo_input}]: {prompt}")
     guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
@@ -297,7 +297,7 @@ if prompt:
             try:
                 contexto_base = ler_knowledge_base()
                 
-                # CONFIGURAÇÃO DE PERSONAS DINÂMICAS (ROUTER DE PERSONAS)
+                # DEFINIÇÃO DOS PROMPTS DE SISTEMA (MÚLTIPLAS PERSONAS)
                 PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
                 És um Agente focado em automação, suporte e infraestrutura IT.
                 Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas."""
@@ -306,16 +306,27 @@ if prompt:
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
                 Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
                 
-                # Decidir qual a persona ativa com base no histórico recente
-                texto_historico_recente = " ".join([m["content"].lower() for m in st.session_state.messages])
-                if "entrevista" in texto_historico_recente or "interview" in texto_historico_recente:
+                PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico Sénior de Helpdesk e Suporte de IT.
+                O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
+                Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                'O Celso faria desta maneira para resolver este problema de IT:'
+                Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
+
+                # LÓGICA DO ROUTER EM TEMPO DE EXECUÇÃO
+                prompt_normalizado = prompt.lower()
+                gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha"]
+                
+                if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
                     prompt_sistema_ativo = PROMPT_RECRUITER
-                    logging.info("Router ativou a Persona: IT Technical Recruiter (EN)")
+                    logging.info("Router selecionou a Persona: IT Technical Recruiter (EN)")
+                elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
+                    prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
+                    logging.info("Router selecionou a Persona: Tutor de Helpdesk / Modo Celso (PT)")
                 else:
                     prompt_sistema_ativo = PROMPT_EXECUTIVO
-                    logging.info("Router ativou a Persona: Assistente Executivo (PT)")
+                    logging.info("Router selecionou a Persona: Assistente Executivo (PT)")
 
-                # Estruturar histórico sem a mensagem visual de boas-vindas estática
+                # Estruturar histórico limpo para o payload da API
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     if msg["content"] != MENSAGEM_INICIAL:
@@ -325,7 +336,6 @@ if prompt:
                 prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
                 ferramentas_agente = [obter_dados_guimabus]
                 
-                # Execução Resiliente com Fallback
                 try:
                     model = genai.GenerativeModel(
                         model_name="gemini-3.5-flash",
@@ -336,7 +346,7 @@ if prompt:
                     response = chat.send_message(prompt_enriquecido)
                 except Exception as e:
                     if "429" in str(e):
-                        logging.warning("Cota 429 atingida no modelo principal. Fallback ativo.")
+                        logging.warning("Cota 429 atingida. Ativando fallback económico.")
                         st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
                         model = genai.GenerativeModel(
                             model_name="gemini-2.0-flash-lite",
