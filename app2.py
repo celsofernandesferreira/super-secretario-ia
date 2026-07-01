@@ -58,36 +58,39 @@ st.title("💼 O Teu Super Secretário de Produtividade")
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# 4. Injeção de CSS Avançado (Microfone embutido DIRETAMENTE na barra de escrita)
+# 4. Injeção de CSS Avançado (Microfone embutido de forma nativa DENTRO da barra de escrita)
 st.markdown("""
     <style>
-        /* Dá um espaçamento à esquerda no input de texto para o texto não sobrepor o microfone */
-        .stChatInputContainer textarea {
-            padding-left: 55px !important;
-        }
-        
-        /* Força a barra de escrita a ser o container de posicionamento principal */
+        /* Cria um ponto de referência relativo na barra de chat */
         .stChatInputContainer {
             position: relative;
         }
         
-        /* Posiciona e integra o microfone de forma invisível no canto esquerdo da barra */
+        /* Empurra o texto digitado para a direita para dar espaço ao microfone no canto esquerdo */
+        .stChatInputContainer textarea {
+            padding-left: 55px !important;
+        }
+        
+        /* Ajusta o componente de áudio e posiciona-o exatamente DENTRO da barra no canto esquerdo */
         div[data-testid="stAudioInput"] {
             position: absolute;
-            left: 10px;
-            bottom: 6px;
+            left: 12px;
+            bottom: 8px;
             z-index: 9999;
-            width: 40px !important;
+            width: 38px !important;
+            height: 38px !important;
             background: transparent !important;
         }
         
-        /* Remove o fundo, bordas e textos nativos do componente grande do Streamlit */
+        /* Limpa o design bruto e retira as caixas cinzentas grandes do Streamlit */
         div[data-testid="stAudioInput"] > div {
             background: transparent !important;
             border: none !important;
             padding: 0 !important;
+            box-shadow: none !important;
         }
         
+        /* Esconde textos informativos desnecessários do componente */
         div[data-testid="stAudioInput"] label {
             display: none !important;
         }
@@ -142,7 +145,7 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME RETRO UPGRADED ---
+# --- INTERFACE: MINI-GAME RETRO UPGRADED (PAREDES INFINITAS + BOTÃO START/RESET + VELOCIDADE 180MS) ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
