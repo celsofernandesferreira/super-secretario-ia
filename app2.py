@@ -94,6 +94,10 @@ st.title("💼 O Teu Super Secretário de Produtividade")
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
+# Inicialização de estados adicionais para o jogo persistente
+if "pontuacao_pendente" not in st.session_state:
+    st.session_state.pontuacao_pendente = None
+
 # 4. Injeção de CSS Avançado
 st.markdown("""
     <style>
@@ -418,7 +422,7 @@ def renderizar_jogo():
         </script>
     </div>
     """
-    return components.html(html_jogo, height=480)
+    return components.html(html_jogo, height=540)
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -522,6 +526,38 @@ if st.session_state.jogo_ativo:
     
     with col_leaderboard:
         st.markdown("### 🏆 Top 10 Motoristas")
+        
+        # Interceção segura do valor JavaScript para o estado de sessão estável do Python
+        if game_value is not None:
+            try:
+                valor_bruto = game_value.value if hasattr(game_value, 'value') else game_value
+                if valor_bruto and str(valor_bruto).strip() not in ["None", ""]:
+                    pts = int(float(valor_bruto))
+                    if pts > 0:
+                        st.session_state.pontuacao_pendente = pts
+            except (ValueError, TypeError):
+                pass
+
+        # Exibição persistente do formulário de gravação
+        if st.session_state.pontuacao_pendente is not None:
+            st.success(f"🎉 Linha terminada! Transportaste **{st.session_state.pontuacao_pendente}** passageiros!")
+            
+            with st.form("score_form", clear_on_submit=True):
+                nome_jogador = st.text_input("Introduz o teu nome/iniciais:", max_chars=12, placeholder="Ex: CELSO")
+                submetido = st.form_submit_button("Gravar na Tabela 💾")
+                if submetido and nome_jogador.strip():
+                    guardar_score_bd(nome_jogador.strip().upper(), st.session_state.pontuacao_pendente)
+                    st.session_state.pontuacao_pendente = None
+                    st.success("Recorde adicionado!")
+                    st.rerun()
+            
+            if st.button("Cancelar ❌", use_container_width=True):
+                st.session_state.pontuacao_pendente = None
+                st.rerun()
+        
+        st.divider()
+        
+        # Desenho da Leaderboard dinâmica na coluna ao lado do canvas
         scores = obter_top_10()
         if scores:
             for idx, (nome, pts, data) in enumerate(scores):
@@ -535,26 +571,6 @@ if st.session_state.jogo_ativo:
                 )
         else:
             st.caption("Ainda sem registos nesta carreira. Sê o primeiro a marcar a rota!")
-
-    # Tratamento defensivo e seguro para capturar os dados do Componente HTML
-    if game_value is not None:
-        try:
-            valor_bruto = game_value.value if hasattr(game_value, 'value') else game_value
-            if valor_bruto and str(valor_bruto).strip() not in ["None", ""]:
-                pontuacao_recolhida = int(float(valor_bruto))
-                
-                if pontuacao_recolhida > 0:
-                    st.success(f"🎉 Linha terminada! Conseguiste transportar **{pontuacao_recolhida} passageiros**!")
-                    
-                    with st.form("score_form", clear_on_submit=True):
-                        nome_jogador = st.text_input("Introduz as tuas iniciais ou nome para a tabela:", max_chars=15, placeholder="Ex: CELSO")
-                        submetido = st.form_submit_button("Gravar Recorde 💾")
-                        if submetido and nome_jogador.strip():
-                            guardar_score_bd(nome_jogador.strip().upper(), pontuacao_recolhida)
-                            st.success("Recorde adicionado com sucesso!")
-                            st.rerun()
-        except (ValueError, TypeError):
-            pass
 
 # Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
