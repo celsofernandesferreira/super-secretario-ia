@@ -573,25 +573,36 @@ audio_file = st.audio_input("Falar")
 prompt = None
 tipo_input = "Texto"
 
+if "ultimo_audio_processado_id" not in st.session_state:
+    st.session_state.ultimo_audio_processado_id = None
+
 if prompt_texto:
     prompt = prompt_texto
 elif audio_file:
-    tipo_input = "Áudio"
-    with st.spinner("A processar e a transcrever o teu áudio..."):
-        try:
-            audio_data = audio_file.read()
-            model_transcrever = genai.GenerativeModel("gemini-3.5-flash")
-            audio_part = {"mime_type": "audio/wav", "data": audio_data}
-            
-            response_transcricao = model_transcrever.generate_content([
-                "Transcreve estritamente o áudio fornecido para texto, mantendo a pontuação correta e no idioma original. Não adiciones comentários extras.",
-                audio_part
-            ])
-            prompt = response_transcricao.text.strip()
-            logging.info(f"Transcrição de voz concluída com sucesso: '{prompt}'")
-        except Exception as e:
-            st.error(f"Erro ao processar o ficheiro de voz: {e}")
-            logging.error(f"Falha na transcrição de áudio: {e}")
+    # st.audio_input NÃO se limpa sozinho como o chat_input — fica retido na sessão.
+    # Sem esta verificação, qualquer rerun não relacionado (abrir o jogo, entrar como
+    # admin, um refresh que reconecta a sessão) reprocessava e reenviava o MESMO áudio
+    # à API repetidamente, consumindo quota sem o utilizador saber.
+    audio_id_atual = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
+
+    if audio_id_atual != st.session_state.ultimo_audio_processado_id:
+        st.session_state.ultimo_audio_processado_id = audio_id_atual
+        tipo_input = "Áudio"
+        with st.spinner("A processar e a transcrever o teu áudio..."):
+            try:
+                audio_data = audio_file.read()
+                model_transcrever = genai.GenerativeModel("gemini-3.5-flash")
+                audio_part = {"mime_type": "audio/wav", "data": audio_data}
+
+                response_transcricao = model_transcrever.generate_content([
+                    "Transcreve estritamente o áudio fornecido para texto, mantendo a pontuação correta e no idioma original. Não adiciones comentários extras.",
+                    audio_part
+                ])
+                prompt = response_transcricao.text.strip()
+                logging.info(f"Transcrição de voz concluída com sucesso: '{prompt}'")
+            except Exception as e:
+                st.error(f"Erro ao processar o ficheiro de voz: {e}")
+                logging.error(f"Falha na transcrição de áudio: {e}")
 
 # --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER DE PERSONAS) ---
 if prompt:
@@ -614,7 +625,12 @@ if prompt:
 
                 Tens duas ferramentas relacionadas com a Guimabus, para perguntas diferentes:
                 - obter_dados_guimabus: estado em tempo real da frota (posições/atrasos dos autocarros já em circulação). Aceita opcionalmente um "route_id" para filtrar por linha.
-                - obter_horarios_paragem: previsão de tempos de espera/carreiras para uma paragem específica (precisa do ID numérico da paragem). Se o utilizador não indicar o ID da paragem, pergunta-lhe qual é antes de chamar a ferramenta."""
+                - obter_horarios_paragem: previsão de tempos de espera/carreiras para uma paragem específica (precisa do ID numérico da paragem).
+
+                REGRAS IMPORTANTES para usar estas ferramentas (para poupar chamadas à API, que têm limite):
+                1. Chama NO MÁXIMO uma ferramenta por pergunta. Nunca tentes as duas seguidas "para ver qual dá melhor resultado".
+                2. Se a pergunta do utilizador for vaga (ex: "que horários há agora?", sem indicar linha ou paragem), NÃO chames nenhuma ferramenta — pergunta primeiro ao utilizador se quer saber da frota em geral (e nesse caso podes indicar um route_id se ele mencionar uma linha) ou de uma paragem específica (nesse caso precisas do ID da paragem).
+                3. Se uma ferramenta já respondeu (mesmo que a resposta seja "sem dados disponíveis"), não voltes a chamá-la nem chames a outra à procura de mais informação — reporta o resultado obtido ao utilizador tal como está.
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
@@ -650,28 +666,45 @@ if prompt:
                 prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
                 ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem]
                 
-                # Execução Resiliente com Fallback
-                try:
-                    model = genai.GenerativeModel(
-                        model_name="gemini-3.5-flash",
-                        system_instruction=prompt_sistema_ativo,
-                        tools=ferramentas_agente
-                    )
-                    chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                    response = chat.send_message(prompt_enriquecido)
-                except Exception as e:
-                    if "429" in str(e):
-                        logging.warning("Cota 429 atingida. Ativando fallback económico.")
-                        st.warning("⚠️ Limite atingido. A alternar para modelo secundário...")
+                # Execução Resiliente com Fallback e timeout explícito (evita pedidos "pendurados")
+                TIMEOUT_SEGUNDOS = 25
+                # Cadeia de candidatos com os modelos atuais e suportados (verificado em julho 2026):
+                # gemini-3.5-flash é o modelo Flash mais recente e capaz (GA desde maio 2026).
+                # Os antigos "gemini-2.0-flash" / "gemini-2.0-flash-lite" foram desativados
+                # pela Google a 1 de junho de 2026 e já não podem ser usados.
+                candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+
+                response = None
+                ultimo_erro_modelo = None
+                for nome_modelo in candidatos_modelo:
+                    try:
                         model = genai.GenerativeModel(
-                            model_name="gemini-2.0-flash-lite",
+                            model_name=nome_modelo,
                             system_instruction=prompt_sistema_ativo,
                             tools=ferramentas_agente
                         )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                        response = chat.send_message(prompt_enriquecido)
+                        response = chat.send_message(
+                            prompt_enriquecido,
+                            request_options={"timeout": TIMEOUT_SEGUNDOS}
+                        )
+                        if nome_modelo != candidatos_modelo[0]:
+                            logging.warning(f"Modelo principal falhou; resposta obtida com fallback '{nome_modelo}'.")
+                            st.info(f"ℹ️ Modelo principal indisponível — resposta gerada com '{nome_modelo}'.")
+                        break  # sucesso, não tenta os restantes
+                    except Exception as e:
+                        ultimo_erro_modelo = e
+                        motivo = "limite de quota (429)" if "429" in str(e) else ("timeout" if "timeout" in str(e).lower() or "deadline" in str(e).lower() else str(e))
+                        logging.warning(f"Modelo '{nome_modelo}' falhou ({motivo}). A tentar o próximo candidato, se existir.")
+                        continue
+
+                if response is None:
+                    logging.error(f"Todos os modelos candidatos falharam. Último erro: {ultimo_erro_modelo}")
+                    if ultimo_erro_modelo is not None and "429" in str(ultimo_erro_modelo):
+                        st.error("🚫 Limite diário gratuito da API do Gemini esgotado. Tenta novamente mais tarde (a quota costuma renovar-se ao fim de 24h), ou ativa faturação na Google AI Studio para aumentar o limite.")
                     else:
-                        raise e
+                        st.error("🚫 Não foi possível obter resposta de nenhum modelo disponível neste momento. Tenta novamente dentro de instantes.")
+                    st.stop()
 
                 full_response = response.text
                 st.markdown(full_response)
