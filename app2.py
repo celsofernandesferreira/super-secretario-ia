@@ -31,7 +31,7 @@ def inicializar_bd():
             content TEXT
         )
     """)
-    # NOVA TABELA: Sistema de High Scores
+    # Tabela: Sistema de High Scores
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS high_scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,19 +238,14 @@ def ler_knowledge_base():
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
-        <h3 style="color:#2ecc71; font-family:sans-serif; margin-top:0; margin-bottom:10px;">🚌 Simulador de Linha: Guimabus Arcade 🚌</h3>
-        
-        <div style="margin-bottom: 10px;">
-            <button id="btnAction" onclick="toggleGame()" style="padding: 8px 20px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer;">Play ▶</button>
-        </div>
-
         <canvas id="stage" width="400" height="360" style="border:2px solid #2ecc71; background-color:#000; display:block; margin:0 auto; touch-action:none;"></canvas>
         
         <div style="margin-top: 15px; display: inline-block;">
-            <button data-dir="cima" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▲</button><br>
-            <button data-dir="esquerda" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">◀</button>
-            <button data-dir="baixo" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
-            <button data-dir="direita" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
+            <button id="btnAction" onclick="toggleGame()" style="padding: 8px 20px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer; margin-right:10px;">Play ▶</button>
+            <button data-dir="cima" style="width:45px; height:35px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▲</button>
+            <button data-dir="esquerda" style="width:45px; height:35px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">◀</button>
+            <button data-dir="baixo" style="width:45px; height:35px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
+            <button data-dir="direita" style="width:45px; height:35px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
         </div>
         
         <script>
@@ -265,7 +260,7 @@ def renderizar_jogo():
             var gameInterval = null;
             var gameStarted = false;
             var gameOver = false;
-            var scoreEnviado = false; // Evita envios múltiplos no mesmo game over
+            var scoreEnviado = false;
 
             function novaMaca() {
                 var pos;
@@ -297,13 +292,13 @@ def renderizar_jogo():
                     ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke();
                 }
 
-                // Passageiro
+                // Passenger
                 ctx.fillStyle = '#3498db'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI); ctx.fill();
                 ctx.fillStyle = '#ffffff'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
-                // Autocarro Verde Guimabus
+                // Green Guimabus Bus
                 for(var i=0; i<snake.length; i++) {
                     if (i === 0) {
                         ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
@@ -341,16 +336,14 @@ def renderizar_jogo():
                     ctx.fillStyle = '#ffffff'; ctx.font = '14px sans-serif';
                     ctx.fillText('Passageiros recolhidos: ' + (score / 10), canvas.width/2, canvas.height/2 + 15);
                     ctx.font = 'italic 11px sans-serif'; ctx.fillStyle = '#aaa';
-                    ctx.fillText('Grava o teu nome no painel abaixo!', canvas.width/2, canvas.height/2 + 40);
+                    ctx.fillText('Grava o teu nome no painel ao lado!', canvas.width/2, canvas.height/2 + 40);
                     ctx.textAlign = 'start';
 
-                    // Envia a pontuação final para o Python de forma assíncrona
                     if (!scoreEnviado) {
                         scoreEnviado = true;
-                        var finalScore = score / 10;
                         window.parent.postMessage({
                             type: 'streamlit:setComponentValue',
-                            value: finalScore
+                            value: (score / 10)
                         }, '*');
                     }
                 }
@@ -382,8 +375,7 @@ def renderizar_jogo():
                     score += 10;
                     if (score % 50 === 0 && velocidadeMs > 80) {
                         velocidadeMs -= 10;
-                        clearInterval(gameInterval);
-                        gameInterval = setInterval(game, velocidadeMs);
+                        clearInterval(gameInterval); gameInterval = setInterval(game, velocidadeMs);
                     }
                     apple = novaMaca();
                 } else { snake.pop(); }
@@ -396,8 +388,7 @@ def renderizar_jogo():
                     gameStarted = true; btnAction.innerText = "Pause ⏸";
                     gameInterval = setInterval(game, velocidadeMs);
                 } else {
-                    gameStarted = false; btnAction.innerText = "Play ▶";
-                    clearInterval(gameInterval);
+                    gameStarted = false; btnAction.innerText = "Play ▶"; clearInterval(gameInterval);
                 }
             }
             function triggerGameOver() {
@@ -427,8 +418,7 @@ def renderizar_jogo():
         </script>
     </div>
     """
-    # Retorna o valor emitido pelo postMessage (pontuação final)
-    return components.html(html_jogo, height=540)
+    return components.html(html_jogo, height=480)
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -463,17 +453,6 @@ with st.sidebar:
         st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
     st.divider()
-
-    # BLOCO VISUAL: TOP 10 HIGH SCORES DA GUIMABUS
-    st.subheader("🏆 Leaderboard: Top 10 Motoristas")
-    scores = obter_top_10()
-    if scores:
-        for idx, (nome, pts, data) in enumerate(scores):
-            medor = "🥇" if idx==0 else ("🥈" if idx==1 else ("🥉" if idx==2 else "🚌"))
-            st.markdown(f"{medor} **{nome}** — `{pts} passageiros` <br><small style='color:gray;'>{data}</small>", unsafe_allow_html=True)
-    else:
-        st.caption("Ainda sem registos na linha de topo. Sê o primeiro!")
-    st.divider()
     
     # SECÇÃO: CONTACTO DIRETO E RECRUTAMENTO
     st.subheader("👨‍💻 Desenvolvedor")
@@ -497,6 +476,7 @@ with st.sidebar:
             if st.button("Entrar", key="admin_login_btn"):
                 if password_input and password_input == st.secrets.get("ADMIN_PASSWORD", None):
                     st.session_state.admin_autenticado = True
+                    logging.info("Login de administrador bem-sucedido.")
                     st.rerun()
                 else:
                     st.error("Password incorreta.")
@@ -511,38 +491,72 @@ with st.sidebar:
             with open("agente_memoria.db", "rb") as f:
                 st.download_button("📥 Exportar DB SQLite (.db)", f, "agente_memoria.db", "application/octet-stream", use_container_width=True)
 
-        with st.expander("🗄️ Histórico Permanente Global (BD)"):
+        with st.expander("👁️ Ver Logs do Sistema"):
+            if os.path.exists("auditoria_agente.log"):
+                with open("auditoria_agente.log", "r", encoding="utf-8") as f:
+                    linhas_log = f.readlines()[-10:]
+                    for linha in linhas_log: st.caption(linha.strip())
+
+        with st.expander("🗄️ Histórico Permanente Global (BD) — todas as sessões"):
             if os.path.exists("agente_memoria.db"):
                 conn = sqlite3.connect("agente_memoria.db")
                 cursor = conn.cursor()
-                cursor.execute("SELECT timestamp, session_id, role, content FROM historico_global ORDER BY id DESC LIMIT 15")
+                cursor.execute("SELECT timestamp, session_id, role, content FROM historico_global ORDER BY id DESC LIMIT 30")
                 linhas_bd = cursor.fetchall()
                 conn.close()
                 for r in reversed(linhas_bd):
-                    st.markdown(f"**[{r[0].split(' ')[1] if ' ' in r[0] else r[0]}] {r[2]}:** {r[3]}")
+                    hora_min = r[0].split(" ")[1] if " " in r[0] else r[0]
+                    sessao = r[1]
+                    if r[2] == "user":
+                        st.markdown(f"**🟢 [{hora_min}] Visitante ({sessao}):** {r[3]}")
+                    else:
+                        st.markdown(f"**🤖 [{hora_min}] Agente ({sessao}):** {r[3]}")
                     st.divider()
 
 # --- ÁREA DO JOGO PRINCIPAL E REGISTO DE RECORDES ---
 if st.session_state.jogo_ativo:
-    game_value = renderizar_jogo()
+    col_jogo, col_leaderboard = st.columns([7, 3])
     
-    # Deteta se o JavaScript enviou uma pontuação de Game Over
-    if game_value is not None and isinstance(game_value, (int, float)) or (hasattr(game_value, 'value') and game_value.value):
-        pontuacao_recolhida = int(game_value.value) if hasattr(game_value, 'value') else int(game_value)
-        
-        if pontuacao_recolhida > 0:
-            st.system_note = st.success(f"🎉 Linha terminada! Conseguiste transportar **{pontuacao_recolhida} passageiros**!")
-            
-            # Caixa para introduzir o nome e gravar de forma persistente
-            with st.form("score_form", clear_on_submit=True):
-                nome_jogador = st.text_input("Introduz as tuas iniciais ou nome para a tabela:", max_chars=15, placeholder="Ex: CELSO")
-                submetido = st.form_submit_button("Gravar Recorde 💾")
-                if submetido and nome_jogador.strip():
-                    guardar_score_bd(nome_jogador.strip().upper(), pontuacao_recolhida)
-                    st.success("Recorde adicionado com sucesso à base de dados!")
-                    st.rerun()
+    with col_jogo:
+        game_value = renderizar_jogo()
+    
+    with col_leaderboard:
+        st.markdown("### 🏆 Top 10 Motoristas")
+        scores = obter_top_10()
+        if scores:
+            for idx, (nome, pts, data) in enumerate(scores):
+                medor = "🥇" if idx == 0 else ("🥈" if idx == 1 else ("🥉" if idx == 2 else "🚌"))
+                st.markdown(
+                    f"<div style='background-color: rgba(46, 204, 113, 0.1); padding: 8px; border-radius: 5px; margin-bottom: 6px; border-left: 4px solid #2ecc71;'>"
+                    f"<b>{medor} {nome}</b> — <code>{pts} passageiros</code><br>"
+                    f"<small style='color:gray;'>{data}</small>"
+                    f"</div>", 
+                    unsafe_allow_html=True
+                )
+        else:
+            st.caption("Ainda sem registos nesta carreira. Sê o primeiro a marcar a rota!")
 
-# Mostrar histórico visual no chat
+    # Tratamento defensivo e seguro para capturar os dados do Componente HTML
+    if game_value is not None:
+        try:
+            valor_bruto = game_value.value if hasattr(game_value, 'value') else game_value
+            if valor_bruto and str(valor_bruto).strip() not in ["None", ""]:
+                pontuacao_recolhida = int(float(valor_bruto))
+                
+                if pontuacao_recolhida > 0:
+                    st.success(f"🎉 Linha terminada! Conseguiste transportar **{pontuacao_recolhida} passageiros**!")
+                    
+                    with st.form("score_form", clear_on_submit=True):
+                        nome_jogador = st.text_input("Introduz as tuas iniciais ou nome para a tabela:", max_chars=15, placeholder="Ex: CELSO")
+                        submetido = st.form_submit_button("Gravar Recorde 💾")
+                        if submetido and nome_jogador.strip():
+                            guardar_score_bd(nome_jogador.strip().upper(), pontuacao_recolhida)
+                            st.success("Recorde adicionado com sucesso!")
+                            st.rerun()
+        except (ValueError, TypeError):
+            pass
+
+# Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
     avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
     with st.chat_message(message["role"], avatar=avatar_tipo):
@@ -562,57 +576,79 @@ if prompt_texto:
     prompt = prompt_texto
 elif audio_file:
     audio_id_atual = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
+
     if audio_id_atual != st.session_state.ultimo_audio_processado_id:
         st.session_state.ultimo_audio_processado_id = audio_id_atual
         tipo_input = "Áudio"
-        with st.spinner("A processar áudio..."):
+        with st.spinner("A processar e a transcrever o teu áudio..."):
             try:
                 audio_data = audio_file.read()
                 model_transcrever = genai.GenerativeModel("gemini-3.5-flash")
                 audio_part = {"mime_type": "audio/wav", "data": audio_data}
+
                 response_transcricao = model_transcrever.generate_content([
                     "Transcreve estritamente o áudio fornecido para texto, mantendo a pontuação correta e no idioma original. Não adiciones comentários extras.",
                     audio_part
                 ])
                 prompt = response_transcricao.text.strip()
+                logging.info(f"Transcrição de voz concluída com sucesso: '{prompt}'")
             except Exception as e:
-                st.error(f"Erro na transcrição: {e}")
+                st.error(f"Erro ao processar o ficheiro de voz: {e}")
+                logging.error(f"Falha na transcrição de áudio: {e}")
 
 # --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER DE PERSONAS) ---
 if prompt:
+    logging.info(f"Input processado [{tipo_input}]: {prompt}")
     guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="💼"):
-        with st.spinner("Agente a processar contexto..."):
+        with st.spinner("Agente a processar contexto e ferramentas..."):
             try:
                 contexto_base = ler_knowledge_base()
                 
+                # DEFINIÇÃO DOS PROMPTS DE SISTEMA (MÚLTIPLAS PERSONAS)
                 PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
                 És um Agente focado em automação, suporte e infraestrutura IT.
                 Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas.
-                Tens duas ferramentas relacionadas com a Guimabus: obter_dados_guimabus e obter_horarios_paragem."""
+
+                Tens duas ferramentas relacionadas com a Guimabus, para perguntas diferentes:
+                - obter_dados_guimabus: estado em tempo real da frota (posições/atrasos dos autocarros já em circulação). Aceita opcionalmente um "route_id" para filtrar por linha.
+                - obter_horarios_paragem: previsão de tempos de espera/carreiras para uma paragem específica (precisa do ID numérico da paragem).
+
+                REGRAS IMPORTANTES para usar estas ferramentas (para poupar chamadas à API, que têm limite):
+                1. Chama NO MÁXIMO uma ferramenta por pergunta. Nunca tentes as duas seguidas "para ver qual dá melhor resultado".
+                2. Se a pergunta do utilizador for vaga (ex: "que horários há agora?", sem indicar linha ou paragem), NÃO chames nenhuma ferramenta — pergunta primeiro ao utilizador se quer saber da frota em geral (e nesse caso podes indicar um route_id se ele mencionar uma linha) ou de uma paragem específica (nesse caso precisas do ID da paragem).
+                3. Se uma ferramenta já respondeu (mesmo que a resposta seja "sem dados disponíveis"), não voltes a chamá-la nem chames a outra à procura de mais informação — reporta o resultado obtido ao utilizador tal como está."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
-                Evaluate Celso's response professionally based on IT best practices."""
+                Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
                 
                 PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
-                Independentemente do problema de suporte indicado (Active Directory, Redes, Sistemas), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
-                'O Celso faria desta maneira para resolver este problema de IT:'"""
+                O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
+                Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                'O Celso faria desta maneira para resolver este problema de IT:'
+                Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
 
+                # LÓGICA DO ROUTER EM TEMPO DE EXECUÇÃO
                 prompt_normalizado = prompt.lower()
                 gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha"]
                 
                 if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
                     prompt_sistema_ativo = PROMPT_RECRUITER
+                    logging.info("Router selecionou a Persona: IT Technical Recruiter (EN)")
                 elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
                     prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
+                    logging.info("Router selecionou a Persona: Tutor de Helpdesk / Modo Celso (PT)")
                 else:
                     prompt_sistema_ativo = PROMPT_EXECUTIVO
+                    logging.info("Router selecionou a Persona: Assistente Executivo (PT)")
 
+                # Estruturar histórico limpo para o payload da API
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     if msg["content"] != MENSAGEM_INICIAL:
@@ -622,10 +658,12 @@ if prompt:
                 prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
                 ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem]
                 
+                # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
 
                 response = None
+                ultimo_erro_modelo = None
                 for nome_modelo in candidatos_modelo:
                     try:
                         model = genai.GenerativeModel(
@@ -634,21 +672,37 @@ if prompt:
                             tools=ferramentas_agente
                         )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                        response = chat.send_message(prompt_enriquecido, request_options={"timeout": TIMEOUT_SEGUNDOS})
+                        response = chat.send_message(
+                            prompt_enriquecido,
+                            request_options={"timeout": TIMEOUT_SEGUNDOS}
+                        )
+                        if nome_modelo != candidatos_modelo[0]:
+                            logging.warning(f"Modelo principal falhou; resposta obtida com fallback '{nome_modelo}'.")
+                            st.info(f"ℹ️ Modelo principal indisponível — resposta gerada com '{nome_modelo}'.")
                         break
-                    except Exception:
+                    except Exception as e:
+                        ultimo_erro_modelo = e
+                        motivo = "limite de quota (429)" if "429" in str(e) else ("timeout" if "timeout" in str(e).lower() or "deadline" in str(e).lower() else str(e))
+                        logging.warning(f"Modelo '{nome_modelo}' falhou ({motivo}). A tentar o próximo candidato, se existir.")
                         continue
 
                 if response is None:
-                    st.error("🚫 Não foi possível obter resposta de nenhum modelo disponível neste momento.")
+                    logging.error(f"Todos os modelos candidatos falharam. Último erro: {ultimo_erro_modelo}")
+                    if ultimo_erro_modelo is not None and "429" in str(ultimo_erro_modelo):
+                        st.error("🚫 Limite diário gratuito da API do Gemini esgotado. Tenta novamente mais tarde (a quota costuma renovar-se ao fim de 24h), ou ativa faturação na Google AI Studio para aumentar o limite.")
+                    else:
+                        st.error("🚫 Não foi possível obter resposta de nenhum modelo disponível neste momento. Tenta novamente dentro de instantes.")
                     st.stop()
 
                 full_response = response.text
                 st.markdown(full_response)
                 
+                logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
                 guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
+                
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 
             except Exception as e:
                 st.error(f"Erro detetado no pipeline do agente: {e}")
+                logging.error(f"Falha crítica no pipeline do agente: {e}")
