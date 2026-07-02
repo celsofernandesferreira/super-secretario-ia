@@ -106,35 +106,168 @@ except Exception:
     st.stop()
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
+def _extrair_lista_veiculos(dados):
+    """A API não é documentada publicamente e diferentes deployments do Eleven Systems
+    devolvem formatos ligeiramente diferentes (lista direta, ou objeto com a lista
+    dentro de uma chave como 'vehicles'/'data'/'results'/'items'). Esta função tenta
+    encontrar a lista de veículos seja qual for o "invólucro" usado."""
+    if isinstance(dados, list):
+        return dados
+    if isinstance(dados, dict):
+        for chave in ("vehicles", "data", "results", "items", "veiculos"):
+            valor = dados.get(chave)
+            if isinstance(valor, list):
+                return valor
+        # fallback: primeiro valor do dicionário que seja uma lista
+        for valor in dados.values():
+            if isinstance(valor, list):
+                return valor
+    return []
+
+
+def _primeiro_valor(dicionario, chaves, default=None):
+    """Tenta várias variantes possíveis do nome de um campo (a API não documenta o schema)."""
+    for chave in chaves:
+        if isinstance(dicionario, dict) and chave in dicionario and dicionario[chave] is not None:
+            return dicionario[chave]
+    return default
+
+
 @st.cache_data(ttl=60)
-def obter_dados_guimabus():
-    """Consulta a API de tracking em tempo real da Guimabus e devolve o estado atual dos autocarros e atrasos médios."""
-    url = "https://tracking.elevensystems.pt/api/gmr/vehicles"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+def obter_dados_guimabus(route_id: str = None):
+    """Consulta a API de tracking em tempo real da Guimabus (posições/atrasos dos autocarros
+    em circulação neste momento). Endpoint confirmado via inspeção do tráfego de rede do site
+    oficial: https://gmr.elevensystems.pt/api/locations
+
+    NOTA: esta API devolve o estado ao vivo da frota, não o horário/planeamento das carreiras —
+    para horários previstos por paragem seria necessário outro endpoint (ver comentário no
+    fim do ficheiro).
+
+    Args:
+        route_id: opcional. ID de uma linha específica (ex: "53") para filtrar os resultados
+                  a essa carreira. Sem este argumento, tenta obter todos os veículos.
+    """
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
+    url = "https://gmr.elevensystems.pt/api/locations"
+    params = {"passengerInfo": "true"}
+    if route_id:
+        params["routeId"] = route_id
+
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
+        response = requests.get(url, headers=headers, params=params, timeout=8)
+        response.raise_for_status()
+
+        try:
             dados = response.json()
-            if not dados: return "Nenhum autocarro detetado no momento."
-            
-            total_atraso = 0
-            count = 0
-            resumo = "Dados de frota em tempo real:\n"
-            for bus in dados:
-                atraso = bus.get('delay', 0)
-                resumo += f"- Autocarro {bus.get('id', 'N/A')}: Status {bus.get('busStatus', 'N/A')} (Atraso: {atraso}min)\n"
+        except ValueError:
+            logging.error("API Guimabus devolveu conteúdo que não é JSON válido.")
+            return "Não foi possível ler os dados da Guimabus (resposta em formato inesperado)."
+
+        veiculos = _extrair_lista_veiculos(dados)
+        if not veiculos:
+            linha_txt = f" da linha {route_id}" if route_id else ""
+            logging.info(f"API Guimabus respondeu sem veículos{linha_txt} (provavelmente fora de serviço agora).")
+            return f"Não há autocarros{linha_txt} em circulação neste momento (fora de horário de serviço ou sem veículos ativos)."
+
+        # Regista o primeiro registo em bruto no log, para conseguirmos afinar os nomes
+        # de campo com um exemplo real assim que a frota estiver ativa.
+        logging.info(f"Exemplo de registo Guimabus (para afinação futura): {str(veiculos[0])[:500]}")
+
+        total_atraso = 0
+        count_com_atraso = 0
+        resumo = "Dados de frota em tempo real (Guimabus):\n"
+        for bus in veiculos:
+            id_bus = _primeiro_valor(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
+            linha = _primeiro_valor(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
+            status = _primeiro_valor(bus, ["busStatus", "status", "state"], "N/A")
+            atraso = _primeiro_valor(bus, ["delay", "delayMinutes", "delay_min"], None)
+
+            linha_txt = f" (Linha {linha})" if linha else ""
+            atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
+            resumo += f"- Autocarro {id_bus}{linha_txt}: Status {status} (Atraso: {atraso_txt})\n"
+
+            if isinstance(atraso, (int, float)):
                 total_atraso += atraso
-                count += 1
-            
-            media = total_atraso / count if count > 0 else 0
-            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
-            logging.info("Ferramenta Guimabus executada com sucesso pelo modelo.")
-            return resumo
-        logging.warning(f"API Guimabus devolveu status code HTTP {response.status_code}")
-        return "Tracking da Guimabus temporariamente indisponível."
-    except Exception as e:
-        logging.error(f"Erro ao chamar API Guimabus: {e}")
+                count_com_atraso += 1
+
+        if count_com_atraso > 0:
+            media = total_atraso / count_com_atraso
+            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos (com base em {count_com_atraso} veículo(s) com esse dado). ---"
+        else:
+            resumo += "\n--- Não foi possível calcular o atraso médio: a API não devolveu esse campo para nenhum veículo. ---"
+
+        return resumo
+
+    except requests.exceptions.Timeout:
+        logging.error("Timeout ao chamar a API Guimabus.")
+        return "Tracking da Guimabus demorou demasiado tempo a responder. Tenta novamente dentro de momentos."
+    except requests.exceptions.HTTPError as e:
+        logging.warning(f"API Guimabus devolveu erro HTTP: {e}")
+        return "Tracking da Guimabus temporariamente indisponível (erro do servidor)."
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Erro de ligação à API Guimabus: {e}")
         return f"Erro na ligação ao tracking: {e}"
+
+
+@st.cache_data(ttl=30)
+def obter_horarios_paragem(stop_id: str):
+    """Consulta as carreiras e horários/tempos de espera previstos (passenger info) para uma
+    paragem específica da Guimabus, através do ID da paragem. Endpoint confirmado via
+    inspeção do tráfego de rede do site oficial: https://gmr.elevensystems.pt/api/stops/{id}/routes
+
+    Args:
+        stop_id: o ID numérico da paragem (ex: "1108"). Este ID pode ser obtido no site
+                 https://tracking.elevensystems.pt/gmr ao selecionar a paragem pretendida no mapa.
+    """
+    if not stop_id:
+        return "É necessário indicar o ID da paragem para consultar os horários."
+
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
+    url = f"https://gmr.elevensystems.pt/api/stops/{stop_id}/routes"
+    params = {"shape": "true", "passengerInfo": "true"}
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=8)
+        response.raise_for_status()
+
+        try:
+            dados = response.json()
+        except ValueError:
+            logging.error("API de paragens da Guimabus devolveu conteúdo que não é JSON válido.")
+            return "Não foi possível ler os horários desta paragem (resposta em formato inesperado)."
+
+        rotas = _extrair_lista_veiculos(dados)  # a mesma lógica de "desembrulhar" listas serve aqui
+        if not rotas:
+            logging.info(f"API de paragens Guimabus respondeu sem carreiras para a paragem {stop_id} (fora de serviço agora, ou ID inválido).")
+            return f"Não há informação de carreiras/horários para a paragem {stop_id} neste momento (pode estar fora de horário de serviço, ou o ID da paragem pode estar incorreto)."
+
+        logging.info(f"Exemplo de registo de paragem (para afinação futura): {str(rotas[0])[:500]}")
+
+        resumo = f"Horários/previsões para a paragem {stop_id}:\n"
+        for rota in rotas:
+            linha = _primeiro_valor(rota, ["line", "lineName", "route", "routeShortName", "routeId"], "N/A")
+            destino = _primeiro_valor(rota, ["destination", "headsign", "direction"], None)
+            eta = _primeiro_valor(rota, ["eta", "etaMinutes", "waitTime", "waitingTime", "arrivalTime", "nextArrival"], None)
+
+            destino_txt = f" → {destino}" if destino else ""
+            eta_txt = f"{eta} min" if eta is not None else "sem previsão disponível"
+            resumo += f"- Linha {linha}{destino_txt}: {eta_txt}\n"
+
+        return resumo
+
+    except requests.exceptions.Timeout:
+        logging.error("Timeout ao chamar a API de paragens da Guimabus.")
+        return "A consulta de horários demorou demasiado tempo a responder. Tenta novamente dentro de momentos."
+    except requests.exceptions.HTTPError as e:
+        logging.warning(f"API de paragens da Guimabus devolveu erro HTTP: {e}")
+        return "Consulta de horários por paragem temporariamente indisponível (erro do servidor)."
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Erro de ligação à API de paragens da Guimabus: {e}")
+        return f"Erro na ligação à consulta de horários: {e}"
+
+# Nota: /api/locations dá o estado em tempo real da frota (posições/atrasos dos autocarros
+# já em circulação); /api/stops/{id}/routes dá as previsões/horários de uma paragem específica.
+# São dados complementares — o agente escolhe qual ferramenta usar consoante a pergunta.
 
 def ler_knowledge_base():
     """Recupera dados dinâmicos de todos os ficheiros Markdown guardados na pasta knowledge/."""
@@ -155,13 +288,13 @@ def renderizar_jogo():
             <button id="btnAction" onclick="toggleGame()" style="padding: 8px 20px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer;">Play ▶</button>
         </div>
 
-        <canvas id="stage" width="400" height="350" style="border:2px solid #ffe135; background-color:#000; display:block; margin:0 auto;"></canvas>
+        <canvas id="stage" width="400" height="360" style="border:2px solid #ffe135; background-color:#000; display:block; margin:0 auto; touch-action:none;"></canvas>
         
         <div style="margin-top: 15px; display: inline-block;">
-            <button onclick="mudarDirecao('cima')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▲</button><br>
-            <button onclick="mudarDirecao('esquerda')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">◀</button>
-            <button onclick="mudarDirecao('baixo')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
-            <button onclick="mudarDirecao('direita')" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
+            <button data-dir="cima" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▲</button><br>
+            <button data-dir="esquerda" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">◀</button>
+            <button data-dir="baixo" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
+            <button data-dir="direita" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
         </div>
         <p style="color:#aaa; font-family:sans-serif; font-size:12px; margin-top:10px;">Usa as setas do teclado ou os botões do ecrã para controlar a cobra.</p>
         
@@ -170,10 +303,34 @@ def renderizar_jogo():
             var ctx = canvas.getContext('2d');
             var btnAction = document.getElementById('btnAction');
             
-            var tnt = 20, snake = [{x:160, y:160}], dx = tnt, dy = 0, apple = {x:80, y:80}, score = 0;
+            var tnt = 20;
+            var cols = canvas.width / tnt, rows = canvas.height / tnt;
+            var snake, dx, dy, apple, score, velocidadeMs;
+            var proximaDirecao = null; // só uma mudança de direção é aplicada por "tick", evita a reversão instantânea
             var gameInterval = null;
             var gameStarted = false;
             var gameOver = false;
+
+            function novaMaca() {
+                var pos;
+                do {
+                    pos = {
+                        x: Math.floor(Math.random() * cols) * tnt,
+                        y: Math.floor(Math.random() * rows) * tnt
+                    };
+                } while (snake.some(function(s) { return s.x === pos.x && s.y === pos.y; }));
+                return pos;
+            }
+
+            function estadoInicial() {
+                snake = [{x:160, y:160}, {x:140, y:160}, {x:120, y:160}];
+                dx = tnt; dy = 0;
+                proximaDirecao = null;
+                score = 0;
+                velocidadeMs = 180;
+                apple = novaMaca();
+            }
+            estadoInicial();
             
             function drawScene() {
                 ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -193,6 +350,15 @@ def renderizar_jogo():
             
             function game() {
                 if (gameOver) return;
+
+                // aplica no máximo uma mudança de direção por tick, e nunca inversão a 180º
+                if (proximaDirecao) {
+                    if (proximaDirecao.dx !== -dx || proximaDirecao.dy !== -dy) {
+                        dx = proximaDirecao.dx; dy = proximaDirecao.dy;
+                    }
+                    proximaDirecao = null;
+                }
+
                 var head = {x: snake[0].x + dx, y: snake[0].y + dy};
                 
                 if (head.x < 0) head.x = canvas.width - tnt;
@@ -200,20 +366,30 @@ def renderizar_jogo():
                 
                 if (head.y < 0) head.y = canvas.height - tnt;
                 else if (head.y >= canvas.height) head.y = 0;
-                
-                for (var i = 0; i < snake.length; i++) { 
-                    if (snake[i].x === head.x && snake[i].y === head.y) {
+
+                var vaiComer = (head.x === apple.x && head.y === apple.y);
+                // se não comer, a cauda vai sair nesta jogada — não conta como colisão entrar nessa célula
+                var corpoParaVerificar = vaiComer ? snake : snake.slice(0, snake.length - 1);
+
+                for (var i = 0; i < corpoParaVerificar.length; i++) { 
+                    if (corpoParaVerificar[i].x === head.x && corpoParaVerificar[i].y === head.y) {
                         triggerGameOver();
                         return;
                     } 
                 }
                 
                 snake.unshift(head);
-                if (head.x === apple.x && head.y === apple.y) {
+                if (vaiComer) {
                     score += 10;
-                    apple.x = Math.floor(Math.random() * (canvas.width/tnt)) * tnt;
-                    apple.y = Math.floor(Math.random() * (canvas.height/tnt)) * tnt;
-                } else { snake.pop(); }
+                    if (score % 50 === 0 && velocidadeMs > 80) {
+                        velocidadeMs -= 10; // fica ligeiramente mais rápido a cada 5 maçãs
+                        clearInterval(gameInterval);
+                        gameInterval = setInterval(game, velocidadeMs);
+                    }
+                    apple = novaMaca();
+                } else {
+                    snake.pop();
+                }
                 
                 drawScene();
             }
@@ -223,7 +399,7 @@ def renderizar_jogo():
                 if (!gameStarted) {
                     gameStarted = true;
                     btnAction.innerText = "Pause ⏸";
-                    gameInterval = setInterval(game, 180);
+                    gameInterval = setInterval(game, velocidadeMs);
                 } else {
                     gameStarted = false;
                     btnAction.innerText = "Play ▶";
@@ -239,27 +415,42 @@ def renderizar_jogo():
             }
             
             function resetGame() { 
-                snake = [{x:160, y:160}]; dx = tnt; dy = 0; score = 0; 
+                estadoInicial();
                 gameOver = false; gameStarted = true;
                 btnAction.innerText = "Pause ⏸";
-                gameInterval = setInterval(game, 180);
+                gameInterval = setInterval(game, velocidadeMs);
                 drawScene();
             }
             
             function mudarDirecao(dir) {
                 if (!gameStarted || gameOver) return;
-                if(dir === 'esquerda' && dx == 0) { dx = -tnt; dy = 0; }
-                if(dir === 'cima' && dy == 0) { dx = 0; dy = -tnt; }
-                if(dir === 'direita' && dx == 0) { dx = tnt; dy = 0; }
-                if(dir === 'baixo' && dy == 0) { dx = 0; dy = tnt; }
+                if(dir === 'esquerda' && dx === 0) proximaDirecao = {dx:-tnt, dy:0};
+                if(dir === 'cima' && dy === 0) proximaDirecao = {dx:0, dy:-tnt};
+                if(dir === 'direita' && dx === 0) proximaDirecao = {dx:tnt, dy:0};
+                if(dir === 'baixo' && dy === 0) proximaDirecao = {dx:0, dy:tnt};
             }
             
             document.addEventListener('keydown', function(e) {
-                if(e.keyCode == 37) mudarDirecao('esquerda');
-                if(e.keyCode == 38) mudarDirecao('cima');
-                if(e.keyCode == 39) mudarDirecao('direita');
-                if(e.keyCode == 40) mudarDirecao('baixo');
+                var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
+                if (mapa[e.keyCode]) {
+                    e.preventDefault(); // impede o scroll da página com as setas
+                    mudarDirecao(mapa[e.keyCode]);
+                }
             });
+
+            // botões: touchstart (resposta imediata em mobile) + click (compatibilidade com rato)
+            document.querySelectorAll('button[data-dir]').forEach(function(btn) {
+                btn.addEventListener('touchstart', function(e) {
+                    e.preventDefault();
+                    mudarDirecao(btn.getAttribute('data-dir'));
+                }, {passive: false});
+                btn.addEventListener('click', function() {
+                    mudarDirecao(btn.getAttribute('data-dir'));
+                });
+            });
+
+            btnAction.addEventListener('touchstart', function(e) { e.preventDefault(); toggleGame(); }, {passive: false});
+
             drawScene();
         </script>
     </div>
@@ -312,33 +503,58 @@ with st.sidebar:
     st.write("Modelo Nativo: `Gemini-3.5-Flash`")
     st.divider()
     
-    # VISUALIZADOR DE DADOS E EXPORTAÇÃO
-    st.subheader("📊 Telemetria e BD")
-    if os.path.exists("agente_memoria.db"):
-        with open("agente_memoria.db", "rb") as f:
-            st.download_button("📥 Exportar DB SQLite (.db)", f, "agente_memoria.db", "application/octet-stream", use_container_width=True)
+    # VISUALIZADOR DE DADOS E EXPORTAÇÃO — SÓ VISÍVEL PARA O ADMINISTRADOR
+    st.subheader("🔒 Área de Administrador")
 
-    with st.expander("👁️ Ver Logs do Sistema"):
-        if os.path.exists("auditoria_agente.log"):
-            with open("auditoria_agente.log", "r", encoding="utf-8") as f:
-                linhas_log = f.readlines()[-10:]
-                for linha in linhas_log: st.caption(linha.strip())
-                
-    with st.expander("🗄️ Histórico Permanente Global (BD)"):
-        if os.path.exists("agente_memoria.db"):
-            conn = sqlite3.connect("agente_memoria.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT timestamp, role, content FROM historico_global ORDER BY id DESC LIMIT 15")
-            linhas_bd = cursor.fetchall()
-            conn.close()
-            
-            for r in reversed(linhas_bd):
-                hora_min = r[0].split(" ")[1] if " " in r[0] else r[0]
-                if r[1] == "user":
-                    st.markdown(f"**🟢 [{hora_min}] Tu:** {r[2]}")
+    if "admin_autenticado" not in st.session_state:
+        st.session_state.admin_autenticado = False
+
+    if not st.session_state.admin_autenticado:
+        with st.expander("Entrar como administrador"):
+            password_input = st.text_input("Password de administrador", type="password", key="admin_pwd")
+            if st.button("Entrar", key="admin_login_btn"):
+                # A password fica nos Secrets do Streamlit (nunca no código):
+                # ADMIN_PASSWORD = "a-tua-password" em .streamlit/secrets.toml
+                if password_input and password_input == st.secrets.get("ADMIN_PASSWORD", None):
+                    st.session_state.admin_autenticado = True
+                    logging.info("Login de administrador bem-sucedido.")
+                    st.rerun()
                 else:
-                    st.markdown(f"**🤖 [{hora_min}] Agente:** {r[2]}")
-                st.divider()
+                    st.error("Password incorreta.")
+                    logging.warning("Tentativa de login de administrador falhada.")
+    else:
+        st.success("Sessão de administrador ativa.")
+        if st.button("Sair da área de administrador", key="admin_logout_btn"):
+            st.session_state.admin_autenticado = False
+            st.rerun()
+
+        st.subheader("📊 Telemetria e BD")
+        if os.path.exists("agente_memoria.db"):
+            with open("agente_memoria.db", "rb") as f:
+                st.download_button("📥 Exportar DB SQLite (.db)", f, "agente_memoria.db", "application/octet-stream", use_container_width=True)
+
+        with st.expander("👁️ Ver Logs do Sistema"):
+            if os.path.exists("auditoria_agente.log"):
+                with open("auditoria_agente.log", "r", encoding="utf-8") as f:
+                    linhas_log = f.readlines()[-10:]
+                    for linha in linhas_log: st.caption(linha.strip())
+
+        with st.expander("🗄️ Histórico Permanente Global (BD) — todas as sessões"):
+            if os.path.exists("agente_memoria.db"):
+                conn = sqlite3.connect("agente_memoria.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT timestamp, session_id, role, content FROM historico_global ORDER BY id DESC LIMIT 30")
+                linhas_bd = cursor.fetchall()
+                conn.close()
+
+                for r in reversed(linhas_bd):
+                    hora_min = r[0].split(" ")[1] if " " in r[0] else r[0]
+                    sessao = r[1]
+                    if r[2] == "user":
+                        st.markdown(f"**🟢 [{hora_min}] Visitante ({sessao}):** {r[3]}")
+                    else:
+                        st.markdown(f"**🤖 [{hora_min}] Agente ({sessao}):** {r[3]}")
+                    st.divider()
 
 # --- ÁREA DO CHAT PRINCIPAL ---
 if st.session_state.jogo_ativo:
@@ -394,13 +610,17 @@ if prompt:
                 # DEFINIÇÃO DOS PROMPTS DE SISTEMA (MÚLTIPLAS PERSONAS)
                 PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
                 És um Agente focado em automação, suporte e infraestrutura IT.
-                Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas."""
+                Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas.
+
+                Tens duas ferramentas relacionadas com a Guimabus, para perguntas diferentes:
+                - obter_dados_guimabus: estado em tempo real da frota (posições/atrasos dos autocarros já em circulação). Aceita opcionalmente um "route_id" para filtrar por linha.
+                - obter_horarios_paragem: previsão de tempos de espera/carreiras para uma paragem específica (precisa do ID numérico da paragem). Se o utilizador não indicar o ID da paragem, pergunta-lhe qual é antes de chamar a ferramenta."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
                 Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
                 
-                PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico Técnico de Helpdesk e Suporte de IT.
+                PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
                 O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
                 Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
                 'O Celso faria desta maneira para resolver este problema de IT:'
@@ -428,7 +648,7 @@ if prompt:
                         historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
                 prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
-                ferramentas_agente = [obter_dados_guimabus]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem]
                 
                 # Execução Resiliente com Fallback
                 try:
