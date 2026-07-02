@@ -108,9 +108,8 @@ except Exception:
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     """A API não é documentada publicamente e diferentes deployments do Eleven Systems
-    devolvem formatos ligeiramente diferentes (lista direta, ou objeto com a lista
-    dentro de uma chave como 'vehicles'/'data'/'results'/'items'). Esta função tenta
-    encontrar a lista de veículos seja qual for o "invólucro" usado."""
+    devolvem formatos ligeiramente diferentes. Esta função tenta encontrar a lista
+    de veículos seja qual for o 'invólucro' usado."""
     if isinstance(dados, list):
         return dados
     if isinstance(dados, dict):
@@ -118,7 +117,6 @@ def _extrair_lista_veiculos(dados):
             valor = dados.get(chave)
             if isinstance(valor, list):
                 return valor
-        # fallback: primeiro valor do dicionário que seja uma lista
         for valor in dados.values():
             if isinstance(valor, list):
                 return valor
@@ -135,18 +133,7 @@ def _primeiro_valor(dicionario, chaves, default=None):
 
 @st.cache_data(ttl=60)
 def obter_dados_guimabus(route_id: str = None):
-    """Consulta a API de tracking em tempo real da Guimabus (posições/atrasos dos autocarros
-    em circulação neste momento). Endpoint confirmado via inspeção do tráfego de rede do site
-    oficial: https://gmr.elevensystems.pt/api/locations
-
-    NOTA: esta API devolve o estado ao vivo da frota, não o horário/planeamento das carreiras —
-    para horários previstos por paragem seria necessário outro endpoint (ver comentário no
-    fim do ficheiro).
-
-    Args:
-        route_id: opcional. ID de uma linha específica (ex: "53") para filtrar os resultados
-                  a essa carreira. Sem este argumento, tenta obter todos os veículos.
-    """
+    """Consulta a API de tracking em tempo real da Guimabus."""
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = "https://gmr.elevensystems.pt/api/locations"
     params = {"passengerInfo": "true"}
@@ -169,8 +156,6 @@ def obter_dados_guimabus(route_id: str = None):
             logging.info(f"API Guimabus respondeu sem veículos{linha_txt} (provavelmente fora de serviço agora).")
             return f"Não há autocarros{linha_txt} em circulação neste momento (fora de horário de serviço ou sem veículos ativos)."
 
-        # Regista o primeiro registo em bruto no log, para conseguirmos afinar os nomes
-        # de campo com um exemplo real assim que a frota estiver ativa.
         logging.info(f"Exemplo de registo Guimabus (para afinação futura): {str(veiculos[0])[:500]}")
 
         total_atraso = 0
@@ -211,14 +196,7 @@ def obter_dados_guimabus(route_id: str = None):
 
 @st.cache_data(ttl=30)
 def obter_horarios_paragem(stop_id: str):
-    """Consulta as carreiras e horários/tempos de espera previstos (passenger info) para uma
-    paragem específica da Guimabus, através do ID da paragem. Endpoint confirmado via
-    inspeção do tráfego de rede do site oficial: https://gmr.elevensystems.pt/api/stops/{id}/routes
-
-    Args:
-        stop_id: o ID numérico da paragem (ex: "1108"). Este ID pode ser obtido no site
-                 https://tracking.elevensystems.pt/gmr ao selecionar a paragem pretendida no mapa.
-    """
+    """Consulta as carreiras e horários/tempos de espera previstos para uma paragem da Guimabus."""
     if not stop_id:
         return "É necessário indicar o ID da paragem para consultar os horários."
 
@@ -236,10 +214,10 @@ def obter_horarios_paragem(stop_id: str):
             logging.error("API de paragens da Guimabus devolveu conteúdo que não é JSON válido.")
             return "Não foi possível ler os horários desta paragem (resposta em formato inesperado)."
 
-        rotas = _extrair_lista_veiculos(dados)  # a mesma lógica de "desembrulhar" listas serve aqui
+        rotas = _extrair_lista_veiculos(dados)
         if not rotas:
             logging.info(f"API de paragens Guimabus respondeu sem carreiras para a paragem {stop_id} (fora de serviço agora, ou ID inválido).")
-            return f"Não há informação de carreiras/horários para a paragem {stop_id} neste momento (pode estar fora de horário de serviço, ou o ID da paragem pode estar incorreto)."
+            return f"Não há informação de carreiras/horários para a paragem {stop_id} neste momento."
 
         logging.info(f"Exemplo de registo de paragem (para afinação futura): {str(rotas[0])[:500]}")
 
@@ -265,9 +243,6 @@ def obter_horarios_paragem(stop_id: str):
         logging.error(f"Erro de ligação à API de paragens da Guimabus: {e}")
         return f"Erro na ligação à consulta de horários: {e}"
 
-# Nota: /api/locations dá o estado em tempo real da frota (posições/atrasos dos autocarros
-# já em circulação); /api/stops/{id}/routes dá as previsões/horários de uma paragem específica.
-# São dados complementares — o agente escolhe qual ferramenta usar consoante a pergunta.
 
 def ler_knowledge_base():
     """Recupera dados dinâmicos de todos os ficheiros Markdown guardados na pasta knowledge/."""
@@ -278,7 +253,8 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME RETRO UPGRADED (PAREDES INFINITAS + BOTÃO START/RESET + VELOCIDADE 180MS) ---
+
+# --- INTERFACE: MINI-GAME RETRO UPGRADED ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
@@ -306,7 +282,7 @@ def renderizar_jogo():
             var tnt = 20;
             var cols = canvas.width / tnt, rows = canvas.height / tnt;
             var snake, dx, dy, apple, score, velocidadeMs;
-            var proximaDirecao = null; // só uma mudança de direção é aplicada por "tick", evita a reversão instantânea
+            var proximaDirecao = null;
             var gameInterval = null;
             var gameStarted = false;
             var gameOver = false;
@@ -351,7 +327,6 @@ def renderizar_jogo():
             function game() {
                 if (gameOver) return;
 
-                // aplica no máximo uma mudança de direção por tick, e nunca inversão a 180º
                 if (proximaDirecao) {
                     if (proximaDirecao.dx !== -dx || proximaDirecao.dy !== -dy) {
                         dx = proximaDirecao.dx; dy = proximaDirecao.dy;
@@ -368,7 +343,6 @@ def renderizar_jogo():
                 else if (head.y >= canvas.height) head.y = 0;
 
                 var vaiComer = (head.x === apple.x && head.y === apple.y);
-                // se não comer, a cauda vai sair nesta jogada — não conta como colisão entrar nessa célula
                 var corpoParaVerificar = vaiComer ? snake : snake.slice(0, snake.length - 1);
 
                 for (var i = 0; i < corpoParaVerificar.length; i++) { 
@@ -382,7 +356,7 @@ def renderizar_jogo():
                 if (vaiComer) {
                     score += 10;
                     if (score % 50 === 0 && velocidadeMs > 80) {
-                        velocidadeMs -= 10; // fica ligeiramente mais rápido a cada 5 maçãs
+                        velocidadeMs -= 10;
                         clearInterval(gameInterval);
                         gameInterval = setInterval(game, velocidadeMs);
                     }
@@ -433,12 +407,11 @@ def renderizar_jogo():
             document.addEventListener('keydown', function(e) {
                 var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
                 if (mapa[e.keyCode]) {
-                    e.preventDefault(); // impede o scroll da página com as setas
+                    e.preventDefault();
                     mudarDirecao(mapa[e.keyCode]);
                 }
             });
 
-            // botões: touchstart (resposta imediata em mobile) + click (compatibilidade com rato)
             document.querySelectorAll('button[data-dir]').forEach(function(btn) {
                 btn.addEventListener('touchstart', function(e) {
                     e.preventDefault();
@@ -513,8 +486,6 @@ with st.sidebar:
         with st.expander("Entrar como administrador"):
             password_input = st.text_input("Password de administrador", type="password", key="admin_pwd")
             if st.button("Entrar", key="admin_login_btn"):
-                # A password fica nos Secrets do Streamlit (nunca no código):
-                # ADMIN_PASSWORD = "a-tua-password" em .streamlit/secrets.toml
                 if password_input and password_input == st.secrets.get("ADMIN_PASSWORD", None):
                     st.session_state.admin_autenticado = True
                     logging.info("Login de administrador bem-sucedido.")
@@ -523,7 +494,7 @@ with st.sidebar:
                     st.error("Password incorreta.")
                     logging.warning("Tentativa de login de administrador falhada.")
     else:
-        st.success("Sessão de administrador ativa.")
+        st.success("Sessão de administrador activa.")
         if st.button("Sair da área de administrador", key="admin_logout_btn"):
             st.session_state.admin_autenticado = False
             st.rerun()
@@ -579,10 +550,6 @@ if "ultimo_audio_processado_id" not in st.session_state:
 if prompt_texto:
     prompt = prompt_texto
 elif audio_file:
-    # st.audio_input NÃO se limpa sozinho como o chat_input — fica retido na sessão.
-    # Sem esta verificação, qualquer rerun não relacionado (abrir o jogo, entrar como
-    # admin, um refresh que reconecta a sessão) reprocessava e reenviava o MESMO áudio
-    # à API repetidamente, consumindo quota sem o utilizador saber.
     audio_id_atual = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
 
     if audio_id_atual != st.session_state.ultimo_audio_processado_id:
@@ -630,7 +597,7 @@ if prompt:
                 REGRAS IMPORTANTES para usar estas ferramentas (para poupar chamadas à API, que têm limite):
                 1. Chama NO MÁXIMO uma ferramenta por pergunta. Nunca tentes as duas seguidas "para ver qual dá melhor resultado".
                 2. Se a pergunta do utilizador for vaga (ex: "que horários há agora?", sem indicar linha ou paragem), NÃO chames nenhuma ferramenta — pergunta primeiro ao utilizador se quer saber da frota em geral (e nesse caso podes indicar um route_id se ele mencionar uma linha) ou de uma paragem específica (nesse caso precisas do ID da paragem).
-                3. Se uma ferramenta já respondeu (mesmo que a resposta seja "sem dados disponíveis"), não voltes a chamá-la nem chames a outra à procura de mais informação — reporta o resultado obtido ao utilizador tal como está.
+                3. Se uma ferramenta já respondeu (mesmo que a resposta seja "sem dados disponíveis"), não voltes a chamá-la nem chames a outra à procura de mais informação — reporta o resultado obtido ao utilizador tal como está."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
@@ -666,12 +633,8 @@ if prompt:
                 prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
                 ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem]
                 
-                # Execução Resiliente com Fallback e timeout explícito (evita pedidos "pendurados")
+                # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
-                # Cadeia de candidatos com os modelos atuais e suportados (verificado em julho 2026):
-                # gemini-3.5-flash é o modelo Flash mais recente e capaz (GA desde maio 2026).
-                # Os antigos "gemini-2.0-flash" / "gemini-2.0-flash-lite" foram desativados
-                # pela Google a 1 de junho de 2026 e já não podem ser usados.
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
 
                 response = None
@@ -691,7 +654,7 @@ if prompt:
                         if nome_modelo != candidatos_modelo[0]:
                             logging.warning(f"Modelo principal falhou; resposta obtida com fallback '{nome_modelo}'.")
                             st.info(f"ℹ️ Modelo principal indisponível — resposta gerada com '{nome_modelo}'.")
-                        break  # sucesso, não tenta os restantes
+                        break
                     except Exception as e:
                         ultimo_erro_modelo = e
                         motivo = "limite de quota (429)" if "429" in str(e) else ("timeout" if "timeout" in str(e).lower() or "deadline" in str(e).lower() else str(e))
@@ -714,7 +677,6 @@ if prompt:
                 
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
-                st.rerun()
                 
             except Exception as e:
                 st.error(f"Erro detetado no pipeline do agente: {e}")
