@@ -8,7 +8,7 @@ import logging
 import sqlite3
 from datetime import datetime
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnico)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -254,25 +254,25 @@ def ler_knowledge_base():
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
 
-# --- INTERFACE: MINI-GAME RETRO UPGRADED ---
+# --- INTERFACE: MINI-GAME RETRO UPGRADED (PAREDES INFINITAS + AUTOCARRO VERDE GUIMABUS) ---
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
-        <h3 style="color:#ffe135; font-family:sans-serif; margin-top:0; margin-bottom:10px;">🕹️ Modo Pausa: Snake Arcade Retro 🕹️</h3>
+        <h3 style="color:#2ecc71; font-family:sans-serif; margin-top:0; margin-bottom:10px;">🚌 Simulador de Linha: Guimabus Arcade 🚌</h3>
         
         <div style="margin-bottom: 10px;">
-            <button id="btnAction" onclick="toggleGame()" style="padding: 8px 20px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer;">Play ▶</button>
+            <button id="btnAction" onclick="toggleGame()" style="padding: 8px 20px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer;">Play ▶</button>
         </div>
 
-        <canvas id="stage" width="400" height="360" style="border:2px solid #ffe135; background-color:#000; display:block; margin:0 auto; touch-action:none;"></canvas>
+        <canvas id="stage" width="400" height="360" style="border:2px solid #2ecc71; background-color:#000; display:block; margin:0 auto; touch-action:none;"></canvas>
         
         <div style="margin-top: 15px; display: inline-block;">
-            <button data-dir="cima" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▲</button><br>
-            <button data-dir="esquerda" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">◀</button>
-            <button data-dir="baixo" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
-            <button data-dir="direita" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
+            <button data-dir="cima" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▲</button><br>
+            <button data-dir="esquerda" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">◀</button>
+            <button data-dir="baixo" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
+            <button data-dir="direita" style="width:50px; height:40px; margin:2px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
         </div>
-        <p style="color:#aaa; font-family:sans-serif; font-size:12px; margin-top:10px;">Usa as setas do teclado ou os botões do ecrã para controlar a cobra.</p>
+        <p style="color:#aaa; font-family:sans-serif; font-size:12px; margin-top:10px;">Controla o autocarro pelas paragens usando o ecrã ou as setas do teclado.</p>
         
         <script>
             var canvas = document.getElementById('stage');
@@ -309,17 +309,77 @@ def renderizar_jogo():
             estadoInicial();
             
             function drawScene() {
-                ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,0,canvas.width,canvas.height);
-                ctx.fillStyle = '#ff6666'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
-                ctx.fillStyle = '#33ff33'; 
-                for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
-                ctx.fillStyle = '#ffffff'; ctx.font = '16px sans-serif';
-                ctx.fillText('Score: ' + score, 15, 25);
+                // Estrada
+                ctx.fillStyle = '#222222'; ctx.fillRect(0,0,canvas.width,canvas.height);
+                
+                // Linha de asfalto decorativa
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                ctx.lineWidth = 1;
+                for(var i=tnt; i<canvas.height; i+=tnt) {
+                    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke();
+                }
+
+                // Passageiro (Comida)
+                ctx.fillStyle = '#3498db'; 
+                ctx.beginPath();
+                ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Autocarro Verde Guimabus (Cobra)
+                for(var i=0; i<snake.length; i++) {
+                    if (i === 0) {
+                        // CABEÇA: O veículo trator
+                        ctx.fillStyle = '#27ae60'; 
+                        ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
+                        
+                        // Faróis dianteiros brilhantes
+                        ctx.fillStyle = '#f1c40f';
+                        if (dx > 0) {
+                            ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + 2, 3, 3);
+                            ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + tnt - 6, 3, 3);
+                        } else if (dx < 0) {
+                            ctx.fillRect(snake[i].x + 1, snake[i].y + 2, 3, 3);
+                            ctx.fillRect(snake[i].x + 1, snake[i].y + tnt - 6, 3, 3);
+                        } else if (dy < 0) {
+                            ctx.fillRect(snake[i].x + 2, snake[i].y + 1, 3, 3);
+                            ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + 1, 3, 3);
+                        } else if (dy > 0) {
+                            ctx.fillRect(snake[i].x + 2, snake[i].y + tnt - 4, 3, 3);
+                            ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + tnt - 4, 3, 3);
+                        }
+                    } else {
+                        // COMPARTIMENTOS: Módulos de passageiros
+                        ctx.fillStyle = '#2ecc71'; 
+                        ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-3, tnt-3);
+                        
+                        // Janelas escuras
+                        ctx.fillStyle = '#2c3e50';
+                        ctx.fillRect(snake[i].x + 4, snake[i].y + 4, tnt-9, tnt-9);
+                    }
+                }
+                
+                // Texto flutuante "Guimabus" sobre o teto do autocarro (segmento central ou cabeça)
+                var textPos = snake[Math.min(1, snake.length - 1)];
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 8px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('GMR', textPos.x + tnt/2, textPos.y + tnt/2 + 3);
+                ctx.textAlign = 'start';
+
+                // Marcador superior
+                ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif';
+                ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
                 
                 if (gameOver) {
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.fillStyle = '#ff4444'; ctx.font = '24px sans-serif'; ctx.textAlign = 'center';
-                    ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2);
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'center';
+                    ctx.fillText('FIM DA LINHA', canvas.width/2, canvas.height/2 - 10);
+                    ctx.fillStyle = '#ffffff'; ctx.font = '14px sans-serif';
+                    ctx.fillText('Passageiros recolhidos: ' + (score / 10), canvas.width/2, canvas.height/2 + 20);
                     ctx.textAlign = 'start';
                 }
             }
