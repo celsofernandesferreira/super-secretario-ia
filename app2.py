@@ -10,7 +10,7 @@ import json
 import re
 import io
 import pdfplumber
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
 # 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
@@ -776,7 +776,7 @@ if prompt:
                 3. Os horários guardados em cache normalmente têm várias tabelas (Dias Úteis, Sábados, Domingos e Feriados). Ao responderes, identifica e apresenta claramente TODOS os tipos de dia presentes no texto — nunca reportes só um (ex: só fim de semana) quando o documento contém mais do que um. Se não tiveres a certeza sobre a que tipo de dia um horário pertence, diz isso explicitamente em vez de assumir.
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
-                NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. Isto inclui: números de autocarro, atrasos, percursos, horários, ou nomes/números de linhas. NUNCA digas que "consultaste" uma ferramenta, cache ou base de dados que não chamaste de facto. Se as ferramentas devolverem uma lista vazia, um erro, ou "não existem horários em cache", e a Knowledge Base também não tiver essa informação, diz clara e honestamente ao utilizador que não tens essa informação disponível neste momento — nunca substituas por uma resposta que pareça plausível mas seja inventada. É preferível admitir "não sei" do que dar uma resposta errada com aparência de certeza."""
+                NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. Isto inclui: números de autocarro, atrasos, percursos, horários, nomes/números de linhas, E TAMBÉM datas e dias da semana. Para saber que dia é "hoje" ou "amanhã", usa SEMPRE e apenas a informação em "[DATA E HORA ATUAL DO SISTEMA]" fornecida no início do contexto — nunca assumas ou inventes uma data a partir de memória. NUNCA digas que "consultaste" uma ferramenta, cache ou base de dados que não chamaste de facto. Se as ferramentas devolverem uma lista vazia, um erro, ou "não existem horários em cache", e a Knowledge Base também não tiver essa informação, diz clara e honestamente ao utilizador que não tens essa informação disponível neste momento — nunca substituas por uma resposta que pareça plausível mas seja inventada. É preferível admitir "não sei" do que dar uma resposta errada com aparência de certeza."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
@@ -809,7 +809,25 @@ if prompt:
                         role_api = "model" if msg["role"] == "assistant" else "user"
                         historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
-                prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
+                # O modelo não tem relógio próprio — sem isto, "hoje"/"amanhã" seriam
+                # inventados (adivinhados a partir de padrões dos dados de treino), o que
+                # já causou pelo menos um erro real de data. Injeta-se aqui a data e hora
+                # verdadeiras do servidor em cada pedido.
+                DIAS_SEMANA_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+                MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+                def _formatar_data_pt(dt):
+                    return f"{DIAS_SEMANA_PT[dt.weekday()]}, {dt.day} de {MESES_PT[dt.month - 1]} de {dt.year}"
+
+                agora = datetime.now()
+                amanha = agora + timedelta(days=1)
+                contexto_data = (
+                    f"[DATA E HORA ATUAL DO SISTEMA — usa sempre esta informação, nunca a inventes: "
+                    f"Hoje é {_formatar_data_pt(agora)}, são {agora.strftime('%H:%M')}. "
+                    f"Amanhã será {_formatar_data_pt(amanha)}.]"
+                )
+
+                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
                 # Inclusão da nova ferramenta de leitura de cache no array de Tools do Gemini
                 ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha]
