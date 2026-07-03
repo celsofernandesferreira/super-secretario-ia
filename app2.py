@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from bs4 import BeautifulSoup
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnico)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -42,7 +42,7 @@ def inicializar_bd():
             pontor INTEGER
         )
     """)
-    # Nova Tabela: Cache de Horários Locais (Evita queries constantes à Web)
+    # Tabela: Cache de Horários Locais (Evita queries constantes à Web)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cache_horarios (
             linha TEXT PRIMARY KEY,
@@ -206,7 +206,7 @@ def obter_dados_guimabus(route_id: str = None):
             status = _primeiro_valor(bus, ["busStatus", "status", "state"], "N/A")
             atraso = _primeiro_valor(bus, ["delay", "delayMinutes", "delay_min"], None)
 
-            linha_txt = f" (Linha {linha})" if linha else ""
+            linha_txt = f" (Linha {linha})" if línea else ""
             atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
             resumo += f"- Autocarro {id_bus}{linha_txt}: Status {status} (Atraso: {atraso_txt})\n"
 
@@ -249,7 +249,7 @@ def obter_horarios_paragem(stop_id: str):
     except Exception as e:
         return f"Erro na ligação: {e}"
 
-# --- NOVA FERRAMENTA: AUTOMAÇÃO INTEGRAL DE RASPAGEM DE TODAS AS LINHAS E HORÁRIOS ---
+# --- FERRAMENTA: AUTOMAÇÃO INTEGRAL DE RASPAGEM DE TODAS AS LINHAS E HORÁRIOS ---
 def sincronizar_todos_horarios_guimabus():
     """
     Varrimento automatizado de todas as linhas do site guimabus.pt/horarios-linhas/.
@@ -298,11 +298,9 @@ def sincronizar_todos_horarios_guimabus():
                         conteudo_tabelas.append(f"[Tabela {idx+1}]\n" + "\n".join(linhas_txt))
                     texto_final = "\n\n".join(conteudo_tabelas)
                 else:
-                    # Fallback estratégico se usarem elementos div flex/grid
                     main_content = soup_linha.find('main') or soup_linha.find('body')
                     texto_final = main_content.get_text(separator="\n", strip=True) if main_content else soup_linha.get_text()
                 
-                # Gravação em cache persistente
                 cursor.execute("""
                     INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
                     VALUES (?, ?, ?, ?)
@@ -791,7 +789,7 @@ if prompt:
                         model = genai.GenerativeModel(
                             model_name=nome_modelo,
                             system_instruction=prompt_sistema_ativo,
-                            tools=ferferramentas_agente
+                            tools=ferramentas_agente  # RETIFICADO: Variável corrigida
                         )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         response = chat.send_message(
