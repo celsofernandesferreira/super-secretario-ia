@@ -227,6 +227,10 @@ def obter_horarios_paragem(stop_id: str):
     except Exception as e:
         return f"Erro na ligação: {e}"
 
+def MENSAGEM_INICIAL_FALLBACK():
+    # Fallback estático estrutural caso a pasta knowledge esteja indisponível
+    return "Olá, Celso! Pronto para começar."
+
 def ler_knowledge_base():
     contexto = ""
     files = glob.glob("knowledge/*.md")
@@ -240,7 +244,8 @@ def renderizar_jogo():
     top_scores = obter_top_10()
     json_scores = json.dumps(top_scores)
 
-    html_jogo = f"""
+    # Nota técnica: Removeu-se o prefixo f da string tripla para evitar conflitos de sintaxe com as chavetas {} do JS
+    html_jogo = """
     <div style="text-align:center; background-color:#111; padding:15px; border-radius:10px; font-family:sans-serif;">
         <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Simulador de Linha: Guimabus Arcade 🚌</h3>
         
@@ -262,7 +267,7 @@ def renderizar_jogo():
             var tnt = 20;
             var gameWidth = 400; 
             var cols = gameWidth / tnt, rows = canvas.height / tnt;
-            var snake, dx, dy, apple, score, velocidadeMs;
+            var snake, dx, dy, apple, score, velocidadMs;
             var proximaDirecao = null;
             var gameInterval = null;
             var gameStarted = false;
@@ -271,19 +276,19 @@ def renderizar_jogo():
             
             var leaderboard = {json_scores};
 
-            function novaMaca() {{
+            function novaMaca() {
                 var pos;
-                do {{
-                    pos = {{
+                do {
+                    pos = {
                         x: Math.floor(Math.random() * cols) * tnt,
                         y: Math.floor(Math.random() * rows) * tnt
-                    }};
-                }} while (snake.some(function(s) {{ return s.x === pos.x && s.y === pos.y; }}));
+                    };
+                } while (snake.some(function(s) { return s.x === pos.x && s.y === pos.y; }));
                 return pos;
-            }}
+            }
 
-            function estadoInicial() {{
-                snake = [{{x:160, y:160}}, {{x:140, y:160}}, {{x:120, y:160}}];
+            function estadoInicial() {
+                snake = [{x:160, y:160}, {x:140, y:160}, {x:120, y:160}];
                 dx = tnt; dy = 0;
                 proximaDirecao = null;
                 score = 0;
@@ -292,17 +297,17 @@ def renderizar_jogo():
                 gameOver = false;
                 nomeInput.style.display = 'none';
                 btnGravar.style.display = 'none';
-            }}
+            }
             estadoInicial();
             
-            function drawScene() {{
-                // 1. DESENHAR ESTRADA (0 a 400px)
+            function drawScene() {
+                // 1. DESENHAR ESTRADA
                 ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
                 ctx.lineWidth = 1;
-                for(var i=tnt; i<canvas.height; i+=tnt) {{
+                for(var i=tnt; i<canvas.height; i+=tnt) {
                     ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(gameWidth, i); ctx.stroke();
-                }}
+                }
 
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
 
@@ -313,19 +318,19 @@ def renderizar_jogo():
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
                 // Autocarro Verde Guimabus
-                for(var i=0; i<snake.length; i++) {{
+                for(var i=0; i<snake.length; i++) {
                     if (i === 0) {
                         ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
                         ctx.fillStyle = '#f1c40f';
-                        if (dx > 0) {{ ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + tnt - 6, 3, 3); }}
-                        else if (dx < 0) {{ ctx.fillRect(snake[i].x + 1, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + 1, snake[i].y + tnt - 6, 3, 3); }}
-                        else if (dy < 0) {{ ctx.fillRect(snake[i].x + 2, snake[i].y + 1, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + 1, 3, 3); }}
-                        else if (dy > 0) {{ ctx.fillRect(snake[i].x + 2, snake[i].y + tnt - 4, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + tnt - 4, 3, 3); }}
-                    } else {{
+                        if (dx > 0) { ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + tnt - 6, 3, 3); }
+                        else if (dx < 0) { ctx.fillRect(snake[i].x + 1, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + 1, snake[i].y + tnt - 6, 3, 3); }
+                        else if (dy < 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + 1, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + 1, 3, 3); }
+                        else if (dy > 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + tnt - 4, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + tnt - 4, 3, 3); }
+                    } else {
                         ctx.fillStyle = '#2ecc71'; ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-3, tnt-3);
                         ctx.fillStyle = '#2c3e50'; ctx.fillRect(snake[i].x + 4, snake[i].y + 4, tnt-9, tnt-9);
-                    }}
-                }}
+                    }
+                }
                 
                 var textPos = snake[Math.min(1, snake.length - 1)];
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
@@ -334,31 +339,31 @@ def renderizar_jogo():
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
 
-                // 2. DESENHAR LEADERBOARD INTERNO LATERAL (403px a 650px)
+                // 2. DESENHAR LEADERBOARD INTERNO LATERAL
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
                 
                 ctx.font = '12px sans-serif';
-                for(var k=0; k<10; k++) {{
+                for(var k=0; k<10; k++) {
                     var yPos = 65 + (k * 26);
                     ctx.fillStyle = (k === 0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
                     
                     var medalha = (k===0)?"1º ":((k===1)?"2º ":((k===2)?"3º ":(k+1)+"º "));
-                    if (leaderboard[k]) {{
+                    if (leaderboard[k]) {
                         var item = leaderboard[k];
                         ctx.fillText(medalha + item[0], gameWidth + 15, yPos);
                         ctx.textAlign = 'end';
                         ctx.fillText(item[1] + ' pas.', canvas.width - 15, yPos);
                         ctx.textAlign = 'start';
-                    }} else {{
+                    } else {
                         ctx.fillStyle = '#444';
                         ctx.fillText(medalha + '------', gameWidth + 15, yPos);
-                    }}
-                }}
+                    }
+                }
                 
-                if (gameOver) {{
+                if (gameOver) {
                     ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                     ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
                     ctx.fillText('FIM DA LINHA', gameWidth/2, canvas.height/2 - 20);
@@ -367,18 +372,18 @@ def renderizar_jogo():
                     ctx.font = '11px sans-serif'; ctx.fillStyle = '#f1c40f';
                     ctx.fillText('Digita o teu nome no painel abaixo.', gameWidth/2, canvas.height/2 + 30);
                     ctx.textAlign = 'start';
-                }}
-            }}
+                }
+            }
             
-            function game() {{
+            function game() {
                 if (gameOver) return;
-                if (proximaDirecao) {{
-                    if (proximaDirecao.dx !== -dx || proximaDirecao.dy !== -dy) {{
+                if (proximaDirecao) {
+                    if (proximaDirecao.dx !== -dx || proximaDirecao.dy !== -dy) {
                         dx = proximaDirecao.dx; dy = proximaDirecao.dy;
-                    }}
+                    }
                     proximaDirecao = null;
-                }}
-                var head = {{x: snake[0].x + dx, y: snake[0].y + dy}};
+                }
+                var head = {x: snake[0].x + dx, y: snake[0].y + dy};
                 if (head.x < 0) head.x = gameWidth - tnt;
                 else if (head.x >= gameWidth) head.x = 0;
                 if (head.y < 0) head.y = canvas.height - tnt;
@@ -386,76 +391,86 @@ def renderizar_jogo():
 
                 var vaiComer = (head.x === apple.x && head.y === apple.y);
                 var corpoParaVerificar = vaiComer ? snake : snake.slice(0, snake.length - 1);
-                for (var i = 0; i < corpoParaVerificar.length; i++) {{ 
-                    if (corpoParaVerificar[i].x === head.x && corpoParaVerificar[i].y === head.y) {{
+                for (var i = 0; i < corpoParaVerificar.length; i++) { 
+                    if (corpoParaVerificar[i].x === head.x && corpoParaVerificar[i].y === head.y) {
                         triggerGameOver(); return;
-                    }} 
-                }}
+                    } 
+                }
                 snake.unshift(head);
-                if (vaiComer) {{
+                if (vaiComer) {
                     score += 10;
-                    if (score % 50 === 0 && velocidadeMs > 80) {{
+                    if (score % 50 === 0 && velocidadeMs > 80) {
                         velocidadeMs -= 10;
                         clearInterval(gameInterval); gameInterval = setInterval(game, velocidadeMs);
-                    }}
+                    }
                     apple = novaMaca();
-                }} else {{ snake.pop(); }}
+                } else { snake.pop(); }
                 drawScene();
-            }}
+            }
             
-            function toggleGame() {{
-                if (gameOver) {{ resetGame(); return; }}
-                if (!gameStarted) {{
+            function toggleGame() {
+                if (gameOver) { resetGame(); return; }
+                if (!gameStarted) {
                     gameStarted = true; btnAction.innerText = "Pause ⏸";
                     gameInterval = setInterval(game, velocidadeMs);
-                }} else {{
+                } else {
                     gameStarted = false; btnAction.innerText = "Play ▶"; clearInterval(gameInterval);
-                }}
-            }}
-            function triggerGameOver() {{
+                }
+            }
+            function triggerGameOver() {
                 gameOver = true; gameStarted = false; clearInterval(gameInterval);
                 btnAction.innerText = "Reset 🔄";
-                if((score/10) > 0) {{
+                if((score/10) > 0) {
                     nomeInput.style.display = 'inline-block';
                     btnGravar.style.display = 'inline-block';
                     nomeInput.focus();
-                }}
+                }
                 drawScene();
-            }}
-            function resetGame() {{ 
+            }
+            function resetGame() { 
                 estadoInicial(); gameOver = false; gameStarted = true;
                 btnAction.innerText = "Pause ⏸"; gameInterval = setInterval(game, velocidadeMs);
                 drawScene();
-            }}
-            function gravarRecorde() {{
+            }
+            function gravarRecorde() {
                 var nome = nomeInput.value.trim().toUpperCase();
-                if(!nome) {{ alert('Por favor introduz o teu nome!'); return; }}
-                window.parent.postMessage({{
+                if(!nome) { alert('Por favor introduz o teu nome!'); return; }
+                window.parent.postMessage({
                     type: 'streamlit:setComponentValue',
-                    value: {{nome: nome, pontos: (score / 10)}}
-                }}, '*');
+                    value: {nome: nome, pontos: (score / 10)}
+                }, '*');
                 btnGravar.disabled = true;
                 btnGravar.innerText = "Gravado ✔";
-            }}
-            function mudarDirecao(dir) {{
+            }
+            function mudarDirecao(dir) {
                 if (!gameStarted || gameOver) return;
-                if(dir === 'esquerda' && dx === 0) proximaDirecao = {{dx:-tnt, dy:0}};
-                if(dir === 'cima' && dy === 0) proximaDirecao = {{dx:0, dy:-tnt}};
-                if(dir === 'direita' && dx === 0) proximaDirecao = {{dx:tnt, dy:0}};
-                if(dir === 'baixo' && dy === 0) proximaDirecao = {{(dx:0, dy:tnt}};
-            }}
-            document.addEventListener('keydown', function(e) {{
-                var mapa = {{37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'}};
-                if (mapa[e.keyCode]) {{ e.preventDefault(); mudarDirecao(mapa[e.keyCode]); }}
-            }});
-            document.querySelectorAll('button[data-dir]').forEach(function(btn) {{
-                btn.addEventListener('click', function() {{ mudarDirecao(btn.getAttribute('data-dir')); }});
-            }});
+                if(dir === 'esquerda' && dx === 0) proximaDirecao = {dx:-tnt, dy:0};
+                if(dir === 'cima' && dy === 0) proximaDirecao = {dx:0, dy:-tnt};
+                if(dir === 'direita' && dx === 0) proximaDirecao = {dx:tnt, dy:0};
+                if(dir === 'baixo' && dy === 0) proximaDirecao = {dx:0, dy:tnt};
+            }
+            document.addEventListener('keydown', function(e) {
+                var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
+                if (mapa[e.keyCode]) { e.preventDefault(); mudarDirecao(mapa[e.keyCode]); }
+            });
+            document.querySelectorAll('button[data-dir]').forEach(function(btn) {
+                btn.addEventListener('click', function() { mudarDirecao(btn.getAttribute('data-dir')); });
+            });
             drawScene();
         </script>
     </div>
-    """
+    """.replace("{json_scores}", json_scores) # Injeção segura baseada em substituição direta de texto string
     return components.html(html_jogo, height=520)
+
+# --- MENSAGEM INICIAL AUTOMÁTICA ---
+MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
+
+Estou pronto para te apoiar em três frentes:
+1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
+2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
+3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
+
+Como posso ajudar hoje?"""
 
 # --- INICIALIZAÇÃO DE ESTADOS ---
 if "messages" not in st.session_state:
