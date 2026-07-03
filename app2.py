@@ -319,10 +319,11 @@ def ler_knowledge_base():
 def renderizar_jogo():
     html_jogo = """
     <div style="text-align:center; background-color:#111; padding:20px; border-radius:10px; margin-bottom: 20px;">
-        <h3 style="color:#ffe135; font-family:sans-serif; margin-top:0; margin-bottom:10px;">🕹️ Modo Pausa: Snake Arcade Retro 🕹️</h3>
+        <h3 style="color:#ffe135; font-family:sans-serif; margin-top:0; margin-bottom:10px;">🚌 Guimabus Express: Apanha os Passageiros! 🚏</h3>
         
         <div style="margin-bottom: 10px;">
             <button id="btnAction" onclick="toggleGame()" style="padding: 8px 20px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer;">Play ▶</button>
+            <button id="btnGuardar" onclick="guardarPontuacao()" style="display:none; padding: 8px 20px; background:#33ff33; border:none; border-radius:5px; font-weight:bold; font-size:14px; cursor:pointer; margin-left:8px;">💾 Guardar Pontuação</button>
         </div>
 
         <canvas id="stage" width="400" height="360" style="border:2px solid #ffe135; background-color:#000; display:block; margin:0 auto; touch-action:none;"></canvas>
@@ -333,22 +334,24 @@ def renderizar_jogo():
             <button data-dir="baixo" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▼</button>
             <button data-dir="direita" style="width:50px; height:40px; margin:2px; background:#ffe135; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">▶</button>
         </div>
-        <p style="color:#aaa; font-family:sans-serif; font-size:12px; margin-top:10px;">Usa as setas do teclado ou os botões do ecrã para controlar a cobra.</p>
+        <p style="color:#aaa; font-family:sans-serif; font-size:12px; margin-top:10px;">Guia o autocarro (🚌) até às paragens (🚏) para apanhar passageiros. Usa as setas do teclado ou os botões do ecrã.</p>
         
         <script>
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
             var btnAction = document.getElementById('btnAction');
+            var btnGuardar = document.getElementById('btnGuardar');
             
             var tnt = 20;
             var cols = canvas.width / tnt, rows = canvas.height / tnt;
-            var snake, dx, dy, apple, score, velocidadeMs;
+            var snake, dx, dy, apple, score;
+            var velocidadeMs = 180; // velocidade constante, como no jogo original
             var proximaDirecao = null; // só uma mudança de direção é aplicada por "tick", evita a reversão instantânea
             var gameInterval = null;
             var gameStarted = false;
             var gameOver = false;
 
-            function novaMaca() {
+            function novaParagem() {
                 var pos;
                 do {
                     pos = {
@@ -360,27 +363,41 @@ def renderizar_jogo():
             }
 
             function estadoInicial() {
-                snake = [{x:160, y:160}, {x:140, y:160}, {x:120, y:160}];
+                snake = [{x:160, y:160}]; // começa com 1 segmento, como no jogo original
                 dx = tnt; dy = 0;
                 proximaDirecao = null;
                 score = 0;
-                velocidadeMs = 180;
-                apple = novaMaca();
+                apple = novaParagem();
             }
             estadoInicial();
             
             function drawScene() {
                 ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,0,canvas.width,canvas.height);
-                ctx.fillStyle = '#ff6666'; ctx.fillRect(apple.x, apple.y, tnt-2, tnt-2);
-                ctx.fillStyle = '#33ff33'; 
-                for(var i=0; i<snake.length; i++) ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
+
+                // Paragem/passageiro (emoji, tema Guimabus)
+                ctx.font = (tnt-2) + 'px sans-serif';
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('🚏', apple.x + tnt/2, apple.y + tnt/2 + 2);
+
+                // Autocarro: cabeça em emoji, corpo em blocos amarelos (cor Guimabus)
+                for (var i = 1; i < snake.length; i++) {
+                    ctx.fillStyle = '#ffe135';
+                    ctx.fillRect(snake[i].x, snake[i].y, tnt-2, tnt-2);
+                    ctx.fillStyle = '#111';
+                    ctx.fillRect(snake[i].x, snake[i].y + (tnt-2)/2 - 1, tnt-2, 2); // risca a meio, estilo autocarro
+                }
+                if (snake.length > 0) {
+                    ctx.fillText('🚌', snake[0].x + tnt/2, snake[0].y + tnt/2 + 2);
+                }
+                ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+
                 ctx.fillStyle = '#ffffff'; ctx.font = '16px sans-serif';
-                ctx.fillText('Score: ' + score, 15, 25);
+                ctx.fillText('Passageiros: ' + score, 15, 25);
                 
                 if (gameOver) {
                     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
                     ctx.fillStyle = '#ff4444'; ctx.font = '24px sans-serif'; ctx.textAlign = 'center';
-                    ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2);
+                    ctx.fillText('FIM DE SERVIÇO', canvas.width/2, canvas.height/2);
                     ctx.textAlign = 'start';
                 }
             }
@@ -404,9 +421,9 @@ def renderizar_jogo():
                 if (head.y < 0) head.y = canvas.height - tnt;
                 else if (head.y >= canvas.height) head.y = 0;
 
-                var vaiComer = (head.x === apple.x && head.y === apple.y);
-                // se não comer, a cauda vai sair nesta jogada — não conta como colisão entrar nessa célula
-                var corpoParaVerificar = vaiComer ? snake : snake.slice(0, snake.length - 1);
+                var vaiApanharPassageiro = (head.x === apple.x && head.y === apple.y);
+                // se não apanhar, a cauda vai sair nesta jogada — não conta como colisão entrar nessa célula
+                var corpoParaVerificar = vaiApanharPassageiro ? snake : snake.slice(0, snake.length - 1);
 
                 for (var i = 0; i < corpoParaVerificar.length; i++) { 
                     if (corpoParaVerificar[i].x === head.x && corpoParaVerificar[i].y === head.y) {
@@ -416,14 +433,9 @@ def renderizar_jogo():
                 }
                 
                 snake.unshift(head);
-                if (vaiComer) {
+                if (vaiApanharPassageiro) {
                     score += 10;
-                    if (score % 50 === 0 && velocidadeMs > 80) {
-                        velocidadeMs -= 10; // fica ligeiramente mais rápido a cada 5 maçãs
-                        clearInterval(gameInterval);
-                        gameInterval = setInterval(game, velocidadeMs);
-                    }
-                    apple = novaMaca();
+                    apple = novaParagem();
                 } else {
                     snake.pop();
                 }
@@ -448,6 +460,7 @@ def renderizar_jogo():
                 gameOver = true; gameStarted = false;
                 clearInterval(gameInterval);
                 btnAction.innerText = "Reset 🔄";
+                btnGuardar.style.display = "inline-block";
                 drawScene();
             }
             
@@ -455,6 +468,7 @@ def renderizar_jogo():
                 estadoInicial();
                 gameOver = false; gameStarted = true;
                 btnAction.innerText = "Pause ⏸";
+                btnGuardar.style.display = "none";
                 gameInterval = setInterval(game, velocidadeMs);
                 drawScene();
             }
@@ -465,6 +479,18 @@ def renderizar_jogo():
                 if(dir === 'cima' && dy === 0) proximaDirecao = {dx:0, dy:-tnt};
                 if(dir === 'direita' && dx === 0) proximaDirecao = {dx:tnt, dy:0};
                 if(dir === 'baixo' && dy === 0) proximaDirecao = {dx:0, dy:tnt};
+            }
+
+            function guardarPontuacao() {
+                // Clique direto do utilizador (gesto real) — navega a janela de topo do Streamlit
+                // com a pontuação no URL, para o Python conseguir lê-la e só pedir o nome.
+                try {
+                    var urlAtual = new URL(window.top.location.href);
+                    urlAtual.searchParams.set('novo_score_jogo', score);
+                    window.top.location.href = urlAtual.toString();
+                } catch (e) {
+                    btnGuardar.innerText = "⚠️ Falhou — usa o campo manual abaixo";
+                }
             }
             
             document.addEventListener('keydown', function(e) {
@@ -597,27 +623,39 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
-    with st.expander("🏆 Leaderboard — guardar a minha pontuação", expanded=False):
-        st.caption("O jogo corre isolado num iframe e não consegue enviar a pontuação automaticamente — introduz o valor que vês no ecrã do jogo.")
-        col_nome, col_score = st.columns([2, 1])
-        nome_jogador = col_nome.text_input("O teu nome", key="leaderboard_nome", max_chars=30)
-        pontuacao_jogador = col_score.number_input("Pontuação", key="leaderboard_score", min_value=0, step=10)
+    # O jogo envia a pontuação automaticamente via parâmetro de URL quando o utilizador
+    # clica em "Guardar Pontuação" (ver função guardarPontuacao() no JS do jogo).
+    if "novo_score_jogo" in st.query_params:
+        try:
+            pontuacao_capturada = int(st.query_params["novo_score_jogo"])
+        except (ValueError, TypeError):
+            pontuacao_capturada = None
 
-        if st.button("💾 Guardar no Leaderboard", key="leaderboard_guardar"):
-            if not nome_jogador.strip():
-                st.warning("Introduz um nome antes de guardar.")
-            else:
-                if guardar_pontuacao_leaderboard(nome_jogador, int(pontuacao_jogador)):
-                    st.success(f"Pontuação de {pontuacao_jogador} guardada para {nome_jogador}! 🎉")
-                else:
-                    st.error("Não foi possível gravar a pontuação. Tenta novamente.")
+        if pontuacao_capturada is not None:
+            with st.container(border=True):
+                st.success(f"🚌 Fim de serviço! Pontuação: {pontuacao_capturada} passageiros.")
+                nome_jogador = st.text_input("Introduz o teu nome para o Leaderboard", key="leaderboard_nome_auto", max_chars=30)
+                col_guardar, col_ignorar = st.columns(2)
+                if col_guardar.button("💾 Guardar", key="leaderboard_guardar_auto", use_container_width=True):
+                    if not nome_jogador.strip():
+                        st.warning("Introduz um nome antes de guardar.")
+                    else:
+                        if guardar_pontuacao_leaderboard(nome_jogador, pontuacao_capturada):
+                            st.query_params.clear()
+                            st.success("Pontuação guardada! 🎉")
+                            st.rerun()
+                        else:
+                            st.error("Não foi possível gravar a pontuação. Tenta novamente.")
+                if col_ignorar.button("Não guardar", key="leaderboard_ignorar_auto", use_container_width=True):
+                    st.query_params.clear()
+                    st.rerun()
 
-        st.markdown("**Top 10:**")
+    with st.expander("🏆 Leaderboard", expanded=False):
         top_scores = obter_top_leaderboard(10)
         if top_scores:
             for i, (nome, pontos, ts) in enumerate(top_scores, start=1):
                 medalha = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
-                st.markdown(f"{medalha} **{nome}** — {pontos} pontos")
+                st.markdown(f"{medalha} **{nome}** — {pontos} passageiros")
         else:
             st.caption("Ainda ninguém guardou pontuação. Sê o primeiro!")
 
