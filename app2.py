@@ -7,10 +7,9 @@ import streamlit.components.v1 as components
 import logging
 import sqlite3
 import json
-import base64
 from datetime import datetime
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnico)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -236,21 +235,13 @@ def len_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO (DATA-URI BASE64 SUPREMO) ---
+# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO (CANVAS EXPANDIDO 650x360) ---
 def renderizar_jogo():
     top_scores = obter_top_10()
     json_scores = json.dumps(top_scores)
 
+    # Nota estrutural: Retirado o prefixo f da string tripla para anular erros de compilação com as chavetas do JS
     html_jogo = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            body { margin: 0; padding: 0; background-color: #111; color: white; }
-        </style>
-    </head>
-    <body>
     <div style="text-align:center; background-color:#111; padding:15px; border-radius:10px; font-family:sans-serif;">
         <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Guimabus Arcade: Cabine de Condução 🚌</h3>
         
@@ -263,14 +254,6 @@ def renderizar_jogo():
         </div>
         
         <script>
-            window.addEventListener('load', function() {
-                window.parent.postMessage({
-                    isStreamlitMessage: true,
-                    type: 'streamlit:setFrameHeight',
-                    height: 520
-                }, '*');
-            });
-
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
             var btnAction = document.getElementById('btnAction');
@@ -285,7 +268,9 @@ def renderizar_jogo():
             var gameInterval = null;
             var gameStarted = false;
             var gameOver = false;
+            var scoreEnviado = false;
             
+            // Injeção segura do marcador string substituído pelo Python
             var leaderboard = JSON.parse('JSON_SCORES_PLACEHOLDER');
 
             function novaMaca() {
@@ -313,6 +298,7 @@ def renderizar_jogo():
             estadoInicial();
             
             function drawScene() {
+                // 1. DESENHAR ESTRADA
                 ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
                 ctx.lineWidth = 1;
@@ -322,11 +308,13 @@ def renderizar_jogo():
 
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
 
+                // Passenger
                 ctx.fillStyle = '#3498db'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI); ctx.fill();
                 ctx.fillStyle = '#ffffff'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
+                // Bus
                 for(var i=0; i<snake.length; i++) {
                     if (i === 0) {
                         ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
@@ -350,6 +338,7 @@ def renderizar_jogo():
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
 
+                // 2. DESENHAR LEADERBOARD INTERNO LATERAL
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
@@ -441,21 +430,16 @@ def renderizar_jogo():
                 btnAction.innerText = "Pause ⏸"; gameInterval = setInterval(game, velocidadeMs);
                 drawScene();
             }
-            
             function gravarRecorde() {
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) { alert('Por favor introduz o teu nome!'); return; }
-                
                 window.parent.postMessage({
-                    isStreamlitMessage: true,
                     type: 'streamlit:setComponentValue',
                     value: {nome: nome, pontos: (score / 10)}
                 }, '*');
-                
                 btnGravar.disabled = true;
                 btnGravar.innerText = "Gravado ✔";
             }
-            
             function mudarDirecao(dir) {
                 if (!gameStarted || gameOver) return;
                 if(dir === 'esquerda' && dx === 0) proximaDirecao = {dx:-tnt, dy:0};
@@ -467,20 +451,14 @@ def renderizar_jogo():
                 var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
                 if (mapa[e.keyCode]) { e.preventDefault(); mudarDirecao(mapa[e.keyCode]); }
             });
+            document.querySelectorAll('button[data-dir]').forEach(function(btn) {
+                btn.addEventListener('click', function() { mudarDirecao(btn.getAttribute('data-dir')); });
+            });
             drawScene();
         </script>
     </div>
-    </body>
-    </html>
     """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
-    
-    # Codificação direta para Base64 (Tudo processado em memória RAM - Sem I/O Disk lag)
-    b64_html = base64.b64encode(html_jogo.encode("utf-8")).decode("utf-8")
-    data_uri = f"data:text/html;base64,{b64_html}"
-    
-    # Declara o componente apontando estritamente para a string Data-URI
-    jogo_nativo = components.declare_component("guimabus_arcade", url=data_uri)
-    return jogo_nativo(key="arcade_game_instance")
+    return components.html(html_jogo, height=520)
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -488,7 +466,7 @@ MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite*
 Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
 2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
-3. **Modo Helpdesk Técnico:** Envia-me um problem de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
+3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
 Como posso ajudar hoje?"""
 
@@ -580,16 +558,12 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     res_componente = renderizar_jogo()
     
-    # Captura bidirecional limpa da Data-URI interpretada pelo Custom Component
-    if res_componente is not None and isinstance(res_componente, dict) and "nome" in res_componente:
-        guardar_score_bd(res_componente["nome"], int(res_componente["pontos"]))
-        st.toast(f"💾 Recorde de {res_componente['nome']} guardado com sucesso na BD!")
-        
-        # Limpa o estado interno para evitar que guarde repetidamente num rerun imediato
-        if "arcade_game_instance" in st.session_state:
-            del st.session_state["arcade_game_instance"]
-            
-        st.rerun()
+    if res_componente is not None and hasattr(res_componente, 'value') and res_componente.value:
+        dados_score = res_componente.value
+        if isinstance(dados_score, dict) and "nome" in dados_score:
+            guardar_score_bd(dados_score["nome"], int(dados_score["pontos"]))
+            st.toast(f"💾 Recorde de {dados_score['nome']} guardado com sucesso na BD!")
+            st.rerun()
 
 # Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
@@ -665,7 +639,7 @@ if prompt:
                 
                 PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
                 O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
-                Independentemente do problem de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
                 'O Celso faria desta maneira para resolver este problema de IT:'
                 Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
 
