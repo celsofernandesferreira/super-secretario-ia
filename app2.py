@@ -13,7 +13,7 @@ import pdfplumber
 from datetime import datetime
 from bs4 import BeautifulSoup
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnico)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -209,7 +209,7 @@ def obter_dados_guimabus(route_id: str = None):
             status = _primeiro_valor(bus, ["busStatus", "status", "state"], "N/A")
             atraso = _primeiro_valor(bus, ["delay", "delayMinutes", "delay_min"], None)
 
-            linha_txt = f" (Linha {linha})" if linha else "" # RETIFICADO: Retirado o acento de línea
+            linha_txt = f" (Linha {linha})" if linha else ""
             atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
             resumo += f"- Autocarro {id_bus}{linha_txt}: Status {status} (Atraso: {atraso_txt})\n"
 
@@ -269,7 +269,6 @@ def sincronizar_todos_horarios_guimabus():
         links_pdf = {}
         for link in soup.find_all('a', href=True):
             href = link['href']
-            # Captura os links binários escondidos nas abas de colapso do WordPress
             if ".pdf" in href and "horario" in href.lower():
                 match = re.search(r'linha-([a-z0-9]+)', href.lower())
                 if match:
@@ -362,6 +361,17 @@ def renderizar_jogo():
             <button id="btnAction" onclick="toggleGame()" style="padding: 6px 15px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">Play ▶</button>
             <input type="text" id="nomeInput" placeholder="Teu Nome aqui" maxlength="10" style="display:none; padding: 5px; border-radius:4px; border:1px solid #2ecc71; background:#222; color:white; width:120px; margin-left:10px; vertical-align:middle; text-transform:uppercase;">
             <button id="btnGravar" onclick="gravarRecorde()" style="display:none; padding: 6px 15px; background:#f1c40f; color:black; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-left:5px; vertical-align:middle;">Gravar 💾</button>
+        </div>
+
+        <div style="margin-top: 15px; display: inline-block;">
+            <div style="margin-bottom: 5px;">
+                <button data-dir="cima" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 16px;">▲</button>
+            </div>
+            <div>
+                <button data-dir="esquerda" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-right: 5px; font-size: 16px;">◀</button>
+                <button data-dir="baixo" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-right: 5px; font-size: 16px;">▼</button>
+                <button data-dir="direita" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 16px;">▶</button>
+            </div>
         </div>
         
         <script>
@@ -545,7 +555,7 @@ def renderizar_jogo():
                 btnGravar.innerText = "💾...";
                 
                 var finalScore = (score / 10);
-                window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + finalScore;
+                window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "?save_pontos=" + finalScore;
             }
             function mudarDirecao(dir) {
                 if (!gameStarted || gameOver) return;
@@ -565,7 +575,7 @@ def renderizar_jogo():
         </script>
     </div>
     """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
-    return components.html(html_jogo, height=520)
+    return components.html(html_jogo, height=600)  # Altura ajustada para acomodar as setas sem scroll interno
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
