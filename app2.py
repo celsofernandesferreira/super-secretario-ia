@@ -13,7 +13,7 @@ import pdfplumber
 from datetime import datetime
 from bs4 import BeautifulSoup
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnico)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -269,11 +269,19 @@ def sincronizar_todos_horarios_guimabus():
         links_pdf = {}
         for link in soup.find_all('a', href=True):
             href = link['href']
+            # Captura os links binários escondidos nas abas de colapso do WordPress
             if ".pdf" in href and "horario" in href.lower():
                 match = re.search(r'linha-([a-z0-9]+)', href.lower())
                 if match:
                     linha_id = match.group(1).upper()
-                    links_pdf[linha_id] = href
+                    # IMPORTANTE: a página lista primeiro os horários "Diurnos e Noturnos" (os do
+                    # dia-a-dia) e só depois os horários especiais de Natal/Páscoa para as mesmas
+                    # linhas. Sem esta verificação, o segundo link (o de Natal) sobrescrevia
+                    # silenciosamente o primeiro (o normal) no dicionário, e ficávamos a guardar
+                    # o horário de época festiva em vez do horário do dia-a-dia. Ao só gravar na
+                    # primeira ocorrência, garantimos que fica o horário "Diurnos e Noturnos".
+                    if linha_id not in links_pdf:
+                        links_pdf[linha_id] = href
         
         if not links_pdf:
             return "Nenhum ficheiro PDF de horários localizado na página principal."
@@ -293,9 +301,24 @@ def sincronizar_todos_horarios_guimabus():
                 texto_extraido = []
                 with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
                     for idx, pagina in enumerate(pdf.pages):
-                        texto_pag = pagina.extract_text()
+                        # layout=True preserva a posição horizontal do texto — sem isto, colunas
+                        # lado a lado (dias úteis / sábados / domingos) ficam embaralhadas, o que
+                        # fazia o agente só conseguir ler com confiança a coluna mais simples
+                        # (normalmente a de fim de semana, que tem menos horários).
+                        texto_pag = pagina.extract_text(layout=True)
                         if texto_pag:
-                            texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
+                            texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
+
+                        # Reforço: extração estruturada de tabelas, para os casos em que o texto
+                        # corrido ainda assim sai confuso. Isto dá ao agente uma segunda fonte,
+                        # já separada em linhas/colunas, para cruzar com o texto acima.
+                        try:
+                            tabelas = pagina.extract_tables()
+                            for t_idx, tabela in enumerate(tabelas):
+                                linhas_tabela = ["\t".join(cell if cell else "" for cell in linha) for linha in tabela]
+                                texto_extraido.append(f"[PÁGINA {idx+1} - TABELA {t_idx+1}]\n" + "\n".join(linhas_tabela))
+                        except Exception as e_tabela:
+                            logging.warning(f"Não foi possível extrair tabelas da página {idx+1} da linha {linha_id}: {e_tabela}")
                 
                 conteudo_final = "\n\n".join(texto_extraido)
                 if not conteudo_final.strip():
@@ -555,7 +578,7 @@ def renderizar_jogo():
                 btnGravar.innerText = "💾...";
                 
                 var finalScore = (score / 10);
-                window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "?save_pontos=" + finalScore;
+                window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + finalScore;
             }
             function mudarDirecao(dir) {
                 if (!gameStarted || gameOver) return;
@@ -575,7 +598,7 @@ def renderizar_jogo():
         </script>
     </div>
     """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
-    return components.html(html_jogo, height=600)  # Altura ajustada para acomodar as setas sem scroll interno
+    return components.html(html_jogo, height=520)
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -749,7 +772,11 @@ if prompt:
 
                 REGRAS IMPORTANTES para usar estas ferramentas:
                 1. Chama NO MÁXIMO uma ferramenta por pergunta.
-                2. Se a pergunta for sobre tabelas de horários gerais de uma linha, prefira usar 'consultar_cache_horario_linha'."""
+                2. Se a pergunta for sobre tabelas de horários gerais de uma linha, prefira usar 'consultar_cache_horario_linha'.
+                3. Os horários guardados em cache normalmente têm várias tabelas (Dias Úteis, Sábados, Domingos e Feriados). Ao responderes, identifica e apresenta claramente TODOS os tipos de dia presentes no texto — nunca reportes só um (ex: só fim de semana) quando o documento contém mais do que um. Se não tiveres a certeza sobre a que tipo de dia um horário pertence, diz isso explicitamente em vez de assumir.
+
+                REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
+                NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. Isto inclui: números de autocarro, atrasos, percursos, horários, ou nomes/números de linhas. NUNCA digas que "consultaste" uma ferramenta, cache ou base de dados que não chamaste de facto. Se as ferramentas devolverem uma lista vazia, um erro, ou "não existem horários em cache", e a Knowledge Base também não tiver essa informação, diz clara e honestamente ao utilizador que não tens essa informação disponível neste momento — nunca substituas por uma resposta que pareça plausível mas seja inventada. É preferível admitir "não sei" do que dar uma resposta errada com aparência de certeza."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
