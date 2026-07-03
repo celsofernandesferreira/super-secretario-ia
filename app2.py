@@ -240,8 +240,13 @@ def renderizar_jogo():
     top_scores = obter_top_10()
     json_scores = json.dumps(top_scores)
 
-    # Nota estrutural: Retirado o prefixo f da string tripla para anular erros de compilação com as chavetas do JS
     html_jogo = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+    </head>
+    <body style="margin: 0; padding: 0; background-color: #111;">
     <div style="text-align:center; background-color:#111; padding:15px; border-radius:10px; font-family:sans-serif;">
         <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Guimabus Arcade: Cabine de Condução 🚌</h3>
         
@@ -254,6 +259,15 @@ def renderizar_jogo():
         </div>
         
         <script>
+            // 1. INICIALIZAR A COMUNICAÇÃO COM O STREAMLIT
+            window.addEventListener('load', function() {
+                window.parent.postMessage({
+                    isStreamlitMessage: true,
+                    type: 'streamlit:setFrameHeight',
+                    height: 520
+                }, '*');
+            });
+
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
             var btnAction = document.getElementById('btnAction');
@@ -268,9 +282,7 @@ def renderizar_jogo():
             var gameInterval = null;
             var gameStarted = false;
             var gameOver = false;
-            var scoreEnviado = false;
             
-            // Injeção segura do marcador string substituído pelo Python
             var leaderboard = JSON.parse('JSON_SCORES_PLACEHOLDER');
 
             function novaMaca() {
@@ -298,7 +310,6 @@ def renderizar_jogo():
             estadoInicial();
             
             function drawScene() {
-                // 1. DESENHAR ESTRADA
                 ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
                 ctx.lineWidth = 1;
@@ -308,13 +319,11 @@ def renderizar_jogo():
 
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
 
-                // Passenger
                 ctx.fillStyle = '#3498db'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI); ctx.fill();
                 ctx.fillStyle = '#ffffff'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
-                // Bus
                 for(var i=0; i<snake.length; i++) {
                     if (i === 0) {
                         ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
@@ -338,7 +347,6 @@ def renderizar_jogo():
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
 
-                // 2. DESENHAR LEADERBOARD INTERNO LATERAL
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
@@ -430,16 +438,23 @@ def renderizar_jogo():
                 btnAction.innerText = "Pause ⏸"; gameInterval = setInterval(game, velocidadeMs);
                 drawScene();
             }
+            
+            // 2. CORREÇÃO DE COMUNICAÇÃO: FUNÇÃO GRAVAR RECORDE
             function gravarRecorde() {
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) { alert('Por favor introduz o teu nome!'); return; }
+                
+                // NOTA: isStreamlitMessage é obrigatório para o Streamlit reagir à mensagem
                 window.parent.postMessage({
+                    isStreamlitMessage: true,
                     type: 'streamlit:setComponentValue',
                     value: {nome: nome, pontos: (score / 10)}
                 }, '*');
+                
                 btnGravar.disabled = true;
                 btnGravar.innerText = "Gravado ✔";
             }
+            
             function mudarDirecao(dir) {
                 if (!gameStarted || gameOver) return;
                 if(dir === 'esquerda' && dx === 0) proximaDirecao = {dx:-tnt, dy:0};
@@ -457,8 +472,20 @@ def renderizar_jogo():
             drawScene();
         </script>
     </div>
+    </body>
+    </html>
     """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
-    return components.html(html_jogo, height=520)
+    
+    # 3. TRANSFORMAR EM COMPONENTE BIDIRECIONAL GERANDO OS FICHEIROS LOCALMENTE
+    import os
+    os.makedirs("arcade_game_temp", exist_ok=True)
+    with open("arcade_game_temp/index.html", "w", encoding="utf-8") as f:
+        f.write(html_jogo)
+
+    # Declare component trata isto como um widget, logo pode devolver valores!
+    jogo_bidirecional = components.declare_component("guimabus_arcade", path="arcade_game_temp")
+    
+    return jogo_bidirecional(key="arcade_game_instance")
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -558,12 +585,12 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     res_componente = renderizar_jogo()
     
-    if res_componente is not None and hasattr(res_componente, 'value') and res_componente.value:
-        dados_score = res_componente.value
-        if isinstance(dados_score, dict) and "nome" in dados_score:
-            guardar_score_bd(dados_score["nome"], int(dados_score["pontos"]))
-            st.toast(f"💾 Recorde de {dados_score['nome']} guardado com sucesso na BD!")
-            st.rerun()
+    # O check muda aqui: vemos se é um dicionário e se contém a chave 'nome'
+    if res_componente is not None and isinstance(res_componente, dict) and "nome" in res_componente:
+        guardar_score_bd(res_componente["nome"], int(res_componente["pontos"]))
+        st.toast(f"💾 Recorde de {res_componente['nome']} guardado com sucesso na BD!")
+        st.session_state.arcade_game_instance = None # Reset para prevenir gravação em loop
+        st.rerun()
 
 # Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
