@@ -227,7 +227,7 @@ def obter_horarios_paragem(stop_id: str):
     except Exception as e:
         return f"Erro na ligação: {e}"
 
-def ler_knowledge_base():
+def len_knowledge_base():
     contexto = ""
     files = glob.glob("knowledge/*.md")
     for file in files:
@@ -235,12 +235,13 @@ def ler_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME RETRO UPGRADED COM SISTEMA DE HIGH SCORE ---
+# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO (CANVAS EXPANDIDO 650x360) ---
 def renderizar_jogo():
     top_scores = obter_top_10()
     json_scores = json.dumps(top_scores)
 
-    html_jogo = f"""
+    # Nota estrutural: Retirado o prefixo f da string tripla para anular erros de compilação com as chavetas do JS
+    html_jogo = """
     <div style="text-align:center; background-color:#111; padding:15px; border-radius:10px; font-family:sans-serif;">
         <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Guimabus Arcade: Cabine de Condução 🚌</h3>
         
@@ -269,21 +270,22 @@ def renderizar_jogo():
             var gameOver = false;
             var scoreEnviado = false;
             
-            var leaderboard = {json_scores};
+            // Injeção segura do marcador string substituído pelo Python
+            var leaderboard = JSON.parse('JSON_SCORES_PLACEHOLDER');
 
-            function novaMaca() {{
+            function novaMaca() {
                 var pos;
-                do {{
-                    pos = {{
+                do {
+                    pos = {
                         x: Math.floor(Math.random() * cols) * tnt,
                         y: Math.floor(Math.random() * rows) * tnt
-                    }};
-                }} while (snake.some(function(s) {{ return s.x === pos.x && s.y === pos.y; }}));
+                    };
+                } while (snake.some(function(s) { return s.x === pos.x && s.y === pos.y; }));
                 return pos;
-            }}
+            }
 
-            function estadoInicial() {{
-                snake = [{{x:160, y:160}}, {{x:140, y:160}}, {{x:120, y:160}}];
+            function estadoInicial() {
+                snake = [{x:160, y:160}, {x:140, y:160}, {x:120, y:160}];
                 dx = tnt; dy = 0;
                 proximaDirecao = null;
                 score = 0;
@@ -292,16 +294,17 @@ def renderizar_jogo():
                 gameOver = false;
                 nomeInput.style.display = 'none';
                 btnGravar.style.display = 'none';
-            }}
+            }
             estadoInicial();
             
-            function drawScene() {{
+            function drawScene() {
+                // 1. DESENHAR ESTRADA
                 ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
                 ctx.lineWidth = 1;
-                for(var i=tnt; i<canvas.height; i+=tnt) {{
+                for(var i=tnt; i<canvas.height; i+=tnt) {
                     ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(gameWidth, i); ctx.stroke();
-                }}
+                }
 
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
 
@@ -312,53 +315,53 @@ def renderizar_jogo():
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
                 // Bus
-                for(var i=0; i<snake.length; i++) {{
-                    if (i === 0) {{
+                for(var i=0; i<snake.length; i++) {
+                    if (i === 0) {
                         ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
                         ctx.fillStyle = '#f1c40f';
-                        if (dx > 0) {{ ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + tnt - 6, 3, 3); }}
-                        else if (dx < 0) {{ ctx.fillRect(snake[i].x + 1, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + 1, snake[i].y + tnt - 6, 3, 3); }}
-                        else if (dy < 0) {{ ctx.fillRect(snake[i].x + 2, snake[i].y + 1, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + 1, 3, 3); }}
-                        else if (dy > 0) {{ ctx.fillRect(snake[i].x + 2, snake[i].y + tnt - 4, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + tnt - 4, 3, 3); }}
-                    } else {{
+                        if (dx > 0) { ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + tnt - 6, 3, 3); }
+                        else if (dx < 0) { ctx.fillRect(snake[i].x + 1, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + 1, snake[i].y + tnt - 6, 3, 3); }
+                        else if (dy < 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + 1, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + 1, 3, 3); }
+                        else if (dy > 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + tnt - 4, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + tnt - 4, 3, 3); }
+                    } else {
                         ctx.fillStyle = '#2ecc71'; ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-3, tnt-3);
                         ctx.fillStyle = '#2c3e50'; ctx.fillRect(snake[i].x + 4, snake[i].y + 4, tnt-9, tnt-9);
-                    }}
-                }}
+                    }
+                }
                 
-                if(snake.length > 1) {{
+                if(snake.length > 1) {
                     var textPos = snake[1];
                     ctx.fillStyle = '#ffffff'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
                     ctx.fillText('GMR', textPos.x + tnt/2, textPos.y + tnt/2 + 3);
-                }}
+                }
 
-                ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'start';
+                ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
 
-                // Leaderboard
+                // 2. DESENHAR LEADERBOARD INTERNO LATERAL
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
                 
                 ctx.font = '12px sans-serif';
-                for(var k=0; k<10; k++) {{
+                for(var k=0; k<10; k++) {
                     var yPos = 65 + (k * 26);
                     ctx.fillStyle = (k === 0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
                     
                     var medalha = (k===0)?"1º ":((k===1)?"2º ":((k===2)?"3º ":(k+1)+"º "));
-                    if (leaderboard[k]) {{
+                    if (leaderboard[k]) {
                         var item = leaderboard[k];
                         ctx.fillText(medalha + item[0], gameWidth + 15, yPos);
                         ctx.textAlign = 'end';
                         ctx.fillText(item[1] + ' pas.', canvas.width - 15, yPos);
                         ctx.textAlign = 'start';
-                    }} else {{
+                    } else {
                         ctx.fillStyle = '#444';
                         ctx.fillText(medalha + '------', gameWidth + 15, yPos);
-                    }}
-                }}
+                    }
+                }
                 
-                if (gameOver) {{
+                if (gameOver) {
                     ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                     ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
                     ctx.fillText('FIM DA LINHA', gameWidth/2, canvas.height/2 - 20);
@@ -367,8 +370,8 @@ def renderizar_jogo():
                     ctx.font = '11px sans-serif'; ctx.fillStyle = '#f1c40f';
                     ctx.fillText('Digita o teu nome no painel abaixo.', gameWidth/2, canvas.height/2 + 30);
                     ctx.textAlign = 'start';
-                }}
-            }}
+                }
+            }
             
             function game() {
                 if (gameOver) return;
@@ -442,7 +445,7 @@ def renderizar_jogo():
                 if(dir === 'esquerda' && dx === 0) proximaDirecao = {dx:-tnt, dy:0};
                 if(dir === 'cima' && dy === 0) proximaDirecao = {dx:0, dy:-tnt};
                 if(dir === 'direita' && dx === 0) proximaDirecao = {dx:tnt, dy:0};
-                if(dir === 'baixo' && dy === 0) proximaDirecao = {dx:0, dy:tnt}; // CORRIGIDO AQUI (abertura limpa)
+                if(dir === 'baixo' && dy === 0) proximaDirecao = {dx:0, dy:tnt};
             }
             document.addEventListener('keydown', function(e) {
                 var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
@@ -454,7 +457,7 @@ def renderizar_jogo():
             drawScene();
         </script>
     </div>
-    """.replace("{json_scores}", json_scores)
+    """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
     return components.html(html_jogo, height=520)
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
@@ -463,7 +466,7 @@ MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite*
 Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
 2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
-3. **Modo Helpdesk Técnico:** Envia-me um problem de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
+3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
 Como posso ajudar hoje?"""
 
@@ -492,23 +495,23 @@ with st.sidebar:
     st.divider()
     
     # SECÇÃO: CONTACTO DIRETO E RECRUTAMENTO
-    st.subheader("👨‍💻 Desenvolvedor")
-    st.info("""**Celso Ferreira**
+    st.sidebar.subheader("👨‍💻 Desenvolvedor")
+    st.sidebar.info("""**Celso Ferreira**
 *À procura de emprego na área de IT / Informática.*
 📞 Contacto: **917 486 683**""")
-    st.divider()
+    st.sidebar.divider()
     
     st.write("Estado: **Online**")
     st.write("Modelo Nativo: `Gemini-3.5-Flash`")
-    st.divider()
+    st.sidebar.divider()
     
     # VISUALIZADOR DE DADOS E EXPORTAÇÃO — SÓ VISÍVEL PARA O ADMINISTRADOR
-    st.subheader("🔒 Área de Administrador")
+    st.sidebar.subheader("🔒 Área de Administrador")
     if "admin_autenticado" not in st.session_state:
         st.session_state.admin_autenticado = False
 
     if not st.session_state.admin_autenticado:
-        with st.expander("Entrar como administrador"):
+        with st.sidebar.expander("Entrar como administrador"):
             password_input = st.text_input("Password de administrador", type="password", key="admin_pwd")
             if st.button("Entrar", key="admin_login_btn"):
                 if password_input and password_input == st.secrets.get("ADMIN_PASSWORD", None):
@@ -516,26 +519,26 @@ with st.sidebar:
                     logging.info("Login de administrador bem-sucedido.")
                     st.rerun()
                 else:
-                    st.error("Password incorreta.")
+                    st.sidebar.error("Password incorreta.")
                     logging.warning("Tentativa de login de administrador falhada.")
     else:
-        st.success("Sessão de administrador activa.")
-        if st.button("Sair da área de administrador", key="admin_logout_btn"):
+        st.sidebar.success("Sessão de administrador activa.")
+        if st.sidebar.button("Sair da área de administrador", key="admin_logout_btn"):
             st.session_state.admin_autenticado = False
             st.rerun()
 
-        st.subheader("📊 Telemetria e BD")
+        st.sidebar.subheader("📊 Telemetria e BD")
         if os.path.exists("agente_memoria.db"):
             with open("agente_memoria.db", "rb") as f:
-                st.download_button("📥 Exportar DB SQLite (.db)", f, "agente_memoria.db", "application/octet-stream", use_container_width=True)
+                st.sidebar.download_button("📥 Exportar DB SQLite (.db)", f, "agente_memoria.db", "application/octet-stream", use_container_width=True)
 
-        with st.expander("👁️ Ver Logs do Sistema"):
+        with st.sidebar.expander("👁️ Ver Logs do Sistema"):
             if os.path.exists("auditoria_agente.log"):
                 with open("auditoria_agente.log", "r", encoding="utf-8") as f:
                     linhas_log = f.readlines()[-10:]
                     for linha in linhas_log: st.caption(linha.strip())
 
-        with st.expander("🗄️ Histórico Permanente Global (BD) — todas as sessões"):
+        with st.sidebar.expander("🗄️ Histórico Permanente Global (BD) — todas as sessões"):
             if os.path.exists("agente_memoria.db"):
                 conn = sqlite3.connect("agente_memoria.db")
                 cursor = conn.cursor()
@@ -614,7 +617,7 @@ if prompt:
     with st.chat_message("assistant", avatar="💼"):
         with st.spinner("Agente a processar contexto e ferramentas..."):
             try:
-                contexto_base = ler_knowledge_base()
+                contexto_base = len_knowledge_base()
                 
                 # DEFINIÇÃO DOS PROMPTS DE SISTEMA (MÚLTIPLAS PERSONAS)
                 PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
