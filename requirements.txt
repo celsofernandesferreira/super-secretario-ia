@@ -3,3 +3,9 @@ google-generativeai>=0.8.0
 beautifulsoup4
 requests
 pdfplumber
+google-generativeai
+pandas
+openpyxl
+python-docx
+streamlit
+
