@@ -8,8 +8,9 @@ import logging
 import sqlite3
 import json
 from datetime import datetime
+from bs4 import BeautifulSoup
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnico)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -18,10 +19,11 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-# 2. CONFIGURAÇÃO DA BASE DE DADOS (SQLite Persistente com High Scores)
+# 2. CONFIGURAÇÃO DA BASE DE DADOS (SQLite Persistente com High Scores e Cache de Horários)
 def inicializar_bd():
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
+    # Tabela de histórico global
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS historico_global (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,12 +33,22 @@ def inicializar_bd():
             content TEXT
         )
     """)
+    # Tabela: Sistema de High Scores
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS high_scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
             nome TEXT,
             pontor INTEGER
+        )
+    """)
+    # Nova Tabela: Cache de Horários Locais (Evita queries constantes à Web)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_horarios (
+            linha TEXT PRIMARY KEY,
+            url TEXT,
+            conteudo_txt TEXT,
+            ultima_atualizacao TEXT
         )
     """)
     conn.commit()
@@ -93,17 +105,15 @@ st.title("💼 O Teu Super Secretário de Produtividade")
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# --- CAPTURA DE RECORDES VIA URL (SOLUÇÃO DO PROBLEMA) ---
+# --- CAPTURA DE RECORDES VIA URL ---
 query_params = st.query_params
 if "save_nome" in query_params and "save_pontos" in query_params:
     nome_recorde = query_params["save_nome"].upper()
     pontos_recorde = int(query_params["save_pontos"])
     
-    # Executa as funções na BD
     guardar_score_bd(nome_recorde, pontos_recorde)
     st.toast(f"💾 Recorde de {nome_recorde} ({pontos_recorde} pas.) guardado com sucesso!")
     
-    # Limpa os parâmetros do URL para evitar loops ao recarregar a página
     st.query_params.clear()
     st.rerun()
 
@@ -239,6 +249,97 @@ def obter_horarios_paragem(stop_id: str):
     except Exception as e:
         return f"Erro na ligação: {e}"
 
+# --- NOVA FERRAMENTA: AUTOMAÇÃO INTEGRAL DE RASPAGEM DE TODAS AS LINHAS E HORÁRIOS ---
+def sincronizar_todos_horarios_guimabus():
+    """
+    Varrimento automatizado de todas as linhas do site guimabus.pt/horarios-linhas/.
+    Extrai o conteúdo estruturado em tabelas HTML para cache interna SQLite.
+    """
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    url_principal = "https://guimabus.pt/horarios-linhas/"
+    
+    try:
+        response = requests.get(url_principal, headers=headers, timeout=12)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        links_linhas = {}
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            if "/linha-" in href:
+                nome_linha = href.split("/linha-")[-1].replace("/", "").strip().upper()
+                links_linhas[nome_linha] = href
+        
+        if not links_linhas:
+            return "Nenhuma linha detetada na página principal."
+        
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        
+        linhas_processadas = 0
+        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        for linha_id, url_linha in links_linhas.items():
+            try:
+                res_linha = requests.get(url_linha, headers=headers, timeout=10)
+                if res_linha.status_code != 200:
+                    continue
+                
+                soup_linha = BeautifulSoup(res_linha.text, 'html.parser')
+                tabelas = soup_linha.find_all('table')
+                
+                conteudo_tabelas = []
+                if tabelas:
+                    for idx, tabela in enumerate(tabelas):
+                        linhas_txt = []
+                        for row in tabela.find_all('tr'):
+                            colunas = [col.text.strip() for col in row.find_all(['td', 'th'])]
+                            linhas_txt.append(" | ".join(colunas))
+                        conteudo_tabelas.append(f"[Tabela {idx+1}]\n" + "\n".join(linhas_txt))
+                    texto_final = "\n\n".join(conteudo_tabelas)
+                else:
+                    # Fallback estratégico se usarem elementos div flex/grid
+                    main_content = soup_linha.find('main') or soup_linha.find('body')
+                    texto_final = main_content.get_text(separator="\n", strip=True) if main_content else soup_linha.get_text()
+                
+                # Gravação em cache persistente
+                cursor.execute("""
+                    INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
+                    VALUES (?, ?, ?, ?)
+                """, (linha_id, url_linha, texto_final, timestamp_atual))
+                
+                linhas_processadas += 1
+            except Exception as e:
+                logging.error(f"Erro ao processar subpágina da linha {linha_id}: {e}")
+                continue
+                
+        conn.commit()
+        conn.close()
+        
+        msg_sucesso = f"Sincronização concluída: {linhas_processadas} linhas descarregadas com sucesso na Base de Dados local!"
+        logging.info(msg_sucesso)
+        return msg_sucesso
+        
+    except Exception as e:
+        error_msg = f"Falha na automação de scraping da frota: {e}"
+        logging.error(error_msg)
+        return error_msg
+
+def consultar_cache_horario_linha(linha_id: str):
+    """Permite ao Agente ler instantaneamente os horários fixos de uma linha guardada."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (str(linha_id).upper(),))
+        resultado = cursor.fetchone()
+        conn.close()
+        
+        if resultado:
+            return f"Horários em Cache para a Linha {linha_id} (Atualizado em {resultado[1]}):\n\n{resultado[0]}"
+        return f"Não existem horários em cache para a linha {linha_id}. Peça ao administrador para rodar a Sincronização Geral."
+    except Exception as e:
+        return f"Erro na leitura da cache SQLite: {e}"
+
 def len_knowledge_base():
     contexto = ""
     files = glob.glob("knowledge/*.md")
@@ -346,7 +447,7 @@ def renderizar_jogo():
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
 
-                // 2. DESENHAR LEADERBOARD INTERNO LATERAL
+                // Leaderboard
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
@@ -439,7 +540,6 @@ def renderizar_jogo():
                 drawScene();
             }
             
-            // MUDANÇA ESTRUTURAL AQUI: Redireciona a janela pai injetando as variáveis no URL
             function gravarRecorde() {
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) { alert('Por favor introduz o teu nome!'); return; }
@@ -533,6 +633,14 @@ with st.sidebar:
                     logging.warning("Tentativa de login de administrador falhada.")
     else:
         st.sidebar.success("Sessão de administrador activa.")
+        
+        # BOTÃO EXCLUSIVO DE ADMIN: Dispara o Scraping Automático em Background
+        st.sidebar.subheader("🕷️ Automação Web")
+        if st.sidebar.button("🔄 Sincronizar Todos os Horários (Scraping)", use_container_width=True):
+            with st.spinner("O robô está a ler o site da Guimabus..."):
+                resultado_scraping = sincronizar_todos_horarios_guimabus()
+                st.sidebar.success(resultado_scraping)
+                
         if st.sidebar.button("Sair da área de administrador", key="admin_logout_btn"):
             st.session_state.admin_autenticado = False
             st.rerun()
@@ -627,14 +735,14 @@ if prompt:
                 És um Agente focado em automação, suporte e infraestrutura IT.
                 Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas.
 
-                Tens duas ferramentas relacionadas com a Guimabus, para perguntas diferentes:
-                - obter_dados_guimabus: estado em tempo real da frota (posições/atrasos dos autocarros já em circulação). Aceita opcionalmente um "route_id" para filtrar por linha.
-                - obter_horarios_paragem: previsão de tempos de espera/carreiras para uma paragem específica (precisa do ID numérico da paragem).
+                Tens três ferramentas relacionadas com a frota local da Guimabus:
+                - obter_dados_guimabus: estado em tempo real da frota (autocarros em circulação/atrasos). Aceita um "route_id".
+                - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica (precisa do ID numérico).
+                - consultar_cache_horario_linha: consulta a cache local da base de dados SQLite para ler os horários e tabelas fixas de uma determinada linha (ex: "101"). Use esta ferramenta sempre que o utilizador perguntar pelos horários planeados/fixos ou itinerários de uma linha específica.
 
-                REGRAS IMPORTANTES para usar estas ferramentas (para poupar chamadas à API, que têm limite):
-                1. Chama NO MÁXIMO uma ferramenta por pergunta. Nunca tentes as duas seguidas "para ver qual dá melhor resultado".
-                2. Se a pergunta do utilizador for vaga (ex: "que horários há agora?", sem indicar linha ou paragem), NÃO chames nenhuma ferramenta — pergunta primeiro ao utilizador se quer saber da frota em geral (e nesse caso podes indicar um route_id se ele mencionar uma linha) ou de uma paragem específica (nesse caso precisas do ID da paragem).
-                3. Se uma ferramenta já respondeu (mesmo que a resposta seja "sem dados disponíveis"), não voltes a chamá-la nem chames a outra à procura de mais informação — reporta o resultado obtido ao utilizador tal como está."""
+                REGRAS IMPORTANTES para usar estas ferramentas:
+                1. Chama NO MÁXIMO uma ferramenta por pergunta.
+                2. Se a pergunta for sobre tabelas de horários gerais de uma linha, prefira usar 'consultar_cache_horario_linha'."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
@@ -668,7 +776,9 @@ if prompt:
                         historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
                 prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem]
+                
+                # Inclusão da nova ferramenta de leitura de cache no array de Tools do Gemini
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha]
                 
                 # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
@@ -681,7 +791,7 @@ if prompt:
                         model = genai.GenerativeModel(
                             model_name=nome_modelo,
                             system_instruction=prompt_sistema_ativo,
-                            tools=ferramentas_agente
+                            tools=ferferramentas_agente
                         )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         response = chat.send_message(
