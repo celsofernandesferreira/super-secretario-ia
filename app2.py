@@ -18,7 +18,7 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-# 2. CONFIGURAÇÃO DA BASE DE DADOS
+# 2. CONFIGURAÇÃO DA BASE DE DADOS (SQLite Persistente com High Scores)
 def inicializar_bd():
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
@@ -82,26 +82,28 @@ def guardar_score_bd(nome, pontor):
     except Exception as e:
         logging.error(f"Erro ao gravar High Score: {e}")
 
+# Inicializa a BD no arranque
 inicializar_bd()
 
 # 3. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 st.title("💼 O Teu Super Secretário de Produtividade")
 
+# Identificador único de sessão
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# Processamento imediato do score vindo do URL (Query Params)
+# --- CAPTURA DE RECORDES VIA URL (SOLUÇÃO DO PROBLEMA) ---
 query_params = st.query_params
 if "save_nome" in query_params and "save_pontos" in query_params:
-    nome_gravado = query_params["save_nome"].upper()
-    pontos_gravados = int(query_params["save_pontos"])
+    nome_recorde = query_params["save_nome"].upper()
+    pontos_recorde = int(query_params["save_pontos"])
     
-    # Grava na BD
-    guardar_score_bd(nome_gravado, pontos_gravados)
-    st.toast(f"💾 Recorde de {nome_gravado} ({pontos_gravados} pas.) guardado com sucesso!")
+    # Executa as funções na BD
+    guardar_score_bd(nome_recorde, pontos_recorde)
+    st.toast(f"💾 Recorde de {nome_recorde} ({pontos_recorde} pas.) guardado com sucesso!")
     
-    # Limpa os parâmetros do URL para evitar loops de gravação ao fazer refresh
+    # Limpa os parâmetros do URL para evitar loops ao recarregar a página
     st.query_params.clear()
     st.rerun()
 
@@ -140,17 +142,21 @@ try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
     st.error("Erro: Chave API em falta nos Secrets do Streamlit.")
+    logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
     st.stop()
 
-# --- FUNÇÕES DE CONTEXTO / FERRAMENTAS ---
+# --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
-    if isinstance(dados, list): return dados
+    if isinstance(dados, list):
+        return dados
     if isinstance(dados, dict):
         for chave in ("vehicles", "data", "results", "items", "veiculos"):
             valor = dados.get(chave)
-            if isinstance(valor, list): return valor
+            if isinstance(valor, list):
+                return valor
         for valor in dados.values():
-            if isinstance(valor, list): return valor
+            if isinstance(valor, list):
+                return valor
     return []
 
 def _primeiro_valor(dicionario, chaves, default=None):
@@ -164,12 +170,18 @@ def obter_dados_guimabus(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = "https://gmr.elevensystems.pt/api/locations"
     params = {"passengerInfo": "true"}
-    if route_id: params["routeId"] = route_id
+    if route_id:
+        params["routeId"] = route_id
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=8)
         response.raise_for_status()
-        dados = response.json()
+
+        try:
+            dados = response.json()
+        except ValueError:
+            return "Não foi possível ler os dados da Guimabus (resposta em formato inesperado)."
+
         veiculos = _extrair_lista_veiculos(dados)
         if not veiculos:
             linha_txt = f" da linha {route_id}" if route_id else ""
@@ -201,7 +213,8 @@ def obter_dados_guimabus(route_id: str = None):
 
 @st.cache_data(ttl=30)
 def obter_horarios_paragem(stop_id: str):
-    if not stop_id: return "É necessário indicar o ID da paragem."
+    if not stop_id:
+        return "É necessário indicar o ID da paragem."
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = f"https://gmr.elevensystems.pt/api/stops/{stop_id}/routes"
     params = {"shape": "true", "passengerInfo": "true"}
@@ -211,7 +224,8 @@ def obter_horarios_paragem(stop_id: str):
         response.raise_for_status()
         dados = response.json()
         rotas = _extrair_lista_veiculos(dados)
-        if not rotas: return f"Não há informação de carreiras para a paragem {stop_id} neste momento."
+        if not rotas:
+            return f"Não há informação de carreiras para a paragem {stop_id} neste momento."
 
         resumo = f"Horários/previsões para a paragem {stop_id}:\n"
         for rota in rotas:
@@ -233,7 +247,7 @@ def len_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME (COM PONTE DE COMUNICAÇÃO VIA URL CORRIGIDA) ---
+# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO ---
 def renderizar_jogo():
     top_scores = obter_top_10()
     json_scores = json.dumps(top_scores)
@@ -302,13 +316,13 @@ def renderizar_jogo():
 
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
 
-                // Passageiro
+                // Passenger
                 ctx.fillStyle = '#3498db'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI); ctx.fill();
                 ctx.fillStyle = '#ffffff'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
-                // Autocarro
+                // Bus
                 for(var i=0; i<snake.length; i++) {
                     if (i === 0) {
                         ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
@@ -332,7 +346,7 @@ def renderizar_jogo():
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
 
-                // Desenhar Leaderboard Lateral
+                // 2. DESENHAR LEADERBOARD INTERNO LATERAL
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
@@ -425,17 +439,15 @@ def renderizar_jogo():
                 drawScene();
             }
             
-            // CORREÇÃO AQUI: Forçar a janela principal (parent) a atualizar os Query Params
+            // MUDANÇA ESTRUTURAL AQUI: Redireciona a janela pai injetando as variáveis no URL
             function gravarRecorde() {
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) { alert('Por favor introduz o teu nome!'); return; }
-                
                 btnGravar.disabled = true;
-                btnGravar.innerText = "A gravar...";
+                btnGravar.innerText = "💾...";
                 
-                // Envia os dados atualizando o URL da aplicação Streamlit pai
-                var pontos Finais = (score / 10);
-                window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + pontosFinais;
+                var finalScore = (score / 10);
+                window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + finalScore;
             }
             
             function mudarDirecao(dir) {
@@ -448,6 +460,9 @@ def renderizar_jogo():
             document.addEventListener('keydown', function(e) {
                 var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
                 if (mapa[e.keyCode]) { e.preventDefault(); mudarDirecao(mapa[e.keyCode]); }
+            });
+            document.querySelectorAll('button[data-dir]').forEach(function(btn) {
+                btn.addEventListener('click', function() { mudarDirecao(btn.getAttribute('data-dir')); });
             });
             drawScene();
         </script>
@@ -473,7 +488,7 @@ if "messages" not in st.session_state:
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
 
-# --- SIDEBAR DE ELITE ---
+# --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
 with st.sidebar:
     st.header("⚙️ Painel do Agente")
     if st.button("🗑️ Limpar O Meu Histórico", use_container_width=True):
@@ -489,6 +504,7 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
+    # SECÇÃO: CONTACTO DIRETO E RECRUTAMENTO
     st.sidebar.subheader("👨‍💻 Desenvolvedor")
     st.sidebar.info("""**Celso Ferreira**
 *À procura de emprego na área de IT / Informática.*
@@ -499,7 +515,8 @@ with st.sidebar:
     st.write("Modelo Nativo: `Gemini-3.5-Flash`")
     st.sidebar.divider()
     
-    # ÁREA DE ADMINISTRADOR
+    # VISUALIZADOR DE DADOS E EXPORTAÇÃO — SÓ VISÍVEL PARA O ADMINISTRADOR
+    st.sidebar.subheader("🔒 Área de Administrador")
     if "admin_autenticado" not in st.session_state:
         st.session_state.admin_autenticado = False
 
@@ -531,7 +548,7 @@ with st.sidebar:
                     linhas_log = f.readlines()[-10:]
                     for linha in linhas_log: st.caption(linha.strip())
 
-        with st.sidebar.expander("🗄️ Histórico Permanente Global (BD)"):
+        with st.sidebar.expander("🗄️ Histórico Permanente Global (BD) — todas as sessões"):
             if os.path.exists("agente_memoria.db"):
                 conn = sqlite3.connect("agente_memoria.db")
                 cursor = conn.cursor()
@@ -547,11 +564,11 @@ with st.sidebar:
                         st.markdown(f"**🤖 [{hora_min}] Agente ({sessao}):** {r[3]}")
                     st.divider()
 
-# --- ÁREA DO JOGO PRINCIPAL ---
+# --- ÁREA DO JOGO PRINCIPAL COM LEADERBOARD NATIVO ---
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
-# Mostrar histórico visual no chat
+# Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
     avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
     with st.chat_message(message["role"], avatar=avatar_tipo):
@@ -591,7 +608,7 @@ elif audio_file:
                 st.error(f"Erro ao processar o ficheiro de voz: {e}")
                 logging.error(f"Falha na transcrição de áudio: {e}")
 
-# --- FLUXO PRINCIPAL DO AGENTE ---
+# --- FLUXO PRINCIPAL DO AGENTE DE ROTEAMENTO (ROUTER DE PERSONAS) ---
 if prompt:
     logging.info(f"Input processado [{tipo_input}]: {prompt}")
     guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
@@ -605,31 +622,45 @@ if prompt:
             try:
                 contexto_base = len_knowledge_base()
                 
+                # DEFINIÇÃO DOS PROMPTS DE SISTEMA (MÚLTIPLAS PERSONAS)
                 PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
                 És um Agente focado em automação, suporte e infraestrutura IT.
                 Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas.
 
                 Tens duas ferramentas relacionadas com a Guimabus, para perguntas diferentes:
                 - obter_dados_guimabus: estado em tempo real da frota (posições/atrasos dos autocarros já em circulação). Aceita opcionalmente um "route_id" para filtrar por linha.
-                - obter_horarios_paragem: previsão de tempos de espera/carreiras para uma paragem específica (precisa do ID numérico da paragem)."""
+                - obter_horarios_paragem: previsão de tempos de espera/carreiras para uma paragem específica (precisa do ID numérico da paragem).
+
+                REGRAS IMPORTANTES para usar estas ferramentas (para poupar chamadas à API, que têm limite):
+                1. Chama NO MÁXIMO uma ferramenta por pergunta. Nunca tentes as duas seguidas "para ver qual dá melhor resultado".
+                2. Se a pergunta do utilizador for vaga (ex: "que horários há agora?", sem indicar linha ou paragem), NÃO chames nenhuma ferramenta — pergunta primeiro ao utilizador se quer saber da frota em geral (e nesse caso podes indicar um route_id se ele mencionar uma linha) ou de uma paragem específica (nesse caso precisas do ID da paragem).
+                3. Se uma ferramenta já respondeu (mesmo que a resposta seja "sem dados disponíveis"), não voltes a chamá-la nem chames a outra à procura de mais informação — reporta o resultado obtido ao utilizador tal como está."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
-                Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time."""
+                Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
+                Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
                 
                 PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
-                Independentemente do problema de suporte indicado pelo utilizador, deves começar a tua resposta OBRIGATORIAMENTE com: 
-                'O Celso faria desta maneira para resolver este problema de IT:'"""
+                O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
+                Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                'O Celso faria desta maneira para resolver este problema de IT:'
+                Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
 
+                # LÓGICA DO ROUTER EM TEMPO DE EXECUÇÃO
                 prompt_normalizado = prompt.lower()
                 gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha"]
                 
                 if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
                     prompt_sistema_ativo = PROMPT_RECRUITER
+                    logging.info("Router selecionou a Persona: IT Technical Recruiter (EN)")
                 elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
                     prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
+                    logging.info("Router selecionou a Persona: Tutor de Helpdesk / Modo Celso (PT)")
                 else:
                     prompt_sistema_ativo = PROMPT_EXECUTIVO
+                    logging.info("Router selecionou a Persona: Assistente Executivo (PT)")
 
+                # Estruturar histórico limpo para o payload da API
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     if msg["content"] != MENSAGEM_INICIAL:
@@ -639,10 +670,12 @@ if prompt:
                 prompt_enriquecido = f"{contexto_base}\n\nUser Prompt: {prompt}"
                 ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem]
                 
+                # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
 
                 response = None
+                ultimo_erro_modelo = None
                 for nome_modelo in candidatos_modelo:
                     try:
                         model = genai.GenerativeModel(
@@ -651,22 +684,37 @@ if prompt:
                             tools=ferramentas_agente
                         )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                        response = chat.send_message(prompt_enriquecido, request_options={"timeout": TIMEOUT_SEGUNDOS})
+                        response = chat.send_message(
+                            prompt_enriquecido,
+                            request_options={"timeout": TIMEOUT_SEGUNDOS}
+                        )
+                        if nome_modelo != candidatos_modelo[0]:
+                            logging.warning(f"Modelo principal falhou; resposta obtida com fallback '{nome_modelo}'.")
+                            st.info(f"ℹ️ Modelo principal indisponível — resposta gerada com '{nome_modelo}'.")
                         break
                     except Exception as e:
-                        logging.warning(f"Modelo '{nome_modelo}' falhou. A tentar o próximo.")
+                        ultimo_erro_modelo = e
+                        motivo = "limite de quota (429)" if "429" in str(e) else ("timeout" if "timeout" in str(e).lower() or "deadline" in str(e).lower() else str(e))
+                        logging.warning(f"Modelo '{nome_modelo}' falhou ({motivo}). A tentar o próximo candidato, se existir.")
                         continue
 
                 if response is None:
-                    st.error("🚫 Não foi possível obter resposta de nenhum modelo disponível neste momento.")
+                    logging.error(f"Todos os modelos candidatos falharam. Último erro: {ultimo_erro_modelo}")
+                    if ultimo_erro_modelo is not None and "429" in str(ultimo_erro_modelo):
+                        st.error("🚫 Limite diário gratuito da API do Gemini esgotado. Tenta novamente mais tarde.")
+                    else:
+                        st.error("🚫 Não foi possível obter resposta de nenhum modelo disponível neste momento.")
                     st.stop()
 
                 full_response = response.text
                 st.markdown(full_response)
                 
+                logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
                 guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
+                
                 st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 
             except Exception as e:
                 st.error(f"Erro detetado no pipeline do agente: {e}")
+                logging.error(f"Falha crítica no pipeline do agente: {e}")
