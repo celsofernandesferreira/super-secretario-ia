@@ -7,9 +7,10 @@ import streamlit.components.v1 as components
 import logging
 import sqlite3
 import json
+import base64
 from datetime import datetime
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnico)
 logging.basicConfig(
     filename="auditoria_agente.log",
     level=logging.INFO,
@@ -235,7 +236,7 @@ def len_knowledge_base():
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
-# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO (CANVAS EXPANDIDO 650x360) ---
+# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO (DATA-URI BASE64 SUPREMO) ---
 def renderizar_jogo():
     top_scores = obter_top_10()
     json_scores = json.dumps(top_scores)
@@ -245,8 +246,11 @@ def renderizar_jogo():
     <html>
     <head>
         <meta charset="utf-8">
+        <style>
+            body { margin: 0; padding: 0; background-color: #111; color: white; }
+        </style>
     </head>
-    <body style="margin: 0; padding: 0; background-color: #111;">
+    <body>
     <div style="text-align:center; background-color:#111; padding:15px; border-radius:10px; font-family:sans-serif;">
         <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Guimabus Arcade: Cabine de Condução 🚌</h3>
         
@@ -259,7 +263,6 @@ def renderizar_jogo():
         </div>
         
         <script>
-            // 1. INICIALIZAR A COMUNICAÇÃO COM O STREAMLIT
             window.addEventListener('load', function() {
                 window.parent.postMessage({
                     isStreamlitMessage: true,
@@ -439,12 +442,10 @@ def renderizar_jogo():
                 drawScene();
             }
             
-            // 2. CORREÇÃO DE COMUNICAÇÃO: FUNÇÃO GRAVAR RECORDE
             function gravarRecorde() {
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) { alert('Por favor introduz o teu nome!'); return; }
                 
-                // NOTA: isStreamlitMessage é obrigatório para o Streamlit reagir à mensagem
                 window.parent.postMessage({
                     isStreamlitMessage: true,
                     type: 'streamlit:setComponentValue',
@@ -466,9 +467,6 @@ def renderizar_jogo():
                 var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
                 if (mapa[e.keyCode]) { e.preventDefault(); mudarDirecao(mapa[e.keyCode]); }
             });
-            document.querySelectorAll('button[data-dir]').forEach(function(btn) {
-                btn.addEventListener('click', function() { mudarDirecao(btn.getAttribute('data-dir')); });
-            });
             drawScene();
         </script>
     </div>
@@ -476,16 +474,13 @@ def renderizar_jogo():
     </html>
     """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
     
-    # 3. TRANSFORMAR EM COMPONENTE BIDIRECIONAL GERANDO OS FICHEIROS LOCALMENTE
-    import os
-    os.makedirs("arcade_game_temp", exist_ok=True)
-    with open("arcade_game_temp/index.html", "w", encoding="utf-8") as f:
-        f.write(html_jogo)
-
-    # Declare component trata isto como um widget, logo pode devolver valores!
-    jogo_bidirecional = components.declare_component("guimabus_arcade", path="arcade_game_temp")
+    # Codificação direta para Base64 (Tudo processado em memória RAM - Sem I/O Disk lag)
+    b64_html = base64.b64encode(html_jogo.encode("utf-8")).decode("utf-8")
+    data_uri = f"data:text/html;base64,{b64_html}"
     
-    return jogo_bidirecional(key="arcade_game_instance")
+    # Declara o componente apontando estritamente para a string Data-URI
+    jogo_nativo = components.declare_component("guimabus_arcade", url=data_uri)
+    return jogo_nativo(key="arcade_game_instance")
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -493,7 +488,7 @@ MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite*
 Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
 2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
-3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
+3. **Modo Helpdesk Técnico:** Envia-me um problem de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
 Como posso ajudar hoje?"""
 
@@ -585,11 +580,15 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     res_componente = renderizar_jogo()
     
-    # O check muda aqui: vemos se é um dicionário e se contém a chave 'nome'
+    # Captura bidirecional limpa da Data-URI interpretada pelo Custom Component
     if res_componente is not None and isinstance(res_componente, dict) and "nome" in res_componente:
         guardar_score_bd(res_componente["nome"], int(res_componente["pontos"]))
         st.toast(f"💾 Recorde de {res_componente['nome']} guardado com sucesso na BD!")
-        st.session_state.arcade_game_instance = None # Reset para prevenir gravação em loop
+        
+        # Limpa o estado interno para evitar que guarde repetidamente num rerun imediato
+        if "arcade_game_instance" in st.session_state:
+            del st.session_state["arcade_game_instance"]
+            
         st.rerun()
 
 # Mostrar histórico visual no chat com Avatares Estilizados
@@ -666,7 +665,7 @@ if prompt:
                 
                 PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
                 O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
-                Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                Independentemente do problem de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
                 'O Celso faria desta maneira para resolver este problema de IT:'
                 Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
 
