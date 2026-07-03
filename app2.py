@@ -9,6 +9,7 @@ import sqlite3
 import json
 import re
 import io
+import time
 import pdfplumber
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -289,55 +290,75 @@ def sincronizar_todos_horarios_guimabus():
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
         
-        linhas_processadas = 0
+        linhas_processadas = []
+        linhas_falhadas = []
         timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         for linha_id, url_pdf in links_pdf.items():
-            try:
-                pdf_response = requests.get(url_pdf, headers=headers, timeout=15)
-                if pdf_response.status_code != 200:
-                    continue
-                
-                texto_extraido = []
-                with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
-                    for idx, pagina in enumerate(pdf.pages):
-                        # layout=True preserva a posição horizontal do texto — sem isto, colunas
-                        # lado a lado (dias úteis / sábados / domingos) ficam embaralhadas, o que
-                        # fazia o agente só conseguir ler com confiança a coluna mais simples
-                        # (normalmente a de fim de semana, que tem menos horários).
-                        texto_pag = pagina.extract_text(layout=True)
-                        if texto_pag:
-                            texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
+            sucesso = False
+            ultimo_erro = None
+            # Até 2 tentativas por linha — falhas de rede/timeout pontuais (muito comuns ao
+            # fazer ~60 pedidos seguidos ao mesmo servidor) não deviam perder a linha inteira.
+            for tentativa in range(2):
+                try:
+                    pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
+                    if pdf_response.status_code != 200:
+                        ultimo_erro = f"HTTP {pdf_response.status_code}"
+                        time.sleep(1)
+                        continue
 
-                        # Reforço: extração estruturada de tabelas, para os casos em que o texto
-                        # corrido ainda assim sai confuso. Isto dá ao agente uma segunda fonte,
-                        # já separada em linhas/colunas, para cruzar com o texto acima.
-                        try:
-                            tabelas = pagina.extract_tables()
-                            for t_idx, tabela in enumerate(tabelas):
-                                linhas_tabela = ["\t".join(cell if cell else "" for cell in linha) for linha in tabela]
-                                texto_extraido.append(f"[PÁGINA {idx+1} - TABELA {t_idx+1}]\n" + "\n".join(linhas_tabela))
-                        except Exception as e_tabela:
-                            logging.warning(f"Não foi possível extrair tabelas da página {idx+1} da linha {linha_id}: {e_tabela}")
-                
-                conteudo_final = "\n\n".join(texto_extraido)
-                if not conteudo_final.strip():
-                    conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
-                
-                cursor.execute("""
-                    INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
-                    VALUES (?, ?, ?, ?)
-                """, (linha_id, url_pdf, conteudo_final, timestamp_atual))
-                
-                linhas_processadas += 1
-            except Exception as e:
-                logging.error(f"Erro ao processar o PDF da linha {linha_id}: {e}")
-                continue
-                
+                    texto_extraido = []
+                    with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
+                        for idx, pagina in enumerate(pdf.pages):
+                            # layout=True preserva a posição horizontal do texto — sem isto, colunas
+                            # lado a lado (dias úteis / sábados / domingos) ficam embaralhadas, o que
+                            # fazia o agente só conseguir ler com confiança a coluna mais simples
+                            # (normalmente a de fim de semana, que tem menos horários).
+                            texto_pag = pagina.extract_text(layout=True)
+                            if texto_pag:
+                                texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
+
+                            # Reforço: extração estruturada de tabelas, para os casos em que o texto
+                            # corrido ainda assim sai confuso.
+                            try:
+                                tabelas = pagina.extract_tables()
+                                for t_idx, tabela in enumerate(tabelas):
+                                    linhas_tabela = ["\t".join(cell if cell else "" for cell in linha) for linha in tabela]
+                                    texto_extraido.append(f"[PÁGINA {idx+1} - TABELA {t_idx+1}]\n" + "\n".join(linhas_tabela))
+                            except Exception as e_tabela:
+                                logging.warning(f"Não foi possível extrair tabelas da página {idx+1} da linha {linha_id}: {e_tabela}")
+
+                    conteudo_final = "\n\n".join(texto_extraido)
+                    if not conteudo_final.strip():
+                        conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
+
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
+                        VALUES (?, ?, ?, ?)
+                    """, (linha_id, url_pdf, conteudo_final, timestamp_atual))
+
+                    linhas_processadas.append(linha_id)
+                    sucesso = True
+                    break
+                except Exception as e:
+                    ultimo_erro = str(e)
+                    time.sleep(1)
+                    continue
+
+            if not sucesso:
+                linhas_falhadas.append(linha_id)
+                logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
+
+            # Pequena pausa entre pedidos para não sobrecarregar/ser bloqueado pelo servidor —
+            # ~60 pedidos seguidos sem pausa é um padrão que muitos servidores WordPress limitam.
+            time.sleep(0.4)
+
         conn.commit()
         conn.close()
         
-        msg_sucesso = f"Sincronização concluída: {linhas_processadas} PDFs descarregadas e convertidos na BD local!"
+        msg_sucesso = f"Sincronização concluída: {len(linhas_processadas)}/{len(links_pdf)} PDFs descarregados e convertidos na BD local!"
+        if linhas_falhadas:
+            msg_sucesso += f" Falharam: {', '.join(linhas_falhadas)}."
         logging.info(msg_sucesso)
         return msg_sucesso
         
@@ -349,10 +370,30 @@ def sincronizar_todos_horarios_guimabus():
 def consultar_cache_horario_linha(linha_id: str):
     """Permite ao Agente ler instantaneamente os horários fixos de uma linha guardada."""
     try:
+        entrada = str(linha_id).strip().upper()
+        if not entrada:
+            return "É necessário indicar o número da linha."
+
+        # As linhas no site vêm com zeros à esquerda (ex: "012", "003"), mas o utilizador
+        # (ou o próprio modelo) pode escrever só "12" ou "3". Sem isto, a consulta exata
+        # falhava sempre que faltasse/sobrasse um zero, mesmo com a linha já em cache.
+        candidatos = [entrada]
+        if entrada.isdigit():
+            sem_zeros = entrada.lstrip('0') or '0'
+            if sem_zeros not in candidatos:
+                candidatos.append(sem_zeros)
+            com_tres_digitos = entrada.zfill(3)
+            if com_tres_digitos not in candidatos:
+                candidatos.append(com_tres_digitos)
+
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (str(linha_id).upper(),))
-        resultado = cursor.fetchone()
+        resultado = None
+        for candidato in candidatos:
+            cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (candidato,))
+            resultado = cursor.fetchone()
+            if resultado:
+                break
         conn.close()
         
         if resultado:
@@ -368,6 +409,38 @@ def len_knowledge_base():
         with open(file, "r", encoding="utf-8") as f:
             contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
+
+def obter_idade_cache_horarios_dias():
+    """Devolve há quantos dias foi a sincronização geral mais recente, ou None se nunca correu."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_horarios")
+        resultado = cursor.fetchone()
+        conn.close()
+        if not resultado or not resultado[0]:
+            return None
+        ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - ultima).days
+    except Exception as e:
+        logging.error(f"Erro ao verificar idade da cache de horários: {e}")
+        return None
+
+def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
+    """Corre a sincronização geral sozinha (sem precisar de um admin clicar), mas só quando a
+    cache nunca foi preenchida ou já tem mais de 'limite_dias' — os horários da Guimabus não
+    mudam de um dia para o outro, por isso não faz sentido repetir isto a cada visita."""
+    if st.session_state.get("sync_automatico_tentado_nesta_sessao"):
+        return  # no máximo uma tentativa por sessão de utilizador, para não atrasar navegação
+    st.session_state.sync_automatico_tentado_nesta_sessao = True
+
+    idade_dias = obter_idade_cache_horarios_dias()
+    if idade_dias is not None and idade_dias < limite_dias:
+        return  # cache ainda fresca, não faz nada
+
+    with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez em dias — só demora uma vez, aguarda um pouco..."):
+        resultado = sincronizar_todos_horarios_guimabus()
+        logging.info(f"Sincronização automática executada: {resultado}")
 
 # --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO ---
 def renderizar_jogo():
@@ -617,6 +690,9 @@ if "messages" not in st.session_state:
 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
+
+# Mantém a cache de horários sempre fresca sem depender de um admin lembrar-se de clicar
+sincronizar_automaticamente_se_necessario(limite_dias=7)
 
 # --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
 with st.sidebar:
