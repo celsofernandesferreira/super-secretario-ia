@@ -7,6 +7,9 @@ import streamlit.components.v1 as components
 import logging
 import sqlite3
 import json
+import re
+import io
+import pdfplumber
 from datetime import datetime
 from bs4 import BeautifulSoup
 
@@ -206,7 +209,7 @@ def obter_dados_guimabus(route_id: str = None):
             status = _primeiro_valor(bus, ["busStatus", "status", "state"], "N/A")
             atraso = _primeiro_valor(bus, ["delay", "delayMinutes", "delay_min"], None)
 
-            linha_txt = f" (Linha {linha})" if línea else ""
+            linha_txt = f" (Linha {linha})" if linha else "" # RETIFICADO: Retirado o acento de línea
             atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
             resumo += f"- Autocarro {id_bus}{linha_txt}: Status {status} (Atraso: {atraso_txt})\n"
 
@@ -249,11 +252,11 @@ def obter_horarios_paragem(stop_id: str):
     except Exception as e:
         return f"Erro na ligação: {e}"
 
-# --- FERRAMENTA: AUTOMAÇÃO INTEGRAL DE RASPAGEM DE TODAS AS LINHAS E HORÁRIOS ---
+# --- FERRAMENTA: AUTOMAÇÃO INTEGRAL DE RASPAGEM DE PDFs ---
 def sincronizar_todos_horarios_guimabus():
     """
-    Varrimento automatizado de todas as linhas do site guimabus.pt/horarios-linhas/.
-    Extrai o conteúdo estruturado em tabelas HTML para cache interna SQLite.
+    Varrimento dinâmico de todos os PDFs de horários da página oficial da Guimabus.
+    Lê os buffers binários em memória e processa as tabelas de texto via pdfplumber.
     """
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     url_principal = "https://guimabus.pt/horarios-linhas/"
@@ -263,15 +266,18 @@ def sincronizar_todos_horarios_guimabus():
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        links_linhas = {}
+        links_pdf = {}
         for link in soup.find_all('a', href=True):
             href = link['href']
-            if "/linha-" in href:
-                nome_linha = href.split("/linha-")[-1].replace("/", "").strip().upper()
-                links_linhas[nome_linha] = href
+            # Captura os links binários escondidos nas abas de colapso do WordPress
+            if ".pdf" in href and "horario" in href.lower():
+                match = re.search(r'linha-([a-z0-9]+)', href.lower())
+                if match:
+                    linha_id = match.group(1).upper()
+                    links_pdf[linha_id] = href
         
-        if not links_linhas:
-            return "Nenhuma linha detetada na página principal."
+        if not links_pdf:
+            return "Nenhum ficheiro PDF de horários localizado na página principal."
         
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -279,47 +285,42 @@ def sincronizar_todos_horarios_guimabus():
         linhas_processadas = 0
         timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        for linha_id, url_linha in links_linhas.items():
+        for linha_id, url_pdf in links_pdf.items():
             try:
-                res_linha = requests.get(url_linha, headers=headers, timeout=10)
-                if res_linha.status_code != 200:
+                pdf_response = requests.get(url_pdf, headers=headers, timeout=15)
+                if pdf_response.status_code != 200:
                     continue
                 
-                soup_linha = BeautifulSoup(res_linha.text, 'html.parser')
-                tabelas = soup_linha.find_all('table')
+                texto_extraido = []
+                with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
+                    for idx, pagina in enumerate(pdf.pages):
+                        texto_pag = pagina.extract_text()
+                        if texto_pag:
+                            texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
                 
-                conteudo_tabelas = []
-                if tabelas:
-                    for idx, tabela in enumerate(tabelas):
-                        linhas_txt = []
-                        for row in tabela.find_all('tr'):
-                            colunas = [col.text.strip() for col in row.find_all(['td', 'th'])]
-                            linhas_txt.append(" | ".join(colunas))
-                        conteudo_tabelas.append(f"[Tabela {idx+1}]\n" + "\n".join(linhas_txt))
-                    texto_final = "\n\n".join(conteudo_tabelas)
-                else:
-                    main_content = soup_linha.find('main') or soup_linha.find('body')
-                    texto_final = main_content.get_text(separator="\n", strip=True) if main_content else soup_linha.get_text()
+                conteudo_final = "\n\n".join(texto_extraido)
+                if not conteudo_final.strip():
+                    conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
                 
                 cursor.execute("""
                     INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
                     VALUES (?, ?, ?, ?)
-                """, (linha_id, url_linha, texto_final, timestamp_atual))
+                """, (linha_id, url_pdf, conteudo_final, timestamp_atual))
                 
                 linhas_processadas += 1
             except Exception as e:
-                logging.error(f"Erro ao processar subpágina da linha {linha_id}: {e}")
+                logging.error(f"Erro ao processar o PDF da linha {linha_id}: {e}")
                 continue
                 
         conn.commit()
         conn.close()
         
-        msg_sucesso = f"Sincronização concluída: {linhas_processadas} linhas descarregadas com sucesso na Base de Dados local!"
+        msg_sucesso = f"Sincronização concluída: {linhas_processadas} PDFs descarregadas e convertidos na BD local!"
         logging.info(msg_sucesso)
         return msg_sucesso
         
     except Exception as e:
-        error_msg = f"Falha na automação de scraping da frota: {e}"
+        error_msg = f"Falha na automação de scraping dos PDFs: {e}"
         logging.error(error_msg)
         return error_msg
 
@@ -537,7 +538,6 @@ def renderizar_jogo():
                 btnAction.innerText = "Pause ⏸"; gameInterval = setInterval(game, velocidadeMs);
                 drawScene();
             }
-            
             function gravarRecorde() {
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) { alert('Por favor introduz o teu nome!'); return; }
@@ -547,7 +547,6 @@ def renderizar_jogo():
                 var finalScore = (score / 10);
                 window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + finalScore;
             }
-            
             function mudarDirecao(dir) {
                 if (!gameStarted || gameOver) return;
                 if(dir === 'esquerda' && dx === 0) proximaDirecao = {dx:-tnt, dy:0};
@@ -789,7 +788,7 @@ if prompt:
                         model = genai.GenerativeModel(
                             model_name=nome_modelo,
                             system_instruction=prompt_sistema_ativo,
-                            tools=ferramentas_agente  # RETIFICADO: Variável corrigida
+                            tools=ferramentas_agente
                         )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         response = chat.send_message(
