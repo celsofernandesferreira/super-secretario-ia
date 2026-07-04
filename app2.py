@@ -442,6 +442,177 @@ def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
         resultado = sincronizar_todos_horarios_guimabus()
         logging.info(f"Sincronização automática executada: {resultado}")
 
+# --- DADOS DE REFERÊNCIA: TIPOLOGIAS DE PASSE E DOCUMENTOS EXIGIDOS ---
+# Fonte: https://guimabus.pt/titulos/ (consultado e confirmado manualmente).
+TIPOLOGIAS_PASSE = {
+    "Mensal": {
+        "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
+        "preco": "Consultar tabela tarifária (varia por distância/zona — ver tarifarios/)",
+        "custo_cartao": "5€",
+        "prazo": "Só pode ser emitido ou carregado até ao dia 18 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de identificação"],
+    },
+    "Mensal CIM AVE 50%": {
+        "descricao": "Residentes na CIM do AVE (Cabeceiras de Basto, Fafe, Guimarães, Mondim de Basto, Póvoa de Lanhoso, Vieira do Minho, Vila Nova de Famalicão, Vizela).",
+        "preco": "50% de desconto sobre o passe mensal",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 18 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CIM AVE preenchido", "Comprovativo do domicílio fiscal (Portal das Finanças)"],
+    },
+    "Mensal CIM AVE 50% + 10% CMG": {
+        "descricao": "Residentes no Concelho de Guimarães.",
+        "preco": "60% de desconto sobre o passe mensal",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 15 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CIM AVE + 10% CMG preenchido", "Comprovativo do domicílio fiscal (Portal das Finanças)"],
+    },
+    "Mensal CP": {
+        "descricao": "Residentes e não residentes da CIM AVE, detentores do passe CP, com origem ou destino nas estações do concelho de Guimarães.",
+        "preco": "50% de desconto sobre a tabela tarifária",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 15 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CMG preenchido", "Fotocópia do Passe CP", "Fatura/talão de pagamento mensal com indicação Origem/Destino Guimarães"],
+    },
+    "Universitário Residente": {
+        "descricao": "Estudantes universitários residentes em Guimarães.",
+        "preco": "Gratuito",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 15 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CMG preenchido", "Comprovativo do domicílio fiscal (Portal das Finanças)", "Comprovativo de matrícula no ensino superior"],
+    },
+    "Universitário Não Residente": {
+        "descricao": "Estudantes universitários não residentes no concelho de Guimarães.",
+        "preco": "Gratuito",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 15 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CMG preenchido", "Declaração de domicílio fiscal (Portal das Finanças)", "Comprovativo de matrícula no ensino superior"],
+    },
+    "18+TP": {
+        "descricao": "Estudantes entre os 4 e os 18 anos (inclusive).",
+        "preco": "Gratuito",
+        "custo_cartao": "2,50€",
+        "prazo": "Até ao dia 15 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Formulário IMT preenchido"],
+    },
+    "23+TP": {
+        "descricao": "Estudantes até 23 anos (inclusive); alargado até 24 anos para cursos integrados específicos (Arquitetura e Urbanismo, Ciências Farmacêuticas, Medicina, Medicina Dentária, Medicina Veterinária).",
+        "preco": "Gratuito",
+        "custo_cartao": "2,50€",
+        "prazo": "Até ao dia 15 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Formulário IMT preenchido", "Certificado de matrícula (apenas para cursos integrados até 24 anos)"],
+    },
+    "Mobilidade Condicionada": {
+        "descricao": "Pessoas com grau de incapacidade igual ou superior a 60%. Desconto adicional de 25% sobre o PVP do passe PPMC (total 75% de desconto).",
+        "preco": "75% de desconto sobre o passe PPMC",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 18 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Cópia da Declaração/Cartão Municipal de Pessoa com Deficiência"],
+    },
+    "65+": {
+        "descricao": "Pessoas com mais de 65 anos, residentes no concelho de Guimarães, com Cartão Municipal 65+.",
+        "preco": "8,60€",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 18 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Cópia do Cartão Municipal de Idoso"],
+    },
+    "Reformado": {
+        "descricao": "Pessoas com reforma antecipada, idade entre 60 e 65 anos, pensão inferior ao salário mínimo nacional.",
+        "preco": "14,35€",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 18 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Cópia da Declaração dos serviços de ação social da CMG"],
+    },
+    "Antigo Combatente": {
+        "descricao": "Antigos combatentes ou viúvos de antigos combatentes.",
+        "preco": "Gratuito",
+        "custo_cartao": "5€",
+        "prazo": "Até ao dia 18 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Comprovativo do domicílio fiscal (Portal das Finanças)", "Cópia do Cartão Antigo Combatente/Viúva", "Requerimento IMT preenchido"],
+    },
+}
+
+def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
+    """Envia os documentos carregados (em memória, nunca gravados em disco/BD) ao Gemini para
+    uma verificação PRELIMINAR de que o tipo de documento parece corresponder ao exigido.
+    Isto NÃO é uma validação oficial nem legal — só um apoio para o utilizador conferir antes
+    de entregar os documentos reais à Guimabus."""
+    info = TIPOLOGIAS_PASSE[tipologia]
+    partes = [
+        f"Vais rever documentos carregados por um utilizador que pediu um passe do tipo '{tipologia}'.\n"
+        f"Documentos exigidos para este tipo de passe: {', '.join(info['documentos'])}.\n\n"
+        "Para CADA documento carregado abaixo (pela ordem em que aparecem), diz:\n"
+        "1. Que tipo de documento parece ser (com base só no que vês, sem inventar).\n"
+        "2. Se parece corresponder a um dos documentos exigidos para esta tipologia, e a qual.\n"
+        "3. Se está legível e completo, ou se falta algo/está cortado/ilegível.\n"
+        "NÃO tentes confirmar a autenticidade legal do documento — isso não é possível nem é o teu papel. "
+        "Isto é só uma verificação preliminar de forma/tipo para ajudar o utilizador a não se esquecer de nada. "
+        "Sê direto e claro, em Português de Portugal. No fim, diz também se falta carregar algum dos documentos exigidos "
+        "que não foram fornecidos."
+    ]
+
+    nomes_documentos = []
+    for nome_doc, ficheiro in ficheiros_carregados.items():
+        if ficheiro is None:
+            continue
+        nomes_documentos.append(nome_doc)
+        try:
+            dados_bytes = ficheiro.getvalue()
+            mime = ficheiro.type or "application/octet-stream"
+            partes.append(f"\n--- Documento carregado para: '{nome_doc}' ---")
+            partes.append({"mime_type": mime, "data": dados_bytes})
+        except Exception as e:
+            logging.error(f"Erro ao ler ficheiro carregado '{nome_doc}': {e}")
+
+    if not nomes_documentos:
+        return "Nenhum documento foi carregado ainda."
+
+    try:
+        model_verificacao = genai.GenerativeModel("gemini-3.5-flash")
+        resposta = model_verificacao.generate_content(partes, request_options={"timeout": 40})
+        logging.info(f"Verificação de documentos executada para tipologia '{tipologia}' ({len(nomes_documentos)} ficheiro(s)). Conteúdo dos documentos NÃO fica registado em log.")
+        return resposta.text
+    except Exception as e:
+        logging.error(f"Erro na verificação de documentos: {e}")
+        return f"Não foi possível verificar os documentos neste momento: {e}"
+
+def renderizar_pedido_passe():
+    st.subheader("🎫 Pedido de Passe — Guimabus")
+    st.info(
+        "⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. "
+        "**Não é um canal oficial de submissão à Guimabus** — depois de confirmares aqui que os teus "
+        "documentos parecem corretos, ainda precisas de os entregar/carregar através dos canais oficiais "
+        "da Guimabus (loja física ou formulário oficial). "
+        "**Os documentos que carregares aqui não são guardados** — são analisados em memória e descartados "
+        "logo a seguir; não ficam gravados em nenhum ficheiro, base de dados ou log desta aplicação."
+    )
+
+    tipologia_escolhida = st.selectbox("Escolhe a tipologia do passe que pretendes pedir:", list(TIPOLOGIAS_PASSE.keys()))
+    info = TIPOLOGIAS_PASSE[tipologia_escolhida]
+
+    st.markdown(f"**Descrição:** {info['descricao']}")
+    st.markdown(f"**Preço:** {info['preco']}  |  **Custo do cartão:** {info['custo_cartao']}")
+    st.caption(f"⏰ {info['prazo']}")
+
+    st.markdown("**Documentos necessários para esta tipologia:**")
+    ficheiros_carregados = {}
+    for i, nome_doc in enumerate(info["documentos"]):
+        ficheiros_carregados[nome_doc] = st.file_uploader(
+            f"📄 {nome_doc}",
+            type=["pdf", "png", "jpg", "jpeg"],
+            key=f"upload_passe_{tipologia_escolhida}_{i}"
+        )
+
+    if st.button("🔍 Verificar documentos carregados", use_container_width=True):
+        algum_carregado = any(f is not None for f in ficheiros_carregados.values())
+        if not algum_carregado:
+            st.warning("Carrega pelo menos um documento antes de pedir a verificação.")
+        else:
+            with st.spinner("A analisar os documentos (em memória, sem gravar nada)..."):
+                resultado = verificar_documentos_passe(tipologia_escolhida, ficheiros_carregados)
+            st.markdown("### Resultado da verificação preliminar")
+            st.markdown(resultado)
+            st.caption("Lembra-te: esta verificação é só um apoio automático e não substitui a validação oficial da Guimabus.")
+
 # --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO ---
 def renderizar_jogo():
     top_scores = obter_top_10()
@@ -709,6 +880,15 @@ with st.sidebar:
         st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
     st.divider()
+
+    st.subheader("🎫 Títulos de Transporte")
+    if "passe_ativo" not in st.session_state:
+        st.session_state.passe_ativo = False
+    texto_botao_passe = "Fechar Pedido de Passe X" if st.session_state.passe_ativo else "Pedir Passe 🎫"
+    if st.button(texto_botao_passe, use_container_width=True):
+        st.session_state.passe_ativo = not st.session_state.passe_ativo
+        st.rerun()
+    st.divider()
     
     # SECÇÃO: CONTACTO DIRETO E RECRUTAMENTO
     st.sidebar.subheader("👨‍💻 Desenvolvedor")
@@ -782,6 +962,9 @@ with st.sidebar:
 if st.session_state.jogo_ativo:
     renderizar_jogo()
 
+if st.session_state.get("passe_ativo"):
+    renderizar_pedido_passe()
+
 # Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
     avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
@@ -845,6 +1028,8 @@ if prompt:
                 - obter_dados_guimabus: estado em tempo real da frota (autocarros em circulação/atrasos). Aceita um "route_id".
                 - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica (precisa do ID numérico).
                 - consultar_cache_horario_linha: consulta a cache local da base de dados SQLite para ler os horários e tabelas fixas de uma determinada linha (ex: "101"). Use esta ferramenta sempre que o utilizador perguntar pelos horários planeados/fixos ou itinerários de uma linha específica.
+
+                Se o utilizador perguntar sobre tipologias de passe, preços/tarifário, ou como pedir um passe, responde com base na Knowledge Base (tens um ficheiro com todas as tipologias e a tabela tarifária completa). Se quiser efetivamente PEDIR um passe e carregar documentos, informa-o que existe um formulário dedicado na barra lateral ("🎫 Pedir Passe") para isso — não tentes processar documentos através do chat de texto normal.
 
                 REGRAS IMPORTANTES para usar estas ferramentas:
                 1. Chama NO MÁXIMO uma ferramenta por pergunta.
