@@ -229,7 +229,7 @@ def obter_dados_guimabus(route_id: str = None):
 
         if count_com_atraso > 0:
             media = total_atraso / count_com_atraso
-            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
+            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f}ext minutos. ---"
         return resumo
     except Exception as e:
         return f"Erro na ligação ao tracking: {e}"
@@ -271,38 +271,48 @@ def obter_horarios_paragem(stop_id: str):
                     resumo += f"- Linha {linha}{destino_txt}: {eta_txt}\n"
                 return resumo
         except Exception:
-            pass # Se falhar a API ou não trouxer nada, cai direto no motor de busca interno em SQLite abaixo
+            pass # Se falhar a API ou der sem previsão, cai direto no motor de busca inteligente abaixo
 
-    # --- MOTOR DE BUSCA EM CACHE (Mapeamento inteligente por texto para descobrir as linhas) ---
+    # --- NOVO MOTOR DE BUSCA EM CACHE POR MÚLTIPLAS PALAVRAS-CHAVE ---
     try:
+        # Remove termos comuns que possam poluir a pesquisa estruturada
+        termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho)\b', '', origem_texto).split()
+        if not termos_pesquisa:
+            termos_pesquisa = [origem_texto]
+
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
-        # Faz uma pesquisa SQL para encontrar todas as linhas onde o texto do PDF contém o nome da paragem
-        cursor.execute("SELECT linha, conteudo_txt FROM cache_horarios WHERE conteudo_txt LIKE ?", (f"%{origem_texto}%",))
+        
+        # Constrói dinamicamente uma cláusula WHERE que força a correspondência de TODAS as palavras-chave (ex: "vaca" AND "negra")
+        condicoes = " AND ".join(["conteudo_txt LIKE ?" for _ in termos_pesquisa])
+        valores = [f"%{termo}%" for termo in termos_pesquisa]
+        
+        query_sql = f"SELECT linha, conteudo_txt FROM cache_horarios WHERE {condicoes}"
+        cursor.execute(query_sql, valores)
         linhas_encontradas = cursor.fetchall()
         conn.close()
         
         if linhas_encontradas:
-            resultado_busca = f"Varri os horários em cache e descobri que as seguintes linhas passam por '{stop_id}':\n"
+            resultado_busca = f"Varri a cache de horários local e identifiquei com sucesso as linhas que contêm referências a '{stop_id}':\n"
             for row in linhas_encontradas:
                 num_linha = row[0]
                 texto_completo = row[1]
                 
-                # Extrai apenas um pequeno pedaço em redor da paragem para o Gemini ver os horários daquela linha
+                # Extrai as linhas do texto plano para isolar tabelas e rotas relevantes
                 linhas_texto = texto_completo.split("\n")
                 trecho_relevante = []
                 for l in linhas_texto:
-                    if origem_texto in l.lower() or any(palavra in l.lower() for palavra in origem_texto.split()):
+                    if any(termo in l.lower() for termo in termos_pesquisa) or "página" in l.lower() or "tabela" in l.lower():
                         trecho_relevante.append(l)
                 
-                contexto_linha = "\n".join(trecho_relevante[:15]) # primeiros 15 horários/linhas encontrados
-                resultado_busca += f"\n--- LINHA {num_linha} ---\n{contexto_linha}\n"
+                contexto_linha = "\n".join(trecho_relevante[:20])
+                resultado_busca += f"\n--- MAPEAMENTO AUTOMÁTICO DETETADO: LINHA {num_linha} ---\n{contexto_linha}\n"
             
-            resultado_busca += "\nUsa esta informação extraída diretamente dos horários em cache para responder ao utilizador."
+            resultado_busca += "\nAnalise as tabelas e linhas extraídas acima. Deves responder diretamente indicando quais as linhas encontradas (ex: Linha 12, 14, etc.) e extrair os horários planejados para hoje."
             return resultado_busca
             
     except Exception as e_db:
-        logging.error(f"Erro no varrimento de texto em BD: {e_db}")
+        logging.error(f"Erro no varrimento avançado de texto em BD: {e_db}")
 
     return f"Não foi possível obter informação em tempo real nem encontrar registos em cache para a localização '{stop_id}'."
 
@@ -323,17 +333,10 @@ def sincronizar_todos_horarios_guimabus():
         links_pdf = {}
         for link in soup.find_all('a', href=True):
             href = link['href']
-            # Captura os links binários escondidos nas abas de colapso do WordPress
             if ".pdf" in href and "horario" in href.lower():
                 match = re.search(r'linha-([a-z0-9]+)', href.lower())
                 if match:
                     linha_id = match.group(1).upper()
-                    # IMPORTANTE: a página lista primeiro os horários "Diurnos e Noturnos" (os do
-                    # dia-a-dia) e só depois os horários especiais de Natal/Páscoa para as mesmas
-                    # linhas. Sem esta verificação, o segundo link (o de Natal) sobrescrevia
-                    # silenciosamente o primeiro (o normal) no dicionário, e ficávamos a guardar
-                    # o horário de época festiva em vez do horário do dia-a-dia. Ao só gravar na
-                    # primeira ocorrência, garantimos que fica o horário "Diurnos e Noturnos".
                     if linha_id not in links_pdf:
                         links_pdf[linha_id] = href
         
@@ -350,8 +353,6 @@ def sincronizar_todos_horarios_guimabus():
         for linha_id, url_pdf in links_pdf.items():
             sucesso = False
             ultimo_erro = None
-            # Até 2 tentativas por linha — falhas de rede/timeout pontuais (muito comuns ao
-            # fazer ~60 pedidos seguidos ao mesmo servidor) não deviam perder a linha inteira.
             for tentativa in range(2):
                 try:
                     pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
@@ -363,16 +364,10 @@ def sincronizar_todos_horarios_guimabus():
                     texto_extraido = []
                     with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
                         for idx, pagina in enumerate(pdf.pages):
-                            # layout=True preserva a posição horizontal do texto — sem isto, colunas
-                            # lado a lado (dias úteis / sábados / domingos) ficam embaralhadas, o que
-                            # fazia o agente só conseguir ler com confiança a coluna mais simples
-                            # (normalmente a de fim de semana, que tem menos horários).
                             texto_pag = pagina.extract_text(layout=True)
                             if texto_pag:
                                 texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
 
-                            # Reforço: extração estruturada de tabelas, para os casos em que o texto
-                            # corrido ainda assim sai confuso.
                             try:
                                 tabelas = pagina.extract_tables()
                                 for t_idx, tabela in enumerate(tabelas):
@@ -402,8 +397,6 @@ def sincronizar_todos_horarios_guimabus():
                 linhas_falhadas.append(linha_id)
                 logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
 
-            # Pequena pausa entre pedidos para não sobrecarregar/ser bloqueado pelo servidor —
-            # ~60 pedidos seguidos sem pausa é um padrão que muitos servidores WordPress limitam.
             time.sleep(0.4)
 
         conn.commit()
@@ -421,15 +414,11 @@ def sincronizar_todos_horarios_guimabus():
         return error_msg
 
 def consultar_cache_horario_linha(linha_id: str):
-    """Permite ao Agente ler instantaneamente os horários fixos de uma linha guardada."""
     try:
         entrada = str(linha_id).strip().upper()
         if not entrada:
             return "É necessário indicar o número da linha."
 
-        # As linhas no site vêm com zeros à esquerda (ex: "012", "003"), mas o utilizador
-        # (ou o próprio modelo) pode escrever só "12" ou "3". Sem isto, a consulta exata
-        # falhava sempre que faltasse/sobrasse um zero, mesmo com a linha já em cache.
         candidatos = [entrada]
         if entrada.isdigit():
             sem_zeros = entrada.lstrip('0') or '0'
@@ -444,7 +433,7 @@ def consultar_cache_horario_linha(linha_id: str):
         resultado = None
         for candidato in candidatos:
             cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (candidato,))
-            resultado = resultado = cursor.fetchone()
+            resultado = cursor.fetchone()
             if resultado:
                 break
         conn.close()
@@ -464,7 +453,6 @@ def len_knowledge_base():
     return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
 
 def obter_idade_cache_horarios_dias():
-    """Devolve há quantos dias foi a sincronização geral mais recente, ou None se nunca correu."""
     try:
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -480,23 +468,19 @@ def obter_idade_cache_horarios_dias():
         return None
 
 def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
-    """Corre a sincronização geral sozinha (sem precisar de um admin clicar), mas só quando a
-    cache nunca foi preenchida ou já tem mais de 'limite_dias' — os horários da Guimabus não
-    mudam de um dia para o outro, por isso não faz sentido repetir isto a cada visita."""
     if st.session_state.get("sync_automatico_tentado_nesta_sessao"):
-        return  # no máximo uma tentativa por sessão de utilizador, para não atrasar navegação
+        return
     st.session_state.sync_automatico_tentado_nesta_sessao = True
 
     idade_dias = obter_idade_cache_horarios_dias()
     if idade_dias is not None and idade_dias < limite_dias:
-        return  # cache ainda fresca, não faz nada
+        return
 
-    with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez em dias — só demora uma vez, aguarda um pouco..."):
+    with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez in dias — só demora uma vez, aguarda um pouco..."):
         resultado = sincronizar_todos_horarios_guimabus()
         logging.info(f"Sincronização automática executada: {resultado}")
 
 # --- DADOS DE REFERÊNCIA: TIPOLOGIAS DE PASSE E DOCUMENTOS EXIGIDOS ---
-# Fonte: https://guimabus.pt/titulos/ (consultado e confirmado manualmente).
 TIPOLOGIAS_PASSE = {
     "Mensal": {
         "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
@@ -585,10 +569,6 @@ TIPOLOGIAS_PASSE = {
 }
 
 def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
-    """Envia os documentos carregados (em memória, nunca gravados em disco/BD) ao Gemini para
-    uma verificação PRELIMINAR de que o tipo de documento parece corresponder ao exigido.
-    Isto NÃO é uma validação oficial nem legal — só um apoio para o utilizador conferir antes
-    de entregar os documentos reais à Guimabus."""
     info = TIPOLOGIAS_PASSE[tipologia]
     partes = [
         f"Vais rever documentos carregados por um utilizador que pediu um passe do tipo '{tipologia}'.\n"
@@ -622,7 +602,7 @@ def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
     try:
         model_verificacao = genai.GenerativeModel("gemini-3.5-flash")
         resposta = model_verificacao.generate_content(partes, request_options={"timeout": 40})
-        logging.info(f"Verificação de documentos executada para tipologia '{tipologia}' ({len(nomes_documentos)} ficheiro(s)). Conteúdo dos documentos NÃO fica registado em log.")
+        logging.info(f"Verificação de documentos executada para tipologia '{tipologia}' ({len(nomes_documentos)} ficheiro(s)). Conteúdo dos documentos NÃO fica registado in log.")
         return resposta.text
     except Exception as e:
         logging.error(f"Erro na verificação de documentos: {e}")
@@ -902,7 +882,7 @@ MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite*
 
 Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
-2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos in inglês.
+2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
 3. **Modo Helpdesk Técnico:** Envia-me um problem de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
 Como posso ajudar hoje?"""
@@ -1084,7 +1064,7 @@ if prompt:
 
                 REGRAS DE OURO PARA MAIOR AUTOMAÇÃO:
                 1. Se o utilizador perguntar "Quais as linhas que passam no local X para ir para o local Y" ou apenas "Estou no local X, como vou para Y?", deves chamar OBRIGATORIAMENTE a ferramenta `obter_horarios_paragem` passando o nome da paragem de origem "X".
-                2. Com o resultado retornado por esta ferramenta (que varre dinamicamente a cache local de texto), tu irás descobrir imediatamente no próprio output quais as linhas que contêm essa paragem e o destino. Responde logo com os horários da linha encontrada, calculando os minutos em falta com base na hora atual do sistema. Nunca peças ao utilizador para adivinhar a linha se ela já puder ser descoberta por texto!
+                2. Com o resultado retornado por esta ferramenta (que varre dinamicamente a cache local de texto por palavras-chave), tu irás descobrir imediatamente no próprio output quais as linhas que contêm essa paragem e o destino. Responde logo com os horários da linha encontrada, calculando os minutos em falta com base na hora atual do sistema. Nunca peças ao utilizador para adivinhar a linha se ela já puder ser descoberta por texto!
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. Isto inclui: números de autocarro, atrasos, percursos, horários, nomes/números de linhas, E TAMBÉM datas e dias da semana. Para saber que dia é "hoje" ou "amanhã", usa SEMPRE e apenas a informação em "[DATA E HORA ATUAL DO SISTEMA]" fornecida no início do contexto — nunca assumas ou inventes uma data a partir de memória. NUNCA digas que "consultaste" uma ferramenta, cache ou base de dados que não chamaste de facto. Se as ferramentas devolverem uma lista vazia, um erro, ou "não existem horários em cache", e a Knowledge Base também não tiver essa informação, diz clara e honestamente ao utilizador que não tens essa informação disponível neste momento — nunca substituas por uma resposta que pareça plausível mas seja inventada. É preferível admitir "não sei" do que dar uma resposta errada com aparência de certeza."""
@@ -1095,7 +1075,7 @@ if prompt:
                 
                 PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
                 O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
-                Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                Independentemente do problem de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
                 'O Celso faria desta maneira para resolver este problema de IT:'
                 Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas applied com precisão."""
 
