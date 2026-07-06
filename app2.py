@@ -276,7 +276,7 @@ def obter_horarios_paragem(stop_id: str):
     # --- NOVO MOTOR DE BUSCA EM CACHE POR MÚLTIPLAS PALAVRAS-CHAVE ---
     try:
         # Remove termos comuns que possam poluir a pesquisa estruturada
-        termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho)\b', '', origem_texto).split()
+        termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', origem_texto).split()
         if not termos_pesquisa:
             termos_pesquisa = [origem_texto]
 
@@ -305,10 +305,9 @@ def obter_horarios_paragem(stop_id: str):
                     if any(termo in l.lower() for termo in termos_pesquisa) or "página" in l.lower() or "tabela" in l.lower():
                         trecho_relevante.append(l)
                 
-                contexto_linha = "\n".join(trecho_relevante[:20])
+                contexto_linha = "\n".join(trecho_relevante[:25])
                 resultado_busca += f"\n--- MAPEAMENTO AUTOMÁTICO DETETADO: LINHA {num_linha} ---\n{contexto_linha}\n"
             
-            resultado_busca += "\nAnalise as tabelas e linhas extraídas acima. Deves responder diretamente indicando quais as linhas encontradas (ex: Linha 12, 14, etc.) e extrair os horários planejados para hoje."
             return resultado_busca
             
     except Exception as e_db:
@@ -393,9 +392,10 @@ def sincronizar_todos_horarios_guimabus():
                     time.sleep(1)
                     continue
 
-            if not sucesso:
-                linhas_falhadas.append(linha_id)
-                logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
+            if not Bird:
+                if not sucesso:
+                    linhas_falhadas.append(linha_id)
+                    logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
 
             time.sleep(0.4)
 
@@ -511,7 +511,7 @@ TIPOLOGIAS_PASSE = {
         "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CMG prerequisito preenchido", "Fotocópia do Passe CP", "Fatura/talão de pagamento mensal com indicação Origem/Destino Guimarães"],
     },
     "Universitário Residente": {
-        "descricao": "Estudantes universitários residentes em Guimarães.",
+        "descricao": "Estudantes universitários residentes in Guimarães.",
         "preco": "Gratuito",
         "custo_cartao": "5€",
         "prazo": "Até ao dia 15 de cada mês.",
@@ -973,7 +973,7 @@ with st.sidebar:
             if os.path.exists("auditoria_agente.log"):
                 with open("auditoria_agente.log", "r", encoding="utf-8") as f:
                     linhas_log = f.readlines()[-10:]
-                    for linha in linhas_log: st.caption(linha.strip())
+                    for linea in linhas_log: st.caption(linea.strip())
 
         with st.sidebar.expander("🗄️ Histórico Permanente Global (BD) — todas as sessões"):
             if os.path.exists("agente_memoria.db"):
@@ -1114,7 +1114,16 @@ if prompt:
                     f"Amanhã será {_formatar_data_pt(amanha)}.]"
                 )
 
-                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
+                # --- INTERCEÇÃO DE PARAGENS DIRETAMENTE EM PYTHON (PRÉ-ROUTING PREVENTIVO) ---
+                contexto_intercecao = ""
+                # Se o prompt do utilizador focar uma paragem conhecida ou requisição de rotas
+                if any(p in prompt_normalizado for p in ["vaca negra", "hospital", "central", "universidade", "estacao", "paragem", "linhas"]):
+                    # Extrai o termo geográfico para a pesquisa por tokens
+                    busca_local = "vaca negra" if "vaca negra" in prompt_normalizado else prompt
+                    dados_extraidos = obter_horarios_paragem(busca_local)
+                    contexto_intercecao = f"\n[DADOS DE CACHE DISPARADOS COMPLEMENTARES: {dados_extraidos}]\n"
+
+                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}{contexto_intercecao}\n\nUser Prompt: {prompt}"
                 
                 ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha]
                 
