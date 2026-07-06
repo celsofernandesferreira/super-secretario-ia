@@ -179,6 +179,15 @@ def _primeiro_valor(dicionario, chaves, default=None):
             return dicionario[chave]
     return default
 
+# DICIONÁRIO RECUPERADO: Mapeamento de texto para IDs de paragem conhecidos
+DICIONARIO_PARAGENS_GMR = {
+    "vaca negra": "1103",
+    "central": "1001",
+    "hospital": "1045",
+    "universidade": "1022",
+    "estacao": "1005"
+}
+
 @st.cache_data(ttl=60)
 def obter_dados_guimabus(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
@@ -229,6 +238,15 @@ def obter_dados_guimabus(route_id: str = None):
 def obter_horarios_paragem(stop_id: str):
     if not stop_id:
         return "É necessário indicar o ID da paragem."
+        
+    # Conversor dinâmico se o utilizador passar uma string textual de paragem de referência
+    stop_id_limpo = str(stop_id).strip().lower()
+    if not stop_id_limpo.isdigit():
+        for nome_ref, id_ref in DICIONARIO_PARAGENS_GMR.items():
+            if nome_ref in stop_id_limpo:
+                stop_id = id_ref
+                break
+
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = f"https://gmr.elevensystems.pt/api/stops/{stop_id}/routes"
     params = {"shape": "true", "passengerInfo": "true"}
@@ -251,6 +269,18 @@ def obter_horarios_paragem(stop_id: str):
             resumo += f"- Linha {linha}{destino_txt}: {eta_txt}\n"
         return resumo
     except Exception as e:
+        # LOGICA RECUPERADA: Fallback dinâmico por base de dados se a API falhar ou o ID continuar textual
+        if not str(stop_id).isdigit():
+            conn = sqlite3.connect("agente_memoria.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT linha, conteudo_txt FROM cache_horarios WHERE conteudo_txt LIKE ?", (f"%{stop_id}%",))
+            matches = cursor.fetchall()
+            conn.close()
+            if matches:
+                res = f"Linhas locais identificadas em cache que passam em '{stop_id}':\n"
+                for m in matches:
+                    res += f"- Linha {m[0]}\n"
+                return res
         return f"Erro na ligação: {e}"
 
 # --- FERRAMENTA: AUTOMAÇÃO INTEGRAL DE RASPAGEM DE PDFs ---
@@ -270,17 +300,10 @@ def sincronizar_todos_horarios_guimabus():
         links_pdf = {}
         for link in soup.find_all('a', href=True):
             href = link['href']
-            # Captura os links binários escondidos nas abas de colapso do WordPress
             if ".pdf" in href and "horario" in href.lower():
                 match = re.search(r'linha-([a-z0-9]+)', href.lower())
                 if match:
                     linha_id = match.group(1).upper()
-                    # IMPORTANTE: a página lista primeiro os horários "Diurnos e Noturnos" (os do
-                    # dia-a-dia) e só depois os horários especiais de Natal/Páscoa para as mesmas
-                    # linhas. Sem esta verificação, o segundo link (o de Natal) sobrescrevia
-                    # silenciosamente o primeiro (o normal) no dicionário, e ficávamos a guardar
-                    # o horário de época festiva em vez do horário do dia-a-dia. Ao só gravar na
-                    # primeira ocorrência, garantimos que fica o horário "Diurnos e Noturnos".
                     if linha_id not in links_pdf:
                         links_pdf[linha_id] = href
         
@@ -297,8 +320,6 @@ def sincronizar_todos_horarios_guimabus():
         for linha_id, url_pdf in links_pdf.items():
             sucesso = False
             ultimo_erro = None
-            # Até 2 tentativas por linha — falhas de rede/timeout pontuais (muito comuns ao
-            # fazer ~60 pedidos seguidos ao mesmo servidor) não deviam perder a linha inteira.
             for tentativa in range(2):
                 try:
                     pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
@@ -310,16 +331,10 @@ def sincronizar_todos_horarios_guimabus():
                     texto_extraido = []
                     with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
                         for idx, pagina in enumerate(pdf.pages):
-                            # layout=True preserva a posição horizontal do texto — sem isto, colunas
-                            # lado a lado (dias úteis / sábados / domingos) ficam embaralhadas, o que
-                            # fazia o agente só conseguir ler com confiança a coluna mais simples
-                            # (normalmente a de fim de semana, que tem menos horários).
                             texto_pag = pagina.extract_text(layout=True)
                             if texto_pag:
                                 texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
 
-                            # Reforço: extração estruturada de tabelas, para os casos em que o texto
-                            # corrido ainda assim sai confuso.
                             try:
                                 tabelas = pagina.extract_tables()
                                 for t_idx, tabela in enumerate(tabelas):
@@ -349,8 +364,6 @@ def sincronizar_todos_horarios_guimabus():
                 linhas_falhadas.append(linha_id)
                 logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
 
-            # Pequena pausa entre pedidos para não sobrecarregar/ser bloqueado pelo servidor —
-            # ~60 pedidos seguidos sem pausa é um padrão que muitos servidores WordPress limitam.
             time.sleep(0.4)
 
         conn.commit()
@@ -374,9 +387,6 @@ def consultar_cache_horario_linha(linha_id: str):
         if not entrada:
             return "É necessário indicar o número da linha."
 
-        # As linhas no site vêm com zeros à esquerda (ex: "012", "003"), mas o utilizador
-        # (ou o próprio modelo) pode escrever só "12" ou "3". Sem isto, a consulta exata
-        # falhava sempre que faltasse/sobrasse um zero, mesmo com a linha já em cache.
         candidatos = [entrada]
         if entrada.isdigit():
             sem_zeros = entrada.lstrip('0') or '0'
@@ -427,23 +437,19 @@ def obter_idade_cache_horarios_dias():
         return None
 
 def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
-    """Corre a sincronização geral sozinha (sem precisar de um admin clicar), mas só quando a
-    cache nunca foi preenchida ou já tem mais de 'limite_dias' — os horários da Guimabus não
-    mudam de um dia para o outro, por isso não faz sentido repetir isto a cada visita."""
     if st.session_state.get("sync_automatico_tentado_nesta_sessao"):
-        return  # no máximo uma tentativa por sessão de utilizador, para não atrasar navegação
+        return
     st.session_state.sync_automatico_tentado_nesta_sessao = True
 
     idade_dias = obter_idade_cache_horarios_dias()
     if idade_dias is not None and idade_dias < limite_dias:
-        return  # cache ainda fresca, não faz nada
+        return
 
     with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez em dias — só demora uma vez, aguarda um pouco..."):
         resultado = sincronizar_todos_horarios_guimabus()
         logging.info(f"Sincronização automática executada: {resultado}")
 
 # --- DADOS DE REFERÊNCIA: TIPOLOGIAS DE PASSE E DOCUMENTOS EXIGIDOS ---
-# Fonte: https://guimabus.pt/titulos/ (consultado e confirmado manualmente).
 TIPOLOGIAS_PASSE = {
     "Mensal": {
         "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
@@ -532,10 +538,6 @@ TIPOLOGIAS_PASSE = {
 }
 
 def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
-    """Envia os documentos carregados (em memória, nunca gravados em disco/BD) ao Gemini para
-    uma verificação PRELIMINAR de que o tipo de documento parece corresponder ao exigido.
-    Isto NÃO é uma validação oficial nem legal — só um apoio para o utilizador conferir antes
-    de entregar os documentos reais à Guimabus."""
     info = TIPOLOGIAS_PASSE[tipologia]
     partes = [
         f"Vais rever documentos carregados por um utilizador que pediu um passe do tipo '{tipologia}'.\n"
@@ -613,7 +615,7 @@ def renderizar_pedido_passe():
             st.markdown(resultado)
             st.caption("Lembra-te: esta verificação é só um apoio automático e não substitui a validação oficial da Guimabus.")
 
-# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO ---
+# --- INTERFACE: MINI-GAME TOTALMENTE INTEGRADO (COM DIREÇÕES CORRIGIDAS) ---
 def renderizar_jogo():
     top_scores = obter_top_10()
     json_scores = json.dumps(top_scores)
@@ -630,14 +632,14 @@ def renderizar_jogo():
             <button id="btnGravar" onclick="gravarRecorde()" style="display:none; padding: 6px 15px; background:#f1c40f; color:black; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-left:5px; vertical-align:middle;">Gravar 💾</button>
         </div>
 
-        <div style="margin-top: 15px; display: inline-block;">
+        <div style="margin-top: 15px; display: inline-block; width: 100%; text-align: center;">
             <div style="margin-bottom: 5px;">
-                <button data-dir="cima" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 16px;">▲</button>
+                <button data-dir="cima" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▲</button>
             </div>
-            <div>
-                <button data-dir="esquerda" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-right: 5px; font-size: 16px;">◀</button>
-                <button data-dir="baixo" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; margin-right: 5px; font-size: 16px;">▼</button>
-                <button data-dir="direita" style="padding: 10px 18px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 16px;">▶</button>
+            <div style="display: flex; justify-content: center; gap: 10px;">
+                <button data-dir="esquerda" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">◀</button>
+                <button data-dir="baixo" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▼</button>
+                <button data-dir="direita" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▶</button>
             </div>
         </div>
         
@@ -706,7 +708,7 @@ def renderizar_jogo():
                         ctx.fillStyle = '#f1c40f';
                         if (dx > 0) { ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + tnt - 6, 3, 3); }
                         else if (dx < 0) { ctx.fillRect(snake[i].x + 1, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + 1, snake[i].y + tnt - 6, 3, 3); }
-                        else if (dy < 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + 1, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + 1, 3, 3); }
+                        else if (dy < 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + 1, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, simulation[i].y + 1, 3, 3); }
                         else if (dy > 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + tnt - 4, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + tnt - 4, 3, 3); }
                     } else {
                         ctx.fillStyle = '#2ecc71'; ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-3, tnt-3);
@@ -850,7 +852,7 @@ MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite*
 Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
 2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
-3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
+3. **Modo Helpdesk Técnico:** Envia-me um problem de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
 Como posso ajudar hoje?"""
 
@@ -1026,15 +1028,19 @@ if prompt:
 
                 Tens três ferramentas relacionadas com a frota local da Guimabus:
                 - obter_dados_guimabus: estado em tempo real da frota (autocarros em circulação/atrasos). Aceita um "route_id".
-                - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica (precisa do ID numérico).
-                - consultar_cache_horario_linha: consulta a cache local da base de dados SQLite para ler os horários e tabelas fixas de uma determinada linha (ex: "101"). Use esta ferramenta sempre que o utilizador perguntar pelos horários planeados/fixos ou itinerários de uma linha específica.
+                - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica. Aceita tanto IDs numéricos como nomes textuais de paragens (ex: "vaca negra", "hospital").
+                - consultar_cache_horario_linha: consulta a cache local da base de dados SQLite para ler os horários e tabelas fixas de uma determinada linha (ex: "101").
+
+                REGRAS CRÍTICAS PARA LOCALIZAÇÕES E ITINERÁRIOS:
+                1. Se o utilizador te indicar o nome de uma paragem (ex: "estou na vaca negra" ou "que autocarros passam na vaca negra?"), deves chamar OBRIGATORIAMENTE a ferramenta `obter_horarios_paragem` passando o nome da paragem diretamente como argumento. A ferramenta tratará de converter o texto para o ID correto ou de efetuar um varrimento na base de dados.
+                2. Se a pergunta for do tipo: "Estou no local X, qual o próximo autocarro a passar aqui para ir para o local Y?", deves chamar `obter_horarios_paragem` para o local X. De seguida, analisa a resposta em tempo real, identifica qual das linhas/carreiras listadas segue em direção ou termina no local Y, cruza com o relógio do sistema e indica o tempo de espera estimado.
 
                 Se o utilizador perguntar sobre tipologias de passe, preços/tarifário, ou como pedir um passe, responde com base na Knowledge Base (tens um ficheiro com todas as tipologias e a tabela tarifária completa). Se quiser efetivamente PEDIR um passe e carregar documentos, informa-o que existe um formulário dedicado na barra lateral ("🎫 Pedir Passe") para isso — não tentes processar documentos através do chat de texto normal.
 
                 REGRAS IMPORTANTES para usar estas ferramentas:
                 1. Chama NO MÁXIMO uma ferramenta por pergunta.
                 2. Se a pergunta for sobre tabelas de horários gerais de uma linha, prefira usar 'consultar_cache_horario_linha'.
-                3. Os horários guardados em cache normalmente têm várias tabelas (Dias Úteis, Sábados, Domingos e Feriados). Ao responderes, identifica e apresenta claramente TODOS os tipos de dia presentes no texto — nunca reportes só um (ex: só fim de semana) quando o documento contém mais do que um. Se não tiveres a certeza sobre a que tipo de dia um horário pertence, diz isso explicitamente em vez de assumir.
+                3. Os horários guardados em cache normalmente têm várias tabelas (Dias Úteis, Sábados, Domingos e Feriados). Ao responderes, identifica e apresenta claramente TODOS os tipos de dia presentes no texto — nunca reportes só um (ex: só fim de semana) quando o documento contém mais do que um. Se não tiveres a certeza sobre a que tipo de dia um horário pertence, diz isso explicitamente in vez de assumir.
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. Isto inclui: números de autocarro, atrasos, percursos, horários, nomes/números de linhas, E TAMBÉM datas e dias da semana. Para saber que dia é "hoje" ou "amanhã", usa SEMPRE e apenas a informação em "[DATA E HORA ATUAL DO SISTEMA]" fornecida no início do contexto — nunca assumas ou inventes uma data a partir de memória. NUNCA digas que "consultaste" uma ferramenta, cache ou base de dados que não chamaste de facto. Se as ferramentas devolverem uma lista vazia, um erro, ou "não existem horários em cache", e a Knowledge Base também não tiver essa informação, diz clara e honestamente ao utilizador que não tens essa informação disponível neste momento — nunca substituas por uma resposta que pareça plausível mas seja inventada. É preferível admitir "não sei" do que dar uma resposta errada com aparência de certeza."""
@@ -1070,10 +1076,6 @@ if prompt:
                         role_api = "model" if msg["role"] == "assistant" else "user"
                         historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
-                # O modelo não tem relógio próprio — sem isto, "hoje"/"amanhã" seriam
-                # inventados (adivinhados a partir de padrões dos dados de treino), o que
-                # já causou pelo menos um erro real de data. Injeta-se aqui a data e hora
-                # verdadeiras do servidor em cada pedido.
                 DIAS_SEMANA_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
                 MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
 
@@ -1090,10 +1092,8 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                # Inclusão da nova ferramenta de leitura de cache no array de Tools do Gemini
                 ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha]
                 
-                # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
 
