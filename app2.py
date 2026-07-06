@@ -55,6 +55,27 @@ def inicializar_bd():
             ultima_atualizacao TEXT
         )
     """)
+    # Tabela: Cache das Tipologias de Passe (scraped de guimabus.pt/titulos/)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_titulos (
+            tipologia TEXT PRIMARY KEY,
+            descricao TEXT,
+            preco TEXT,
+            custo_cartao TEXT,
+            prazo TEXT,
+            documentos_json TEXT,
+            ultima_atualizacao TEXT
+        )
+    """)
+    # Tabela: Cache do Tarifário (scraped de guimabus.pt/tarifarios/, PDF)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_tarifario (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            url_pdf TEXT,
+            conteudo_txt TEXT,
+            ultima_atualizacao TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -229,7 +250,7 @@ def obter_dados_guimabus(route_id: str = None):
 
         if count_com_atraso > 0:
             media = total_atraso / count_com_atraso
-            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f}ext minutos. ---"
+            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
         return resumo
     except Exception as e:
         return f"Erro na ligação ao tracking: {e}"
@@ -273,7 +294,7 @@ def obter_horarios_paragem(stop_id: str):
         except Exception:
             pass # Se falhar a API ou der sem previsão, cai direto no motor de busca inteligente abaixo
 
-    # --- NOVO MOTOR DE BUSCA EM CACHE POR MÚLTIPLAS PALAVRAS-CHAVE ---
+    # --- MOTOR DE BUSCA EM CACHE POR MÚLTIPLAS PALAVRAS-CHAVE ---
     try:
         # Remove termos comuns que possam poluir a pesquisa estruturada
         termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', origem_texto).split()
@@ -392,10 +413,9 @@ def sincronizar_todos_horarios_guimabus():
                     time.sleep(1)
                     continue
 
-            if not Bird:
-                if not sucesso:
-                    linhas_falhadas.append(linha_id)
-                    logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
+            if not sucesso:
+                linhas_falhadas.append(linha_id)
+                logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
 
             time.sleep(0.4)
 
@@ -467,109 +487,283 @@ def obter_idade_cache_horarios_dias():
         logging.error(f"Erro ao verificar idade da cache de horários: {e}")
         return None
 
+def obter_idade_cache_titulos_dias():
+    """Devolve há quantos dias foi a última sincronização de títulos/tarifário, ou None se nunca correu."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos")
+        resultado = cursor.fetchone()
+        conn.close()
+        if not resultado or not resultado[0]:
+            return None
+        ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - ultima).days
+    except Exception as e:
+        logging.error(f"Erro ao verificar idade da cache de títulos: {e}")
+        return None
+
 def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
     if st.session_state.get("sync_automatico_tentado_nesta_sessao"):
         return
     st.session_state.sync_automatico_tentado_nesta_sessao = True
 
-    idade_dias = obter_idade_cache_horarios_dias()
-    if idade_dias is not None and idade_dias < limite_dias:
-        return
+    idade_horarios = obter_idade_cache_horarios_dias()
+    if idade_horarios is None or idade_horarios >= limite_dias:
+        with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez há dias — só demora uma vez, aguarda um pouco..."):
+            resultado = sincronizar_todos_horarios_guimabus()
+            logging.info(f"Sincronização automática de horários executada: {resultado}")
 
-    with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez in dias — só demora uma vez, aguarda um pouco..."):
-        resultado = sincronizar_todos_horarios_guimabus()
-        logging.info(f"Sincronização automática executada: {resultado}")
+    idade_titulos = obter_idade_cache_titulos_dias()
+    if idade_titulos is None or idade_titulos >= limite_dias:
+        with st.spinner("🔄 A atualizar tipologias de passe e tarifário — só demora uma vez, aguarda um pouco..."):
+            resultado = sincronizar_titulos_e_tarifario()
+            logging.info(f"Sincronização automática de títulos/tarifário executada: {resultado}")
 
-# --- DADOS DE REFERÊNCIA: TIPOLOGIAS DE PASSE E DOCUMENTOS EXIGIDOS ---
-TIPOLOGIAS_PASSE = {
+# --- SCRAPING DINÂMICO: TIPOLOGIAS DE PASSE E TARIFÁRIO ---
+# Em vez de dados fixos no código, isto vai sempre buscar à página oficial, porque as
+# tipologias, preços e documentos exigidos podem mudar (a Guimabus já mudou preços/regras
+# no passado sem aviso). Segue o mesmo padrão de cache + auto-sincronização dos horários.
+
+TIPOLOGIAS_PASSE_FALLBACK = {
     "Mensal": {
         "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
-        "preco": "Consultar tabela tarifária (varia por distância/zona — ver tarifarios/)",
+        "preco": "Consultar tabela tarifária",
         "custo_cartao": "5€",
         "prazo": "Só pode ser emitido ou carregado até ao dia 18 de cada mês.",
         "documentos": ["Cartão de Cidadão / Documento de identificação"],
     },
-    "Mensal CIM AVE 50%": {
-        "descricao": "Residentes na CIM do AVE (Cabeceiras de Basto, Fafe, Guimarães, Mondim de Basto, Póvoa de Lanhoso, Vieira do Minho, Vila Nova de Famalicão, Vizela).",
-        "preco": "50% de desconto sobre o passe mensal",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 18 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CIM AVE preenchido", "Comprovativo do domicílio fiscal (Portal das Finanças)"],
-    },
-    "Mensal CIM AVE 50% + 10% CMG": {
-        "descricao": "Residentes no Concelho de Guimarães.",
-        "preco": "60% de desconto sobre o passe mensal",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 15 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CIM AVE + 10% CMG preenchido", "Comprovativo do domicílio fiscal (Portal das Finanças)"],
-    },
-    "Mensal CP": {
-        "descricao": "Residentes e não residentes da CIM AVE, detentores do passe CP, com origem ou destino nas estações do concelho de Guimarães.",
-        "preco": "50% de desconto sobre a tabela tarifária",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 15 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CMG prerequisito preenchido", "Fotocópia do Passe CP", "Fatura/talão de pagamento mensal com indicação Origem/Destino Guimarães"],
-    },
-    "Universitário Residente": {
-        "descricao": "Estudantes universitários residentes in Guimarães.",
-        "preco": "Gratuito",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 15 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CMG preenchido", "Comprovativo do domicílio fiscal (Portal das Finanças)", "Comprovativo de matrícula no ensino superior"],
-    },
-    "Universitário Não Residente": {
-        "descricao": "Estudantes universitários não residentes no concelho de Guimarães.",
-        "preco": "Gratuito",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 15 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Requerimento CMG preenchido", "Declaração de domicílio fiscal (Portal das Finanças)", "Comprovativo de matrícula no ensino superior"],
-    },
-    "18+TP": {
-        "descricao": "Estudantes entre os 4 e os 18 anos (inclusive).",
-        "preco": "Gratuito",
-        "custo_cartao": "2,50€",
-        "prazo": "Até ao dia 15 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Formulário IMT preenchido"],
-    },
-    "23+TP": {
-        "descricao": "Estudantes até 23 anos (inclusive); alargado até 24 anos para cursos integrados específicos (Arquitetura e Urbanismo, Ciências Farmacêuticas, Medicina, Medicina Dentária, Medicina Veterinária).",
-        "preco": "Gratuito",
-        "custo_cartao": "2,50€",
-        "prazo": "Até ao dia 15 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Formulário IMT preenchido", "Certificado de matrícula (apenas para cursos integrados até 24 anos)"],
-    },
-    "Mobilidade Condicionada": {
-        "descricao": "Pessoas com grau de incapacidade igual ou superior a 60%. Desconto adicional de 25% sobre o PVP do passe PPMC (total 75% de desconto).",
-        "preco": "75% de desconto sobre o passe PPMC",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 18 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Cópia da Declaração/Cartão Municipal de Pessoa com Deficiência"],
-    },
-    "65+": {
-        "descricao": "Pessoas com mais de 65 anos, residentes no concelho de Guimarães, com Cartão Municipal 65+.",
-        "preco": "8,60€",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 18 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Cópia do Cartão Municipal de Idoso"],
-    },
-    "Reformado": {
-        "descricao": "Pessoas com reforma antecipada, idade entre 60 e 65 anos, pensão inferior ao salário mínimo nacional.",
-        "preco": "14,35€",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 18 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Cópia da Declaração dos serviços de ação social da CMG"],
-    },
-    "Antigo Combatente": {
-        "descricao": "Antigos combatentes ou viúvos de antigos combatentes.",
-        "preco": "Gratuito",
-        "custo_cartao": "5€",
-        "prazo": "Até ao dia 18 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de Identificação", "Comprovativo do domicílio fiscal (Portal das Finanças)", "Cópia do Cartão Antigo Combatente/Viúva", "Requerimento IMT preenchido"],
-    },
 }
+# ^ Fallback mínimo só para o formulário nunca ficar completamente vazio antes da primeira
+# sincronização bem-sucedida. Os dados reais e completos vêm sempre do scraping abaixo.
+
+def sincronizar_titulos_guimabus():
+    """Faz scraping de https://guimabus.pt/titulos/ e guarda cada tipologia de passe
+    (descrição, preço, custo do cartão, prazo, documentos exigidos) na cache local."""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    url = "https://guimabus.pt/titulos/"
+
+    try:
+        response = requests.get(url, headers=headers, timeout=12)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']):
+            tag.decompose()
+
+        texto_completo = soup.get_text(separator="\n")
+        linhas_texto = [l.strip() for l in texto_completo.split("\n")]
+        linhas_texto = [l for l in linhas_texto if l]
+        texto_normalizado = "\n".join(linhas_texto)
+
+        blocos = re.split(r'\nPASSE\n', "\n" + texto_normalizado)
+        blocos = [b for b in blocos[1:]]
+
+        if not blocos:
+            return "Não foi possível identificar nenhuma tipologia de passe na página (estrutura da página pode ter mudado)."
+
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tipologias_processadas = []
+
+        for bloco in blocos:
+            linhas_bloco = bloco.split("\n")
+            if not linhas_bloco:
+                continue
+            nome_tipologia = linhas_bloco[0].strip()
+            if not nome_tipologia:
+                continue
+
+            resto_texto = "\n".join(linhas_bloco[1:])
+
+            match_prazo = re.search(r'(S\u00f3 podem ser emitidos.*?\.)', resto_texto, re.IGNORECASE)
+            prazo = match_prazo.group(1).strip() if match_prazo else "Prazo não indicado na página."
+
+            match_preco = re.search(r'Pre\u00e7o:\s*(.+)', resto_texto)
+            if match_preco:
+                preco = match_preco.group(1).strip()
+            elif re.search(r'\bGRATUITO\b', resto_texto, re.IGNORECASE):
+                preco = "Gratuito"
+            else:
+                match_desconto = re.search(r'(\d{1,3}%\s*de desconto[^\n.]*\.)', resto_texto, re.IGNORECASE)
+                preco = match_desconto.group(1).strip() if match_desconto else "Consultar tabela tarifária"
+
+            match_cartao = re.search(r'Custo do cart\u00e3o:\s*([\d,]+\u20ac)', resto_texto)
+            custo_cartao = match_cartao.group(1).strip() if match_cartao else "Não indicado"
+
+            match_descricao = re.match(r'(.*?)(?:Pre\u00e7o:|GRATUITO|Gratuito|\*\*Documentos necess\u00e1rios)', resto_texto, re.DOTALL)
+            descricao = match_descricao.group(1).strip().replace("\n", " ") if match_descricao else ""
+
+            match_docs = re.search(r'\*\*Documentos necess\u00e1rios:\*\*(.*?)(?:S\u00f3 podem ser emitidos|$)', resto_texto, re.DOTALL)
+            documentos = []
+            if match_docs:
+                candidatos_doc = [d.strip() for d in match_docs.group(1).split("\n") if d.strip()]
+                for d in candidatos_doc:
+                    if re.match(r'^(Custo do cart\u00e3o|Pre\u00e7o)', d, re.IGNORECASE):
+                        continue
+                    documentos.append(d)
+            if not documentos:
+                documentos = ["Cartão de Cidadão / Documento de Identificação (verificar página oficial para lista completa)"]
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO cache_titulos (tipologia, descricao, preco, custo_cartao, prazo, documentos_json, ultima_atualizacao)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (nome_tipologia, descricao, preco, custo_cartao, prazo, json.dumps(documentos, ensure_ascii=False), timestamp_atual))
+            tipologias_processadas.append(nome_tipologia)
+
+        conn.commit()
+        conn.close()
+
+        msg = f"Sincronização de títulos concluída: {len(tipologias_processadas)} tipologias encontradas ({', '.join(tipologias_processadas)})."
+        logging.info(msg)
+        return msg
+
+    except Exception as e:
+        error_msg = f"Falha ao sincronizar títulos de passe: {e}"
+        logging.error(error_msg)
+        return error_msg
+
+def sincronizar_tarifario_guimabus():
+    """Vai a https://guimabus.pt/tarifarios/, encontra o PDF da tabela tarifária atual
+    (o nome do ficheiro muda todos os anos) e extrai o texto para a cache local."""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    url_pagina = "https://guimabus.pt/tarifarios/"
+
+    try:
+        response = requests.get(url_pagina, headers=headers, timeout=12)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        url_pdf = None
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            if ".pdf" in href.lower() and ("tarifa" in href.lower() or "tabela" in href.lower()):
+                url_pdf = href
+                break
+        if not url_pdf:
+            for link in soup.find_all('a', href=True):
+                if ".pdf" in link['href'].lower():
+                    url_pdf = link['href']
+                    break
+
+        if not url_pdf:
+            return "Não foi encontrado nenhum PDF de tarifário na página (estrutura pode ter mudado)."
+
+        pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
+        pdf_response.raise_for_status()
+
+        texto_extraido = []
+        with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
+            for idx, pagina in enumerate(pdf.pages):
+                texto_pag = pagina.extract_text(layout=True)
+                if texto_pag:
+                    texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
+                try:
+                    tabelas = pagina.extract_tables()
+                    for t_idx, tabela in enumerate(tabelas):
+                        linhas_tabela = ["\t".join(cell if cell else "" for cell in linha) for linha in tabela]
+                        texto_extraido.append(f"[PÁGINA {idx+1} - TABELA {t_idx+1}]\n" + "\n".join(linhas_tabela))
+                except Exception as e_tabela:
+                    logging.warning(f"Não foi possível extrair tabelas da página {idx+1} do tarifário: {e_tabela}")
+
+        conteudo_final = "\n\n".join(texto_extraido)
+        if not conteudo_final.strip():
+            conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
+
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT OR REPLACE INTO cache_tarifario (id, url_pdf, conteudo_txt, ultima_atualizacao)
+            VALUES (1, ?, ?, ?)
+        """, (url_pdf, conteudo_final, timestamp_atual))
+        conn.commit()
+        conn.close()
+
+        msg = f"Sincronização do tarifário concluída (fonte: {url_pdf})."
+        logging.info(msg)
+        return msg
+
+    except Exception as e:
+        error_msg = f"Falha ao sincronizar tarifário: {e}"
+        logging.error(error_msg)
+        return error_msg
+
+def sincronizar_titulos_e_tarifario():
+    """Corre as duas sincronizações (títulos + tarifário) e devolve um resumo combinado."""
+    resultado_titulos = sincronizar_titulos_guimabus()
+    resultado_tarifario = sincronizar_tarifario_guimabus()
+    return f"{resultado_titulos}\n{resultado_tarifario}"
+
+def obter_tipologias_cache():
+    """Lê as tipologias de passe da cache local (SQLite). Se a cache estiver vazia
+    (primeira execução antes de qualquer sincronização), usa um fallback mínimo."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT tipologia, descricao, preco, custo_cartao, prazo, documentos_json FROM cache_titulos ORDER BY tipologia")
+        linhas = cursor.fetchall()
+        conn.close()
+
+        if not linhas:
+            return TIPOLOGIAS_PASSE_FALLBACK, None
+
+        resultado = {}
+        for tipologia, descricao, preco, custo_cartao, prazo, documentos_json in linhas:
+            try:
+                documentos = json.loads(documentos_json)
+            except Exception:
+                documentos = [documentos_json]
+            resultado[tipologia] = {
+                "descricao": descricao,
+                "preco": preco,
+                "custo_cartao": custo_cartao,
+                "prazo": prazo,
+                "documentos": documentos,
+            }
+
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos")
+        ultima_atualizacao = cursor.fetchone()[0]
+        conn.close()
+
+        return resultado, ultima_atualizacao
+    except Exception as e:
+        logging.error(f"Erro ao ler cache de tipologias: {e}")
+        return TIPOLOGIAS_PASSE_FALLBACK, None
+
+def consultar_tarifario_cache():
+    """Ferramenta do agente: lê o texto do tarifário (tabela de preços) guardado em cache."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_tarifario WHERE id = 1")
+        resultado = cursor.fetchone()
+        conn.close()
+        if resultado:
+            return f"Tabela tarifária (atualizada em {resultado[1]}):\n\n{resultado[0]}"
+        return "O tarifário ainda não foi sincronizado. Peça ao administrador para rodar a Sincronização Geral."
+    except Exception as e:
+        return f"Erro na leitura da cache do tarifário: {e}"
+
+def consultar_tipologias_cache_tool():
+    """Ferramenta do agente: lê as tipologias de passe e documentos exigidos, guardados em cache."""
+    tipologias, ultima_atualizacao = obter_tipologias_cache()
+    if not tipologias:
+        return "Não existem tipologias de passe em cache."
+    aviso_idade = f" (dados de {ultima_atualizacao})" if ultima_atualizacao else " (dados de fallback, ainda sem sincronização)"
+    resumo = f"Tipologias de passe disponíveis{aviso_idade}:\n\n"
+    for nome, info in tipologias.items():
+        docs_txt = "; ".join(info["documentos"])
+        resumo += f"- **{nome}**: {info['descricao']} Preço: {info['preco']}. Custo do cartão: {info['custo_cartao']}. Prazo: {info['prazo']}. Documentos: {docs_txt}.\n"
+    return resumo
+
 
 def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
-    info = TIPOLOGIAS_PASSE[tipologia]
+    tipologias_atuais, _ = obter_tipologias_cache()
+    info = tipologias_atuais.get(tipologia, {"documentos": ["documento não especificado"]})
     partes = [
         f"Vais rever documentos carregados por um utilizador que pediu um passe do tipo '{tipologia}'.\n"
         f"Documentos exigidos para este tipo de passe: {', '.join(info['documentos'])}.\n\n"
@@ -602,7 +796,7 @@ def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
     try:
         model_verificacao = genai.GenerativeModel("gemini-3.5-flash")
         resposta = model_verificacao.generate_content(partes, request_options={"timeout": 40})
-        logging.info(f"Verificação de documentos executada para tipologia '{tipologia}' ({len(nomes_documentos)} ficheiro(s)). Conteúdo dos documentos NÃO fica registado in log.")
+        logging.info(f"Verificação de documentos executada para tipologia '{tipologia}' ({len(nomes_documentos)} ficheiro(s)). Conteúdo dos documentos NÃO fica registado em log.")
         return resposta.text
     except Exception as e:
         logging.error(f"Erro na verificação de documentos: {e}")
@@ -618,6 +812,12 @@ def renderizar_pedido_passe():
         "**Os documentos que carregares aqui não são guardados** — são analisados em memória e descartados "
         "logo a seguir; não ficam gravados em nenhum ficheiro, base de dados ou log desta aplicação."
     )
+
+    TIPOLOGIAS_PASSE, ultima_atualizacao = obter_tipologias_cache()
+    if ultima_atualizacao:
+        st.caption(f"📅 Dados de tipologias atualizados em: {ultima_atualizacao} (sincronizados automaticamente de guimabus.pt/titulos/)")
+    else:
+        st.warning("⚠️ Estes dados ainda são um fallback mínimo — a sincronização com o site oficial ainda não correu. Pede ao Celso para entrar como admin e sincronizar.")
 
     tipologia_escolhida = st.selectbox("Escolhe a tipologia do passe que pretendes pedir:", list(TIPOLOGIAS_PASSE.keys()))
     info = TIPOLOGIAS_PASSE[tipologia_escolhida]
@@ -883,7 +1083,7 @@ MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite*
 Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
 2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
-3. **Modo Helpdesk Técnico:** Envia-me um problem de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
+3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
 Como posso ajudar hoje?"""
 
@@ -959,6 +1159,11 @@ with st.sidebar:
             with st.spinner("O robô está a ler o site da Guimabus..."):
                 resultado_scraping = sincronizar_todos_horarios_guimabus()
                 st.sidebar.success(resultado_scraping)
+
+        if st.sidebar.button("🔄 Sincronizar Títulos e Tarifário", use_container_width=True):
+            with st.spinner("O robô está a ler titulos/ e tarifarios/..."):
+                resultado_titulos = sincronizar_titulos_e_tarifario()
+                st.sidebar.success(resultado_titulos)
                 
         if st.sidebar.button("Sair da área de administrador", key="admin_logout_btn"):
             st.session_state.admin_autenticado = False
@@ -973,7 +1178,7 @@ with st.sidebar:
             if os.path.exists("auditoria_agente.log"):
                 with open("auditoria_agente.log", "r", encoding="utf-8") as f:
                     linhas_log = f.readlines()[-10:]
-                    for linea in linhas_log: st.caption(linea.strip())
+                    for linha in linhas_log: st.caption(linha.strip())
 
         with st.sidebar.expander("🗄️ Histórico Permanente Global (BD) — todas as sessões"):
             if os.path.exists("agente_memoria.db"):
@@ -1061,6 +1266,10 @@ if prompt:
                 - obter_dados_guimabus: estado em tempo real da frota (autocarros em circulação/atrasos). Aceita um "route_id".
                 - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica. Aceita tanto o ID numérico como o nome em texto da paragem (ex: "vaca negra").
                 - consultar_cache_horario_linha: consulta a cache local da base de dados SQLite para ler os horários e tabelas fixas de uma determinada linha (ex: "101").
+                - consultar_tipologias_cache_tool: lê as tipologias de passe (descrição, preço, custo do cartão, prazo, documentos exigidos), sincronizadas automaticamente de guimabus.pt/titulos/.
+                - consultar_tarifario_cache: lê a tabela tarifária completa (preços por distância), sincronizada automaticamente de guimabus.pt/tarifarios/.
+
+                Usa sempre consultar_tipologias_cache_tool e consultar_tarifario_cache para perguntas sobre preços, tipologias de passe ou documentos exigidos — não confies em memória para isto, porque os preços mudam. Se o utilizador quiser efetivamente PEDIR um passe e carregar documentos, informa-o que existe um formulário dedicado na barra lateral ("🎫 Pedir Passe") para isso.
 
                 REGRAS DE OURO PARA MAIOR AUTOMAÇÃO:
                 1. Se o utilizador perguntar "Quais as linhas que passam no local X para ir para o local Y" ou apenas "Estou no local X, como vou para Y?", deves chamar OBRIGATORIAMENTE a ferramenta `obter_horarios_paragem` passando o nome da paragem de origem "X".
@@ -1075,9 +1284,9 @@ if prompt:
                 
                 PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
                 O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
-                Independentemente do problem de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                Independentemente do problema de suporte indicado pelo utilizador (Active Directory, Redes, Sistemas, Avarias), deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
                 'O Celso faria desta maneira para resolver este problema de IT:'
-                Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas applied com precisão."""
+                Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
 
                 # LÓGICA DO ROUTER EM TEMPO DE EXECUÇÃO
                 prompt_normalizado = prompt.lower()
@@ -1125,7 +1334,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}{contexto_intercecao}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache]
                 
                 # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
