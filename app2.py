@@ -86,6 +86,15 @@ def inicializar_bd():
             PRIMARY KEY (linha, paragem)
         )
     """)
+    # Tabela: Título/descrição de cada linha (ex: "171 Quintães - Guimarães (via S. Torcato e Atães)").
+    # Os títulos mencionam frequentemente freguesias que os nomes de paragem, por si só, não indicam.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_titulo_linha (
+            linha TEXT PRIMARY KEY,
+            titulo TEXT,
+            ultima_atualizacao TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -361,6 +370,7 @@ def sincronizar_todos_horarios_guimabus():
         soup = BeautifulSoup(response.text, 'html.parser')
         
         links_pdf = {}
+        titulos_linha = {}
         for link in soup.find_all('a', href=True):
             href = link['href']
             if ".pdf" in href and "horario" in href.lower():
@@ -369,6 +379,12 @@ def sincronizar_todos_horarios_guimabus():
                     linha_id = match.group(1).upper()
                     if linha_id not in links_pdf:
                         links_pdf[linha_id] = href
+                        # O texto visível do link normalmente é o título da linha, ex:
+                        # "171 Quintães - Guimarães (via S. Torcato e Atães)" — isto menciona
+                        # freguesias que os nomes de paragem, por si só, não indicam.
+                        texto_link = link.get_text(strip=True)
+                        if texto_link:
+                            titulos_linha[linha_id] = texto_link
         
         if not links_pdf:
             return "Nenhum ficheiro PDF de horários localizado na página principal."
@@ -414,6 +430,12 @@ def sincronizar_todos_horarios_guimabus():
                         INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
                         VALUES (?, ?, ?, ?)
                     """, (linha_id, url_pdf, conteudo_final, timestamp_atual))
+
+                    if linha_id in titulos_linha:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO cache_titulo_linha (linha, titulo, ultima_atualizacao)
+                            VALUES (?, ?, ?)
+                        """, (linha_id, titulos_linha[linha_id], timestamp_atual))
 
                     linhas_processadas.append(linha_id)
                     sucesso = True
@@ -836,9 +858,34 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
             paragens_destino_encontradas.add(paragem)
 
     if not linhas_origem:
-        return f"Não encontrei nenhuma paragem que corresponda a '{origem}' nos horários em cache. Confirma o nome ou tenta uma variação (ex: sem acentos, ou só uma palavra)."
+        linhas_origem, titulos_origem = _procurar_linhas_por_titulo(origem_norm)
+        aviso_origem_por_titulo = bool(linhas_origem)
+    else:
+        aviso_origem_por_titulo = False
     if not linhas_destino:
-        return f"Não encontrei nenhuma paragem que corresponda a '{destino}' nos horários em cache. Confirma o nome ou tenta uma variação (ex: sem acentos, ou só uma palavra)."
+        linhas_destino, titulos_destino = _procurar_linhas_por_titulo(destino_norm)
+        aviso_destino_por_titulo = bool(linhas_destino)
+    else:
+        aviso_destino_por_titulo = False
+
+    if not linhas_origem:
+        return (f"Não encontrei nenhuma paragem nem nenhuma linha cujo título mencione '{origem}' "
+                f"nos dados em cache. Confirma o nome (pode ser uma freguesia servida por uma linha "
+                f"cujo título não a menciona explicitamente).")
+    if not linhas_destino:
+        return (f"Não encontrei nenhuma paragem nem nenhuma linha cujo título mencione '{destino}' "
+                f"nos dados em cache. Confirma o nome (pode ser uma freguesia servida por uma linha "
+                f"cujo título não a menciona explicitamente).")
+
+    aviso_precisao = ""
+    if aviso_origem_por_titulo:
+        aviso_precisao += (f"\n⚠️ Nota: '{origem}' não corresponde a uma paragem exata — foi encontrada "
+                           f"apenas porque o TÍTULO da linha menciona essa freguesia/localidade "
+                           f"(ex: {', '.join(titulos_origem[:2])}). A paragem exata a usar pode ter outro nome.")
+    if aviso_destino_por_titulo:
+        aviso_precisao += (f"\n⚠️ Nota: '{destino}' não corresponde a uma paragem exata — foi encontrada "
+                           f"apenas porque o TÍTULO da linha menciona essa freguesia/localidade "
+                           f"(ex: {', '.join(titulos_destino[:2])}). A paragem exata a usar pode ter outro nome.")
 
     linhas_diretas = linhas_origem & linhas_destino
     if linhas_diretas:
@@ -848,6 +895,7 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
         resumo += f"\nParagens correspondentes à origem: {', '.join(sorted(paragens_origem_encontradas))}"
         resumo += f"\nParagens correspondentes ao destino: {', '.join(sorted(paragens_destino_encontradas))}"
         resumo += "\n\nPróximo passo: consulta os horários desta(s) linha(s) com consultar_cache_horario_linha para dar a hora exata ao utilizador."
+        resumo += aviso_precisao
         return resumo
 
     # Sem linha direta - procurar ponto de transbordo: paragem comum a uma linha da origem e uma linha do destino
@@ -877,7 +925,33 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
     resumo += ("\nPróximo passo: consulta os horários completos de cada linha sugerida (com "
                "consultar_cache_horario_linha) e cruza os horários tu próprio para escolher a combinação "
                "que encaixa melhor com a hora atual, dando margem para a troca de autocarro.")
+    resumo += aviso_precisao
     return resumo
+
+def _procurar_linhas_por_titulo(termo_norm: str):
+    """Fallback quando o termo (ex: uma freguesia) não corresponde a nenhuma paragem exata:
+    procura nos TÍTULOS das linhas (ex: '171 Quintães - Guimarães (via S. Torcato e Atães)'),
+    que muitas vezes mencionam freguesias que os nomes de paragem, por si só, não indicam."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT linha, titulo FROM cache_titulo_linha")
+        todos_titulos = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Erro ao consultar títulos de linha: {e}")
+        return set(), []
+
+    linhas_encontradas = set()
+    titulos_encontrados = []
+    for linha_id, titulo in todos_titulos:
+        if not titulo:
+            continue
+        titulo_norm = _normalizar_nome_paragem(titulo)
+        if termo_norm in titulo_norm:
+            linhas_encontradas.add(linha_id)
+            titulos_encontrados.append(f"Linha {linha_id}: {titulo}")
+    return linhas_encontradas, titulos_encontrados
 
 def obter_tipologias_cache():
     """Lê as tipologias de passe da cache local (SQLite). Se a cache estiver vazia
@@ -985,6 +1059,77 @@ def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
         logging.error(f"Erro na verificação de documentos: {e}")
         return f"Não foi possível verificar os documentos neste momento: {e}"
 
+def recomendar_tipologias_passe(respostas: dict, tipologias_disponiveis: dict):
+    """Aplica regras simples (idade, estudante, residência, etc.) às tipologias REAIS
+    disponíveis na cache, e devolve as que parecem aplicáveis à pessoa. As regras espelham
+    os critérios descritos em guimabus.pt/titulos/ — se a Guimabus mudar os critérios, os
+    NOMES das tipologias na cache podem mudar e estas regras precisam de ser revistas."""
+    idade = respostas.get("idade")
+    estudante = respostas.get("estudante")
+    nivel_estudo = respostas.get("nivel_estudo")
+    residente_gmr = respostas.get("residente_gmr")
+    incapacidade_60 = respostas.get("incapacidade_60")
+    antigo_combatente = respostas.get("antigo_combatente")
+    usa_passe_cp = respostas.get("usa_passe_cp")
+    reforma_antecipada = respostas.get("reforma_antecipada")
+
+    candidatas = []
+
+    def _tem(nome_parcial):
+        for nome in tipologias_disponiveis:
+            if nome_parcial.lower() in nome.lower():
+                return nome
+        return None
+
+    if antigo_combatente and _tem("Antigo Combatente"):
+        candidatas.append(_tem("Antigo Combatente"))
+
+    if incapacidade_60 and _tem("Mobilidade Condicionada"):
+        candidatas.append(_tem("Mobilidade Condicionada"))
+
+    if idade is not None and idade >= 65 and residente_gmr and _tem("65+"):
+        candidatas.append(_tem("65+"))
+
+    if reforma_antecipada and idade is not None and 60 <= idade < 65 and _tem("Reformado"):
+        candidatas.append(_tem("Reformado"))
+
+    if estudante:
+        if nivel_estudo == "superior":
+            if residente_gmr and _tem("Universitário Residente"):
+                candidatas.append(_tem("Universitário Residente"))
+            elif _tem("Universitário Não Residente"):
+                candidatas.append(_tem("Universitário Não Residente"))
+        elif nivel_estudo == "ate_18" and _tem("18+TP"):
+            candidatas.append(_tem("18+TP"))
+        elif nivel_estudo == "ate_23" and _tem("23+TP"):
+            candidatas.append(_tem("23+TP"))
+
+    if usa_passe_cp and _tem("Mensal CP"):
+        candidatas.append(_tem("Mensal CP"))
+
+    # Se nada específico se aplicar, sugere as opções de passe mensal com desconto conforme residência
+    if not candidatas:
+        if residente_gmr and _tem("CIM AVE 50% + 10% CMG"):
+            candidatas.append(_tem("CIM AVE 50% + 10% CMG"))
+        elif residente_gmr and _tem("CIM AVE 50%"):
+            candidatas.append(_tem("CIM AVE 50%"))
+        elif _tem("Mensal") and not _tem("CIM") :
+            # tipologia genérica "Mensal" (evita apanhar variantes CIM/CP por engano)
+            for nome in tipologias_disponiveis:
+                if nome.strip().lower() == "mensal":
+                    candidatas.append(nome)
+                    break
+
+    # Remove duplicados mantendo ordem
+    vistos = set()
+    candidatas_unicas = []
+    for c in candidatas:
+        if c and c not in vistos:
+            vistos.add(c)
+            candidatas_unicas.append(c)
+
+    return candidatas_unicas
+
 def renderizar_pedido_passe():
     st.subheader("🎫 Pedido de Passe — Guimabus")
     st.info(
@@ -1001,6 +1146,47 @@ def renderizar_pedido_passe():
         st.caption(f"📅 Dados de tipologias atualizados em: {ultima_atualizacao} (sincronizados automaticamente de guimabus.pt/titulos/)")
     else:
         st.warning("⚠️ Estes dados ainda são um fallback mínimo — a sincronização com o site oficial ainda não correu. Pede ao Celso para entrar como admin e sincronizar.")
+
+    with st.expander("🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas", expanded=False):
+        col1, col2 = st.columns(2)
+        idade = col1.number_input("A tua idade", min_value=0, max_value=120, value=25, step=1, key="wizard_idade")
+        residente_gmr = col2.checkbox("Resides no concelho de Guimarães?", key="wizard_residente")
+
+        estudante = st.checkbox("És estudante?", key="wizard_estudante")
+        nivel_estudo = None
+        if estudante:
+            nivel_estudo = st.radio(
+                "Que nível de ensino?",
+                options=["ate_18", "ate_23", "superior"],
+                format_func=lambda x: {"ate_18": "Até 18 anos (básico/secundário)", "ate_23": "Até 23-24 anos (secundário tardio)", "superior": "Ensino superior"}[x],
+                key="wizard_nivel"
+            )
+
+        col3, col4 = st.columns(2)
+        incapacidade_60 = col3.checkbox("Grau de incapacidade ≥ 60%?", key="wizard_incapacidade")
+        antigo_combatente = col4.checkbox("Antigo combatente ou viúvo(a)?", key="wizard_combatente")
+
+        col5, col6 = st.columns(2)
+        reforma_antecipada = col5.checkbox("Reforma antecipada (60-65 anos, pensão baixa)?", key="wizard_reforma")
+        usa_passe_cp = col6.checkbox("Já tens passe CP (comboio)?", key="wizard_cp")
+
+        if st.button("🔍 Recomendar tipologia", key="wizard_recomendar"):
+            respostas = {
+                "idade": idade,
+                "residente_gmr": residente_gmr,
+                "estudante": estudante,
+                "nivel_estudo": nivel_estudo,
+                "incapacidade_60": incapacidade_60,
+                "antigo_combatente": antigo_combatente,
+                "reforma_antecipada": reforma_antecipada,
+                "usa_passe_cp": usa_passe_cp,
+            }
+            recomendadas = recomendar_tipologias_passe(respostas, TIPOLOGIAS_PASSE)
+            if recomendadas:
+                st.success(f"Com base nas tuas respostas, a(s) tipologia(s) mais indicada(s): **{' / '.join(recomendadas)}**")
+                st.caption("Seleciona essa tipologia no menu abaixo para veres os documentos necessários. Esta recomendação é orientativa — a decisão final é sempre da Guimabus.")
+            else:
+                st.warning("Não consegui associar as tuas respostas a nenhuma tipologia com desconto especial — o passe **Mensal** normal é provavelmente a opção aplicável.")
 
     tipologia_escolhida = st.selectbox("Escolhe a tipologia do passe que pretendes pedir:", list(TIPOLOGIAS_PASSE.keys()))
     info = TIPOLOGIAS_PASSE[tipologia_escolhida]
@@ -1461,7 +1647,9 @@ if prompt:
 
                 Depois de planear_viagem_com_transbordo indicar quais linhas usar (diretas ou com transbordo), consulta os horários completos dessas linhas com consultar_cache_horario_linha e cruza tu próprio os horários das duas viagens (usando a hora atual do sistema) para dar ao utilizador uma sugestão concreta de que autocarro apanhar em cada troço, com margem de segurança para trocar de autocarro.
 
-                Usa sempre consultar_tipologias_cache_tool e consultar_tarifario_cache para perguntas sobre preços, tipologias de passe ou documentos exigidos — não confies em memória para isto, porque os preços mudam. Se o utilizador quiser efetivamente PEDIR um passe e carregar documentos, informa-o que existe um formulário dedicado na barra lateral ("🎫 Pedir Passe") para isso.
+                Usa sempre consultar_tipologias_cache_tool e consultar_tarifario_cache para perguntas sobre preços, tipologias de passe ou documentos exigidos — não confies em memória para isto, porque os preços mudam. Se o utilizador quiser efetivamente PEDIR um passe e carregar documentos, informa-o que existe um formulário dedicado na barra lateral ("🎫 Pedir Passe") para isso — esse formulário também tem um pequeno questionário que recomenda a tipologia automaticamente.
+
+                Se o utilizador perguntar "qual o passe/tipologia certo para mim" (ou similar), e ainda não tiver dado informação suficiente, PERGUNTA os critérios relevantes antes de responder (idade, se é estudante e que nível de ensino, se reside no concelho de Guimarães, se tem grau de incapacidade ≥60%, se é antigo combatente, se tem passe CP, se está em reforma antecipada entre os 60-65 anos). Depois de teres essa informação, chama consultar_tipologias_cache_tool e aplica as descrições de cada tipologia (que dizem explicitamente "residente"/"não residente", "estudante", faixas etárias, etc.) para RECOMENDAR a tipologia certa, explicando o porquê com base nos critérios que a pessoa deu. Por exemplo: estudante universitário com 40 anos que vive fora do concelho de Guimarães → "Universitário Não Residente" (não pela idade, mas porque é estudante do ensino superior e não reside no concelho). Não te limites a listar todas as tipologias quando a pessoa já deu informação suficiente para identificar uma específica.
 
                 REGRAS DE OURO PARA MAIOR AUTOMAÇÃO:
                 1. Se o utilizador perguntar "Quais as linhas que passam no local X para ir para o local Y" ou apenas "Estou no local X, como vou para Y?", deves chamar OBRIGATORIAMENTE a ferramenta `obter_horarios_paragem` passando o nome da paragem de origem "X".
