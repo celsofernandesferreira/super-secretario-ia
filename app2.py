@@ -757,7 +757,7 @@ def obter_avisos_facebook():
     """
     Lê os avisos da página de Facebook usando um Feed RSS público e filtra pelo dia de hoje.
     """
-    url_rss = "COLA_AQUI_O_TEU_LINK_RSS" # Substituir pelo link do Feed RSS
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml" # Substituir pelo link do Feed RSS
     avisos_de_hoje = []
     
     if url_rss == "COLA_AQUI_O_TEU_LINK_RSS":
