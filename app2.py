@@ -513,6 +513,19 @@ def obter_idade_cache_titulos_dias():
         logging.error(f"Erro ao verificar idade da cache de títulos: {e}")
         return None
 
+def obter_contagem_indice_paragens():
+    """Devolve quantas associações linha-paragem existem no índice, para saber se está vazio."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM cache_paragens_linha")
+        resultado = cursor.fetchone()
+        conn.close()
+        return resultado[0] if resultado else 0
+    except Exception as e:
+        logging.error(f"Erro ao contar índice de paragens: {e}")
+        return 0
+
 def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
     if st.session_state.get("sync_automatico_tentado_nesta_sessao"):
         return
@@ -525,6 +538,13 @@ def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
             logging.info(f"Sincronização automática de horários executada: {resultado}")
             resultado_indice = construir_indice_paragens()
             logging.info(resultado_indice)
+    elif obter_contagem_indice_paragens() == 0:
+        # Os horários já estavam frescos, mas o índice de paragens (tabela nova) ainda
+        # nunca foi construído a partir deles — sem isto, ficaria vazio indefinidamente
+        # até os horários voltarem a expirar daqui a 7 dias.
+        with st.spinner("🗺️ A construir o índice de paragens pela primeira vez..."):
+            resultado_indice = construir_indice_paragens()
+            logging.info(f"Índice de paragens construído (cache de horários já estava fresca): {resultado_indice}")
 
     idade_titulos = obter_idade_cache_titulos_dias()
     if idade_titulos is None or idade_titulos >= limite_dias:
