@@ -303,6 +303,8 @@ def renderizar_rodape_anuncios(anuncios_ativos):
         return
         
     dados_js = json.dumps(anuncios_ativos)
+    
+    # CSS aumentado e JS com clique para ampliar
     html_rodape = f"""
     <div id="ticker-container" style="
         position: fixed;
@@ -312,17 +314,17 @@ def renderizar_rodape_anuncios(anuncios_ativos):
         background-color: #1e1e1e;
         color: white;
         z-index: 9999;
-        padding: 10px;
-        border-top: 2px solid #2ecc71;
+        padding: 15px;
+        border-top: 4px solid #2ecc71;
         display: flex;
         align-items: center;
         justify-content: center;
         font-family: sans-serif;
-        box-shadow: 0px -2px 10px rgba(0,0,0,0.5);
+        box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
     ">
-        <div id="ticker-content" style="display: flex; align-items: center; max-width: 800px; width: 100%;">
-            <img id="ticker-img" src="" style="max-height: 50px; border-radius: 4px; margin-right: 15px; display: none; object-fit: cover;">
-            <span id="ticker-text" style="font-size: 14px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">A carregar avisos...</span>
+        <div id="ticker-content" style="display: flex; align-items: center; max-width: 1200px; width: 100%; cursor: pointer;">
+            <img id="ticker-img" src="" style="max-height: 120px; border-radius: 8px; margin-right: 25px; display: none; box-shadow: 0 0 10px rgba(255,255,255,0.2); border: 2px solid #555;" onclick="window.open(this.src, '_blank');">
+            <span id="ticker-text" style="font-size: 18px; font-weight: bold; line-height: 1.4;">A carregar avisos...</span>
         </div>
     </div>
     <script>
@@ -335,7 +337,7 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             const imgElement = document.getElementById('ticker-img');
             const textElement = document.getElementById('ticker-text');
             
-            textElement.innerText = "🚨 AVISO: " + anuncio.texto;
+            textElement.innerText = "🚨 AVISO DE HOJE: " + anuncio.texto;
             
             if (anuncio.imagem) {{
                 imgElement.src = anuncio.imagem;
@@ -347,10 +349,10 @@ def renderizar_rodape_anuncios(anuncios_ativos):
         }}
         
         atualizarTicker();
-        setInterval(atualizarTicker, 8000);
+        setInterval(atualizarTicker, 10000); // 10 segundos
     </script>
     """
-    components.html(html_rodape, height=70)
+    components.html(html_rodape, height=160)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
