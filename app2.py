@@ -200,6 +200,158 @@ except Exception:
     logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
     st.stop()
 
+# --- INTEGRAÇÃO FACEBOOK RSS (COM INTELIGÊNCIA ARTIFICIAL PARA DATAS) ---
+@st.cache_data(ttl=3600)
+def obter_avisos_facebook():
+    """
+    Lê os últimos 10 avisos do Facebook e usa a Inteligência Artificial para ler
+    as datas no meio do texto, mostrando apenas os que estão ativos no dia de hoje.
+    """
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    avisos_ativos = []
+
+    try:
+        # 1. Obter os dados do RSS
+        response = requests.get(url_rss, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, "xml") 
+        itens = soup.find_all("item")
+        
+        posts_para_analisar = []
+        for i, item in enumerate(itens[:10]): # Analisamos os últimos 10 posts
+            texto_titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
+            desc = item.find("description")
+            desc_text = desc.text if desc else ""
+            
+            # Tentar extrair a imagem
+            imagem_url = ""
+            enclosure = item.find("enclosure")
+            if enclosure and enclosure.get("url"):
+                imagem_url = enclosure.get("url")
+            elif desc_text:
+                img_match = re.search(r'src="([^"]+)"', desc_text)
+                if img_match:
+                    imagem_url = img_match.group(1)
+            
+            # Limpar as tags HTML da descrição para não confundir a IA
+            texto_limpo = texto_titulo
+            if desc_text:
+                texto_limpo += " - " + BeautifulSoup(desc_text, "html.parser").get_text(separator=" ").strip()
+            
+            posts_para_analisar.append({
+                "id": i,
+                "titulo": texto_titulo,
+                "texto_completo": texto_limpo,
+                "imagem": imagem_url
+            })
+            
+        if not posts_para_analisar:
+            return []
+
+        # 2. --- O CÉREBRO DA OPERAÇÃO: FILTRAGEM DINÂMICA COM IA ---
+        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+        meses_pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+        data_hoje_pt = f"{agora.day} de {meses_pt[agora.month - 1]} de {agora.year}"
+
+        prompt_filtro = f"""
+        Hoje é dia {data_hoje_pt}.
+        Abaixo tens uma lista de publicações recentes do Facebook da Guimabus em JSON.
+        Lê o 'texto_completo' de cada uma e identifica se descreve uma alteração de percurso, greve ou obra com um período de validade.
+        
+        REGRAS DE SELEÇÃO ESTRITAS:
+        1. Se a publicação menciona um intervalo de datas (ex: "de 1 de abril a 20 de maio") e o dia de hoje ({data_hoje_pt}) ESTÁ dentro desse intervalo, deves selecioná-la.
+        2. Se a publicação refere uma data passada que já terminou, NÃO a seleciones.
+        3. Se a publicação refere uma data futura que ainda não começou, NÃO a seleciones.
+        4. Se for um aviso genérico ou urgente (ex: "Amanhã greve", "Acidente na nacional") publicado há menos de 48 horas, seleciona-o.
+        
+        Devolve APENAS E ESTRITAMENTE um array JSON com os IDs numéricos das publicações que estão ATIVAS para o dia de hoje. 
+        Exemplo: [0, 3]. Se não houver nenhuma ativa, devolve []. Não escrevas absolutamente mais nenhum texto além do JSON.
+        
+        Publicações a analisar:
+        {json.dumps([{"id": p["id"], "texto_completo": p["texto_completo"]} for p in posts_para_analisar], ensure_ascii=False)}
+        """
+        
+        match_json = None
+        try:
+            model_filtro = genai.GenerativeModel("gemini-3.5-flash")
+            resp = model_filtro.generate_content(prompt_filtro, request_options={"timeout": 15})
+            
+            # Procuramos o array [ ] na resposta da IA
+            match_json = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
+            if match_json:
+                try:
+                    ids_ativos = json.loads("[" + match_json.group(1) + "]")
+                    for p in posts_para_analisar:
+                        if p["id"] in ids_ativos:
+                            avisos_ativos.append({"texto": p["titulo"], "imagem": p["imagem"]})
+                except ValueError:
+                    pass
+        except Exception as e_ai:
+            logging.error(f"Erro no LLM a filtrar datas do RSS: {e_ai}")
+            
+        # Fallback de Segurança: Se a IA falhou (ex: API em baixo) mostramos apenas o último post para não quebrar a aplicação
+        if not avisos_ativos and not match_json: 
+            avisos_ativos.append({"texto": posts_para_analisar[0]["titulo"], "imagem": posts_para_analisar[0]["imagem"]})
+
+    except Exception as e:
+        logging.error(f"Erro ao obter Facebook RSS: {e}")
+        
+    return avisos_ativos
+
+def renderizar_rodape_anuncios(anuncios_ativos):
+    if not anuncios_ativos:
+        return
+        
+    dados_js = json.dumps(anuncios_ativos)
+    html_rodape = f"""
+    <div id="ticker-container" style="
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        background-color: #1e1e1e;
+        color: white;
+        z-index: 9999;
+        padding: 10px;
+        border-top: 2px solid #2ecc71;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: sans-serif;
+        box-shadow: 0px -2px 10px rgba(0,0,0,0.5);
+    ">
+        <div id="ticker-content" style="display: flex; align-items: center; max-width: 800px; width: 100%;">
+            <img id="ticker-img" src="" style="max-height: 50px; border-radius: 4px; margin-right: 15px; display: none; object-fit: cover;">
+            <span id="ticker-text" style="font-size: 14px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">A carregar avisos...</span>
+        </div>
+    </div>
+    <script>
+        const anuncios = {dados_js};
+        let indiceAtual = 0;
+        
+        function atualizarTicker() {{
+            if (anuncios.length === 0) return;
+            const anuncio = anuncios[indiceAtual];
+            const imgElement = document.getElementById('ticker-img');
+            const textElement = document.getElementById('ticker-text');
+            
+            textElement.innerText = "🚨 AVISO: " + anuncio.texto;
+            
+            if (anuncio.imagem) {{
+                imgElement.src = anuncio.imagem;
+                imgElement.style.display = "block";
+            }} else {{
+                imgElement.style.display = "none";
+            }}
+            indiceAtual = (indiceAtual + 1) % anuncios.length;
+        }}
+        
+        atualizarTicker();
+        setInterval(atualizarTicker, 8000);
+    </script>
+    """
+    components.html(html_rodape, height=70)
+
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
@@ -670,7 +822,7 @@ def sincronizar_titulos_guimabus():
         conn.commit()
         conn.close()
 
-        msg = f"Sincronização de títulos concluída: {len(tipologias_processadas)} tipologias encontradas ({', '.join(tipologias_processadas)})."
+        msg = f"Sincronização de titles concluída: {len(tipologias_processadas)} tipologias encontradas ({', '.join(tipologias_processadas)})."
         logging.info(msg)
         return msg
 
@@ -750,103 +902,6 @@ def sincronizar_titulos_e_tarifario():
     resultado_titulos = sincronizar_titulos_guimabus()
     resultado_tarifario = sincronizar_tarifario_guimabus()
     return f"{resultado_titulos}\n{resultado_tarifario}"
-
-# --- INTEGRAÇÃO FACEBOOK RSS ---
-@st.cache_data(ttl=3600)
-def obter_avisos_facebook():
-    """
-    Lê os avisos da página de Facebook usando um Feed RSS público e filtra pelo dia de hoje.
-    """
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml" # Substituir pelo link do Feed RSS
-    avisos_de_hoje = []
-    
-    if url_rss == "COLA_AQUI_O_TEU_LINK_RSS":
-        return [{"texto": "Exemplo de Aviso: Configura o link RSS do Facebook no código para veres anúncios reais.", "imagem": ""}]
-
-    try:
-        response = requests.get(url_rss, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, "xml") 
-        itens = soup.find_all("item")
-        data_hoje_simples = datetime.now(ZoneInfo("Europe/Lisbon")).strftime("%d %b %Y")
-        
-        for item in itens:
-            pub_date = item.find("pubDate").text if item.find("pubDate") else ""
-            if data_hoje_simples in pub_date:
-                texto = item.find("title").text if item.find("title") else "Aviso Guimabus"
-                imagem_url = ""
-                enclosure = item.find("enclosure")
-                
-                if enclosure and enclosure.get("url"):
-                    imagem_url = enclosure.get("url")
-                else:
-                    desc = item.find("description")
-                    if desc and desc.text:
-                        img_match = re.search(r'src="([^"]+)"', desc.text)
-                        if img_match:
-                            imagem_url = img_match.group(1)
-                            
-                avisos_de_hoje.append({"texto": texto, "imagem": imagem_url})
-                
-    except Exception as e:
-        logging.error(f"Erro ao obter Facebook RSS: {e}")
-        
-    return avisos_de_hoje
-
-def renderizar_rodape_anuncios(anuncios_ativos):
-    if not anuncios_ativos:
-        return
-        
-    dados_js = json.dumps(anuncios_ativos)
-    html_rodape = f"""
-    <div id="ticker-container" style="
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        width: 100%;
-        background-color: #1e1e1e;
-        color: white;
-        z-index: 9999;
-        padding: 10px;
-        border-top: 2px solid #2ecc71;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-family: sans-serif;
-        box-shadow: 0px -2px 10px rgba(0,0,0,0.5);
-    ">
-        <div id="ticker-content" style="display: flex; align-items: center; max-width: 800px; width: 100%;">
-            <img id="ticker-img" src="" style="max-height: 50px; border-radius: 4px; margin-right: 15px; display: none; object-fit: cover;">
-            <span id="ticker-text" style="font-size: 14px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">A carregar avisos...</span>
-        </div>
-    </div>
-    <script>
-        const anuncios = {dados_js};
-        let indiceAtual = 0;
-        
-        function atualizarTicker() {{
-            if (anuncios.length === 0) return;
-            const anuncio = anuncios[indiceAtual];
-            const imgElement = document.getElementById('ticker-img');
-            const textElement = document.getElementById('ticker-text');
-            
-            textElement.innerText = "🚨 AVISO DE HOJE: " + anuncio.texto;
-            
-            if (anuncio.imagem) {{
-                imgElement.src = anuncio.imagem;
-                imgElement.style.display = "block";
-            }} else {{
-                imgElement.style.display = "none";
-            }}
-            indiceAtual = (indiceAtual + 1) % anuncios.length;
-        }}
-        
-        atualizarTicker();
-        setInterval(atualizarTicker, 8000);
-    </script>
-    """
-    components.html(html_rodape, height=70)
-
 
 # --- ÍNDICE PARAGEM <-> LINHA (para sugerir transbordos) ---
 def _extrair_paragens_de_texto(texto: str):
