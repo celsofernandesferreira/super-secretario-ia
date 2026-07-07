@@ -751,6 +751,103 @@ def sincronizar_titulos_e_tarifario():
     resultado_tarifario = sincronizar_tarifario_guimabus()
     return f"{resultado_titulos}\n{resultado_tarifario}"
 
+# --- INTEGRAÇÃO FACEBOOK RSS ---
+@st.cache_data(ttl=3600)
+def obter_avisos_facebook():
+    """
+    Lê os avisos da página de Facebook usando um Feed RSS público e filtra pelo dia de hoje.
+    """
+    url_rss = "COLA_AQUI_O_TEU_LINK_RSS" # Substituir pelo link do Feed RSS
+    avisos_de_hoje = []
+    
+    if url_rss == "COLA_AQUI_O_TEU_LINK_RSS":
+        return [{"texto": "Exemplo de Aviso: Configura o link RSS do Facebook no código para veres anúncios reais.", "imagem": ""}]
+
+    try:
+        response = requests.get(url_rss, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, "xml") 
+        itens = soup.find_all("item")
+        data_hoje_simples = datetime.now(ZoneInfo("Europe/Lisbon")).strftime("%d %b %Y")
+        
+        for item in itens:
+            pub_date = item.find("pubDate").text if item.find("pubDate") else ""
+            if data_hoje_simples in pub_date:
+                texto = item.find("title").text if item.find("title") else "Aviso Guimabus"
+                imagem_url = ""
+                enclosure = item.find("enclosure")
+                
+                if enclosure and enclosure.get("url"):
+                    imagem_url = enclosure.get("url")
+                else:
+                    desc = item.find("description")
+                    if desc and desc.text:
+                        img_match = re.search(r'src="([^"]+)"', desc.text)
+                        if img_match:
+                            imagem_url = img_match.group(1)
+                            
+                avisos_de_hoje.append({"texto": texto, "imagem": imagem_url})
+                
+    except Exception as e:
+        logging.error(f"Erro ao obter Facebook RSS: {e}")
+        
+    return avisos_de_hoje
+
+def renderizar_rodape_anuncios(anuncios_ativos):
+    if not anuncios_ativos:
+        return
+        
+    dados_js = json.dumps(anuncios_ativos)
+    html_rodape = f"""
+    <div id="ticker-container" style="
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        background-color: #1e1e1e;
+        color: white;
+        z-index: 9999;
+        padding: 10px;
+        border-top: 2px solid #2ecc71;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: sans-serif;
+        box-shadow: 0px -2px 10px rgba(0,0,0,0.5);
+    ">
+        <div id="ticker-content" style="display: flex; align-items: center; max-width: 800px; width: 100%;">
+            <img id="ticker-img" src="" style="max-height: 50px; border-radius: 4px; margin-right: 15px; display: none; object-fit: cover;">
+            <span id="ticker-text" style="font-size: 14px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">A carregar avisos...</span>
+        </div>
+    </div>
+    <script>
+        const anuncios = {dados_js};
+        let indiceAtual = 0;
+        
+        function atualizarTicker() {{
+            if (anuncios.length === 0) return;
+            const anuncio = anuncios[indiceAtual];
+            const imgElement = document.getElementById('ticker-img');
+            const textElement = document.getElementById('ticker-text');
+            
+            textElement.innerText = "🚨 AVISO DE HOJE: " + anuncio.texto;
+            
+            if (anuncio.imagem) {{
+                imgElement.src = anuncio.imagem;
+                imgElement.style.display = "block";
+            }} else {{
+                imgElement.style.display = "none";
+            }}
+            indiceAtual = (indiceAtual + 1) % anuncios.length;
+        }}
+        
+        atualizarTicker();
+        setInterval(atualizarTicker, 8000);
+    </script>
+    """
+    components.html(html_rodape, height=70)
+
+
 # --- ÍNDICE PARAGEM <-> LINHA (para sugerir transbordos) ---
 def _extrair_paragens_de_texto(texto: str):
     """Lê o texto de um horário (já extraído do PDF) e devolve o conjunto de nomes de paragem
@@ -928,7 +1025,7 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
         resumo += f"- Via **{paragem_transbordo}**: apanha a linha {'/'.join(linhas_ate_transbordo)} desde '{origem}', desce em '{paragem_transbordo}', e apanha a linha {'/'.join(linhas_desde_transbordo)} até '{destino}'.\n"
 
     resumo += ("\nPróximo passo: consulta os horários completos de cada linha sugerida (com "
-               "consultar_cache_horario_linha) e cruza os horários tu próprio para escolher a combinação "
+               "consultar_cache_horario_linha) e cruza os horários tu próprio para escolher a combination "
                "que encaixa melhor com a hora atual, dando margem para a troca de autocarro.")
     resumo += aviso_precisao
     return resumo
@@ -1582,6 +1679,11 @@ if st.session_state.jogo_ativo:
 
 if st.session_state.get("passe_ativo"):
     renderizar_pedido_passe()
+
+# --- RODAPÉ DE AVISOS DO FACEBOOK ---
+avisos_hoje = obter_avisos_facebook()
+if avisos_hoje:
+    renderizar_rodape_anuncios(avisos_hoje)
 
 # Mostrar histórico visual no chat com Avatares Estilizados
 for message in st.session_state.messages:
