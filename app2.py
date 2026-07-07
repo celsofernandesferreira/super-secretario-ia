@@ -777,6 +777,18 @@ def construir_indice_paragens():
         logging.error(error_msg)
         return error_msg
 
+def _normalizar_nome_paragem(texto: str):
+    """Os horários oficiais usam abreviaturas (ex: 'S. Torcato' em vez de 'São Torcato'),
+    mas as pessoas escrevem por extenso. Sem isto, uma pesquisa por 'São Torcato' nunca
+    encontra 'S. Torcato' no texto, mesmo sendo exatamente a mesma paragem."""
+    t = texto.lower().strip()
+    t = re.sub(r'\bsão\b', 's.', t)
+    t = re.sub(r'\bsanta\b', 'sta.', t)
+    t = re.sub(r'\bsanto\b', 'sto.', t)
+    t = t.replace('.', '')
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
 def planear_viagem_com_transbordo(origem: str, destino: str):
     """Ferramenta do agente: dado o nome (aproximado) de uma paragem de origem e de destino,
     procura no índice local (construído a partir dos horários reais já em cache) se existe uma
@@ -791,8 +803,8 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
     if not origem or not destino:
         return "É necessário indicar a paragem de origem e a paragem de destino."
 
-    origem_norm = origem.strip().lower()
-    destino_norm = destino.strip().lower()
+    origem_norm = _normalizar_nome_paragem(origem)
+    destino_norm = _normalizar_nome_paragem(destino)
 
     try:
         conn = sqlite3.connect("agente_memoria.db")
@@ -815,7 +827,7 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
 
     for linha_id, paragem in todas:
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
-        paragem_norm = paragem.lower()
+        paragem_norm = _normalizar_nome_paragem(paragem)
         if origem_norm in paragem_norm:
             linhas_origem.add(linha_id)
             paragens_origem_encontradas.add(paragem)
