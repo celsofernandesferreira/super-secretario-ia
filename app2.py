@@ -11,6 +11,7 @@ import re
 import io
 import time
 import pdfplumber
+from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
@@ -74,6 +75,15 @@ def inicializar_bd():
             url_pdf TEXT,
             conteudo_txt TEXT,
             ultima_atualizacao TEXT
+        )
+    """)
+    # Tabela: Índice Paragem <-> Linha (construído a partir do texto dos horários já em cache),
+    # usado para sugerir transbordos entre linhas.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_paragens_linha (
+            linha TEXT,
+            paragem TEXT,
+            PRIMARY KEY (linha, paragem)
         )
     """)
     conn.commit()
@@ -513,6 +523,8 @@ def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
         with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez há dias — só demora uma vez, aguarda um pouco..."):
             resultado = sincronizar_todos_horarios_guimabus()
             logging.info(f"Sincronização automática de horários executada: {resultado}")
+            resultado_indice = construir_indice_paragens()
+            logging.info(resultado_indice)
 
     idade_titulos = obter_idade_cache_titulos_dias()
     if idade_titulos is None or idade_titulos >= limite_dias:
@@ -695,6 +707,145 @@ def sincronizar_titulos_e_tarifario():
     resultado_titulos = sincronizar_titulos_guimabus()
     resultado_tarifario = sincronizar_tarifario_guimabus()
     return f"{resultado_titulos}\n{resultado_tarifario}"
+
+# --- ÍNDICE PARAGEM <-> LINHA (para sugerir transbordos) ---
+def _extrair_paragens_de_texto(texto: str):
+    """Lê o texto de um horário (já extraído do PDF) e devolve o conjunto de nomes de paragem
+    encontrados. Cada linha de horário tem o formato 'Nome da Paragem  07:20 08:10 - 09:40 ...',
+    por isso procuramos linhas que terminem em pelo menos 3 tokens de hora (HH:MM) ou '-'."""
+    paragens = set()
+    padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
+    for linha_texto in texto.split("\n"):
+        linha_texto = linha_texto.strip()
+        if not linha_texto or "|" in linha_texto or linha_texto.startswith("[PÁGINA") or linha_texto.startswith("[P"):
+            continue
+        m = padrao.match(linha_texto)
+        if m:
+            nome = m.group("nome").strip(" -\t")
+            if len(nome) >= 3:
+                paragens.add(nome)
+    return paragens
+
+def construir_indice_paragens():
+    """Percorre todo o texto de horários já em cache e reconstrói o índice paragem<->linha.
+    Deve ser chamado depois de sincronizar_todos_horarios_guimabus()."""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT linha, conteudo_txt FROM cache_horarios")
+        linhas_cache = cursor.fetchall()
+
+        cursor.execute("DELETE FROM cache_paragens_linha")
+        total_paragens = 0
+        for linha_id, conteudo_txt in linhas_cache:
+            if not conteudo_txt:
+                continue
+            paragens = _extrair_paragens_de_texto(conteudo_txt)
+            for paragem in paragens:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO cache_paragens_linha (linha, paragem) VALUES (?, ?)",
+                    (linha_id, paragem)
+                )
+                total_paragens += 1
+        conn.commit()
+        conn.close()
+        msg = f"Índice de paragens reconstruído: {total_paragens} associações linha-paragem, a partir de {len(linhas_cache)} linhas em cache."
+        logging.info(msg)
+        return msg
+    except Exception as e:
+        error_msg = f"Falha ao construir índice de paragens: {e}"
+        logging.error(error_msg)
+        return error_msg
+
+def planear_viagem_com_transbordo(origem: str, destino: str):
+    """Ferramenta do agente: dado o nome (aproximado) de uma paragem de origem e de destino,
+    procura no índice local (construído a partir dos horários reais já em cache) se existe uma
+    linha direta, ou sugere um ponto de transbordo (uma paragem comum a uma linha que passa na
+    origem e uma linha que passa no destino).
+
+    NOTA IMPORTANTE: isto só identifica QUAIS linhas usar e ONDE fazer transbordo, com base nos
+    nomes de paragem encontrados no texto dos horários. NÃO calcula automaticamente se os horários
+    das duas viagens encaixam a tempo — para isso, o agente deve depois consultar os horários
+    completos de cada linha sugerida (com consultar_cache_horario_linha) e cruzar os horários ele
+    próprio, com base na hora atual do sistema."""
+    if not origem or not destino:
+        return "É necessário indicar a paragem de origem e a paragem de destino."
+
+    origem_norm = origem.strip().lower()
+    destino_norm = destino.strip().lower()
+
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT linha, paragem FROM cache_paragens_linha")
+        todas = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        return f"Erro ao consultar o índice de paragens: {e}"
+
+    if not todas:
+        return ("O índice de paragens ainda não foi construído. Peça ao administrador para "
+                "sincronizar os horários (isso constrói o índice automaticamente).")
+
+    linhas_origem = set()
+    paragens_origem_encontradas = set()
+    linhas_destino = set()
+    paragens_destino_encontradas = set()
+    mapa_linha_paragens = {}  # linha -> set de paragens (para calcular interseção depois)
+
+    for linha_id, paragem in todas:
+        mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
+        paragem_norm = paragem.lower()
+        if origem_norm in paragem_norm:
+            linhas_origem.add(linha_id)
+            paragens_origem_encontradas.add(paragem)
+        if destino_norm in paragem_norm:
+            linhas_destino.add(linha_id)
+            paragens_destino_encontradas.add(paragem)
+
+    if not linhas_origem:
+        return f"Não encontrei nenhuma paragem que corresponda a '{origem}' nos horários em cache. Confirma o nome ou tenta uma variação (ex: sem acentos, ou só uma palavra)."
+    if not linhas_destino:
+        return f"Não encontrei nenhuma paragem que corresponda a '{destino}' nos horários em cache. Confirma o nome ou tenta uma variação (ex: sem acentos, ou só uma palavra)."
+
+    linhas_diretas = linhas_origem & linhas_destino
+    if linhas_diretas:
+        resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}' (sem transbordo):\n"
+        for linha_id in linhas_diretas:
+            resumo += f"- Linha {linha_id}\n"
+        resumo += f"\nParagens correspondentes à origem: {', '.join(sorted(paragens_origem_encontradas))}"
+        resumo += f"\nParagens correspondentes ao destino: {', '.join(sorted(paragens_destino_encontradas))}"
+        resumo += "\n\nPróximo passo: consulta os horários desta(s) linha(s) com consultar_cache_horario_linha para dar a hora exata ao utilizador."
+        return resumo
+
+    # Sem linha direta - procurar ponto de transbordo: paragem comum a uma linha da origem e uma linha do destino
+    stops_linhas_origem = set()
+    for linha_id in linhas_origem:
+        stops_linhas_origem |= mapa_linha_paragens.get(linha_id, set())
+    stops_linhas_destino = set()
+    for linha_id in linhas_destino:
+        stops_linhas_destino |= mapa_linha_paragens.get(linha_id, set())
+
+    transbordos_candidatos = stops_linhas_origem & stops_linhas_destino
+    # remove as próprias paragens de origem/destino da lista de candidatos a transbordo
+    transbordos_candidatos -= paragens_origem_encontradas
+    transbordos_candidatos -= paragens_destino_encontradas
+
+    if not transbordos_candidatos:
+        return (f"Não encontrei nenhuma linha direta nem um ponto de transbordo óbvio entre '{origem}' e "
+                f"'{destino}' com os dados que tenho em cache. Pode ser necessário mais do que um transbordo, "
+                f"ou o nome da paragem pode não estar exatamente como no horário oficial.")
+
+    resumo = f"Não há linha direta entre '{origem}' e '{destino}'. Sugestão de transbordo:\n\n"
+    for paragem_transbordo in sorted(transbordos_candidatos):
+        linhas_ate_transbordo = [l for l in linhas_origem if paragem_transbordo in mapa_linha_paragens.get(l, set())]
+        linhas_desde_transbordo = [l for l in linhas_destino if paragem_transbordo in mapa_linha_paragens.get(l, set())]
+        resumo += f"- Via **{paragem_transbordo}**: apanha a linha {'/'.join(linhas_ate_transbordo)} desde '{origem}', desce em '{paragem_transbordo}', e apanha a linha {'/'.join(linhas_desde_transbordo)} até '{destino}'.\n"
+
+    resumo += ("\nPróximo passo: consulta os horários completos de cada linha sugerida (com "
+               "consultar_cache_horario_linha) e cruza os horários tu próprio para escolher a combinação "
+               "que encaixa melhor com a hora atual, dando margem para a troca de autocarro.")
+    return resumo
 
 def obter_tipologias_cache():
     """Lê as tipologias de passe da cache local (SQLite). Se a cache estiver vazia
@@ -1075,7 +1226,7 @@ def renderizar_jogo():
         </script>
     </div>
     """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
-    return components.html(html_jogo, height=520)
+    return components.html(html_jogo, height=650)
 
 # --- MENSAGEM INICIAL AUTOMÁTICA ---
 MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
@@ -1158,7 +1309,13 @@ with st.sidebar:
         if st.sidebar.button("🔄 Sincronizar Todos os Horários (Scraping)", use_container_width=True):
             with st.spinner("O robô está a ler o site da Guimabus..."):
                 resultado_scraping = sincronizar_todos_horarios_guimabus()
+                resultado_indice = construir_indice_paragens()
                 st.sidebar.success(resultado_scraping)
+                st.sidebar.success(resultado_indice)
+
+        if st.sidebar.button("🗺️ Reconstruir Índice de Paragens (sem re-sincronizar)", use_container_width=True):
+            with st.spinner("A reconstruir o índice a partir da cache já existente..."):
+                st.sidebar.success(construir_indice_paragens())
 
         if st.sidebar.button("🔄 Sincronizar Títulos e Tarifário", use_container_width=True):
             with st.spinner("O robô está a ler titulos/ e tarifarios/..."):
@@ -1268,6 +1425,9 @@ if prompt:
                 - consultar_cache_horario_linha: consulta a cache local da base de dados SQLite para ler os horários e tabelas fixas de uma determinada linha (ex: "101").
                 - consultar_tipologias_cache_tool: lê as tipologias de passe (descrição, preço, custo do cartão, prazo, documentos exigidos), sincronizadas automaticamente de guimabus.pt/titulos/.
                 - consultar_tarifario_cache: lê a tabela tarifária completa (preços por distância), sincronizada automaticamente de guimabus.pt/tarifarios/.
+                - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e uma de destino, diz se há linha direta ou sugere onde fazer transbordo (com base num índice construído a partir dos horários reais). Usa esta ferramenta sempre que o utilizador pedir para ir de um sítio para outro e não for óbvio que linha usar.
+
+                Depois de planear_viagem_com_transbordo indicar quais linhas usar (diretas ou com transbordo), consulta os horários completos dessas linhas com consultar_cache_horario_linha e cruza tu próprio os horários das duas viagens (usando a hora atual do sistema) para dar ao utilizador uma sugestão concreta de que autocarro apanhar em cada troço, com margem de segurança para trocar de autocarro.
 
                 Usa sempre consultar_tipologias_cache_tool e consultar_tarifario_cache para perguntas sobre preços, tipologias de passe ou documentos exigidos — não confies em memória para isto, porque os preços mudam. Se o utilizador quiser efetivamente PEDIR um passe e carregar documentos, informa-o que existe um formulário dedicado na barra lateral ("🎫 Pedir Passe") para isso.
 
@@ -1315,7 +1475,12 @@ if prompt:
                 def _formatar_data_pt(dt):
                     return f"{DIAS_SEMANA_PT[dt.weekday()]}, {dt.day} de {MESES_PT[dt.month - 1]} de {dt.year}"
 
-                agora = datetime.now()
+                # O servidor onde a app corre normalmente usa UTC, não a hora de Portugal —
+                # sem isto, "agora" ficava sistematicamente atrasado 1h (ou 2h no inverno).
+                # Isto afeta só o texto mostrado ao utilizador; os timestamps internos da BD
+                # continuam em hora do servidor, o que não é problema (só servem para comparações
+                # relativas entre si, ex: "há quantos dias foi a última sincronização").
+                agora = datetime.now(ZoneInfo("Europe/Lisbon"))
                 amanha = agora + timedelta(days=1)
                 contexto_data = (
                     f"[DATA E HORA ATUAL DO SISTEMA — usa sempre esta informação, nunca a inventes: "
@@ -1334,7 +1499,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}{contexto_intercecao}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo]
                 
                 # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
