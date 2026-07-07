@@ -11,6 +11,7 @@ import re
 import io
 import time
 import pdfplumber
+import unicodedata
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -802,12 +803,16 @@ def construir_indice_paragens():
 def _normalizar_nome_paragem(texto: str):
     """Os horários oficiais usam abreviaturas (ex: 'S. Torcato' em vez de 'São Torcato'),
     mas as pessoas escrevem por extenso. Sem isto, uma pesquisa por 'São Torcato' nunca
-    encontra 'S. Torcato' no texto, mesmo sendo exatamente a mesma paragem."""
+    encontra 'S. Torcato' no texto, mesmo sendo exatamente a mesma paragem. Também removemos
+    acentos/diacríticos (ex: 'gonca' precisa de encontrar 'Gonça' — para o computador,
+    'c' e 'ç' são caracteres completamente diferentes sem esta normalização)."""
     t = texto.lower().strip()
     t = re.sub(r'\bsão\b', 's.', t)
     t = re.sub(r'\bsanta\b', 'sta.', t)
     t = re.sub(r'\bsanto\b', 'sto.', t)
     t = t.replace('.', '')
+    t = unicodedata.normalize('NFKD', t)
+    t = ''.join(c for c in t if not unicodedata.combining(c))
     t = re.sub(r'\s+', ' ', t).strip()
     return t
 
