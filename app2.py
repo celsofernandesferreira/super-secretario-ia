@@ -1634,17 +1634,13 @@ def renderizar_aviso_legal():
 
 # --- E CHAMA A FUNÇÃO LOGO NO INÍCIO DO TEU SIDEBAR ---
 with st.sidebar:
+    # AQUI É ONDE CHAMA A FUNÇÃO PARA ELA APARECER
+    renderizar_aviso_legal()
+    
     st.header("⚙️ Painel do Agente")
     if st.button("🗑️ Limpar O Meu Histórico", use_container_width=True):
         st.session_state.messages = [{"role": "assistant", "content": MENSAGEM_INICIAL}]
         st.session_state.jogo_ativo = False
-        st.rerun()
-    st.divider()
-    
-    st.subheader("🕹️ Entretenimento")
-    texto_botao_jogo = "Fechar Jogo X" if st.session_state.jogo_ativo else "Abrir Mini-Game 👾"
-    if st.button(texto_botao_jogo, use_container_width=True):
-        st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
     st.divider()
 
