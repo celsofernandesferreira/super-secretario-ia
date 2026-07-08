@@ -286,38 +286,36 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     
     html_rodape = f"""
     <style>
-        /* Container principal fixo no fundo */
-        .footer-fixed {{
+        .footer-wrapper {{
             position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
-            background-color: #1e1e1e; z-index: 9999;
-            display: flex; flex-direction: column;
-            border-top: 4px solid #2ecc71;
-            box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            background-color: #1e1e1e; color: white; z-index: 9999;
+            border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            display: flex; flex-direction: column; overflow: hidden;
         }}
-        /* Faixa do Aviso Legal (Fora do ticker) */
-        .disclaimer-area {{
-            background-color: #333; color: #ddd; font-size: 12px;
-            padding: 5px 20px; text-align: center; font-style: italic;
+        .disclaimer {{
+            background: #2a2a2a; color: #ccc; font-size: 11px; padding: 3px 20px;
+            text-align: center; font-style: italic; border-bottom: 1px solid #444;
         }}
-        /* Faixa dos Anúncios */
-        .ticker-area {{
-            flex: 1; display: flex; align-items: center; padding: 0 20px;
-            overflow: hidden; position: relative;
+        .content-area {{ 
+            display: flex; align-items: center; flex: 1; padding: 0 20px; 
         }}
+        .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
+        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; display: none; }}
         .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
         #ticker-text {{ 
             position: absolute; white-space: nowrap; font-size: 20px; 
-            font-weight: bold; color: white; top: 35px; 
-            animation: scroll-left 25s linear infinite;
+            font-weight: bold; top: 35px; left: 50%;
         }}
-        @keyframes scroll-left {{ 0% {{ transform: translateX(100%); }} 100% {{ transform: translateX(-100%); }} }}
     </style>
     
-    <div class="footer-fixed">
-        <div class="disclaimer-area">
-            Aviso: Esta é uma ferramenta de apoio. Não é um canal oficial de submissão da Guimabus. Os dados não são gravados.
+    <div class="footer-wrapper">
+        <div class="disclaimer">
+            Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.
         </div>
-        <div class="ticker-area">
+        <div class="content-area">
+            <div class="img-box">
+                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
+            </div>
             <div class="text-container">
                 <div id="ticker-text"></div>
             </div>
@@ -328,20 +326,40 @@ def renderizar_rodape_anuncios(anuncios_ativos):
         const anuncios = {dados_js};
         let indice = 0;
         const txt = document.getElementById('ticker-text');
+        const img = document.getElementById('ticker-img');
+        const container = document.querySelector('.text-container');
 
-        function atualizar() {{
+        async function correrAviso() {{
             const a = anuncios[indice];
-            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso importante");
-            indice = (indice + 1) % anuncios.length;
+            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
             
-            // Reinicia a animação ao trocar de texto
-            txt.style.animation = 'none';
-            txt.offsetHeight; 
-            txt.style.animation = null; 
+            // Corrige o problema da imagem desaparecer:
+            if (a.imagem && a.imagem.startsWith('http')) {{
+                img.src = a.imagem;
+                img.style.display = "block";
+            }} else {{
+                img.style.display = "none";
+            }}
+            
+            // Posicionar no meio
+            let pos = container.offsetWidth / 2;
+            txt.style.left = pos + "px";
+            
+            // Loop de movimento
+            function animar() {{
+                pos -= 2; 
+                txt.style.left = pos + "px";
+                
+                if (pos < -txt.offsetWidth) {{
+                    indice = (indice + 1) % anuncios.length;
+                    setTimeout(correrAviso, 2000); 
+                }} else {{
+                    requestAnimationFrame(animar);
+                }}
+            }}
+            animar();
         }}
-        
-        atualizar();
-        setInterval(atualizar, 10000); // Muda de aviso a cada 10 segundos
+        correrAviso();
     </script>
     """
     components.html(html_rodape, height=170)
