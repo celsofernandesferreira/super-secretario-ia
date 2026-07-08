@@ -1620,8 +1620,7 @@ if "jogo_ativo" not in st.session_state:
 sincronizar_automaticamente_se_necessario(limite_dias=7)
 
 # --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
-with st.sidebar:
-    # --- ADICIONA ESTA FUNÇÃO AO TEU CÓDIGO ---
+# --- ADICIONA ESTA FUNÇÃO AO TEU CÓDIGO ---
 def renderizar_aviso_legal():
     with st.expander("🛡️ Aviso Legal e Privacidade", expanded=True):
         st.warning("""
@@ -1635,9 +1634,6 @@ def renderizar_aviso_legal():
 
 # --- E CHAMA A FUNÇÃO LOGO NO INÍCIO DO TEU SIDEBAR ---
 with st.sidebar:
-    renderizar_aviso_legal() # Chama aqui
-    st.header("⚙️ Painel do Agente")
-    # ... (o resto do teu código da sidebar continua aqui)
     st.header("⚙️ Painel do Agente")
     if st.button("🗑️ Limpar O Meu Histórico", use_container_width=True):
         st.session_state.messages = [{"role": "assistant", "content": MENSAGEM_INICIAL}]
