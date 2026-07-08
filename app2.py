@@ -211,51 +211,50 @@ def obter_avisos_facebook():
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
         posts = []
-        
         for i, item in enumerate(itens[:10]):
             titulo = item.find("title").text if item.find("title") else "Aviso"
-            
-            # Tenta buscar o conteúdo completo
             content_encoded = item.find("content:encoded")
-            desc_html = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            
-            # ESTRATÉGIA DE IMAGEM: Tenta enclosure, se falhar, tenta buscar a 1ª imagem no HTML da descrição
-            img_url = ""
-            enclosure = item.find("enclosure")
-            if enclosure and enclosure.get("url"):
-                img_url = enclosure.get("url")
-            else:
-                img_soup = BeautifulSoup(desc_html, "html.parser")
-                img_tag = img_soup.find("img")
-                if img_tag and img_tag.get("src"):
-                    img_url = img_tag.get("src")
-            
+            desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
             posts.append({
                 "id": i, 
                 "titulo": titulo, 
-                "texto": BeautifulSoup(desc_html, "html.parser").get_text().strip(), 
-                "imagem": img_url
+                "texto": BeautifulSoup(desc, "html.parser").get_text().strip(), 
+                "imagem": item.find("enclosure").get("url") if item.find("enclosure") else ""
             })
 
-        # IA para prioridades
-        prompt = f"""Analisa estes avisos da Guimabus e atribui 'prioridade' de 1 a 5.
-        5: Greves/Trânsito/Obras. 3: Alterações. 1: Genérico.
-        Devolve JSON: [ {{"id": 0, "prioridade": 5}}, ... ]
-        Posts: {json.dumps(posts, ensure_ascii=False)}"""
+        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+        data_hoje_str = agora.strftime("%d de %B de %Y")
+
+        # Prompt mais rigoroso com lógica de comparação
+        prompt = f"""
+        Hoje é dia {data_hoje_str}. Analisa os avisos abaixo.
+        1. Para cada aviso, lê a data mencionada no texto.
+        2. Se o aviso refere uma data limite que já passou (ex: "até 20 de maio" e hoje é julho), classifica como EXPIRADO.
+        3. Se o aviso não menciona datas, assume que é para hoje (ativo).
+        4. Se o aviso menciona datas futuras, assume que é ATIVO.
+        
+        Devolve APENAS um JSON com os IDs dos avisos que NÃO estão expirados.
+        Exemplo de resposta: {{"ativos": [1, 2, 4]}}
+        
+        Avisos: {json.dumps(posts, ensure_ascii=False)}
+        """
         
         model = genai.GenerativeModel("gemini-3.5-flash")
         resp = model.generate_content(prompt)
-        match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
+        match = re.search(r'\{.*\}', resp.text, re.DOTALL)
         
         if match:
-            prioridades = json.loads("[" + match.group(1) + "]")
+            resultado = json.loads(match.group(0))
+            ids_ativos = resultado.get("ativos", [])
+            
             for p in posts:
-                p_info = next((x for x in prioridades if x["id"] == p["id"]), {"prioridade": 1})
-                avisos_ativos.append({
-                    "texto": p["texto"], 
-                    "imagem": p["imagem"], 
-                    "prioridade": p_info["prioridade"]
-                })
+                if p["id"] in ids_ativos:
+                    avisos_ativos.append({
+                        "texto": p["texto"], 
+                        "imagem": p["imagem"], 
+                        "prioridade": 5 if "greve" in p["texto"].lower() or "corte" in p["texto"].lower() else 1
+                    })
+            
             avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
             
     except Exception as e:
