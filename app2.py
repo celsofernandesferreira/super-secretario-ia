@@ -306,43 +306,52 @@ def obter_avisos_facebook():
     return avisos_ativos
 
 def renderizar_rodape_anuncios(anuncios_ativos):
-    if not anuncios_ativos: 
-        return
-        
+    if not anuncios_ativos: return
+    
     dados_js = json.dumps(anuncios_ativos)
     
     html_rodape = f"""
     <style>
-        .ticker-wrapper {{
-            position: fixed; bottom: 0; left: 0; width: 100%; height: 120px;
+        .footer-wrapper {{
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 140px;
             background-color: #1e1e1e; color: white; z-index: 9999;
             display: flex; align-items: center; border-top: 4px solid #2ecc71;
-            box-shadow: 0px -4px 20px rgba(0,0,0,0.8); overflow: hidden;
+            box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
         }}
-        #ticker-img {{ height: 100px; margin-left: 20px; border-radius: 6px; cursor: pointer; border: 1px solid #555; }}
+        .image-box {{ flex: 0 0 150px; display: flex; justify-content: center; align-items: center; }}
+        #ticker-img {{ max-height: 120px; border-radius: 8px; cursor: pointer; border: 2px solid #555; }}
+        
+        .text-box {{ flex: 1; overflow: hidden; white-space: nowrap; position: relative; }}
         .scroll-text {{
-            white-space: nowrap; font-size: 20px; font-weight: bold;
-            padding-left: 100%; animation: marquee 30s linear infinite;
+            display: inline-block; white-space: nowrap; font-size: 20px; font-weight: bold;
+            animation: scroll-left 20s linear infinite;
         }}
-        @keyframes marquee {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
+        @keyframes scroll-left {{
+            0% {{ transform: translateX(100%); }}
+            100% {{ transform: translateX(-100%); }}
+        }}
     </style>
     
-    <div class="ticker-wrapper">
-        <img id="ticker-img" src="" style="display:none;" onclick="window.open(this.src, '_blank');">
-        <div id="ticker-text" class="scroll-text"></div>
+    <div class="footer-wrapper">
+        <div class="image-box">
+            <img id="ticker-img" src="" style="display:none;" onclick="window.open(this.src, '_blank');">
+        </div>
+        <div class="text-box">
+            <div id="ticker-text" class="scroll-text"></div>
+        </div>
     </div>
 
     <script>
         const anuncios = {dados_js};
         let indice = 0;
         
-        function proximo() {{
+        function atualizar() {{
             const a = anuncios[indice];
             const img = document.getElementById('ticker-img');
             const txt = document.getElementById('ticker-text');
             
-            // Texto com fallback de segurança para evitar 'undefined'
-            txt.innerText = "🚨 AVISO: " + (a.texto || a.titulo || "Aviso sem descrição");
+            // Texto seguro
+            txt.innerText = "🚨 AVISO: " + (a.texto || a.titulo || "Aviso importante");
             
             // Imagem
             if (a.imagem && a.imagem.startsWith('http')) {{
@@ -355,11 +364,11 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             indice = (indice + 1) % anuncios.length;
         }}
         
-        proximo();
-        setInterval(proximo, 10000); // Troca o aviso a cada 10 segundos
+        atualizar();
+        setInterval(atualizar, 10000); // Troca o aviso a cada 10s
     </script>
     """
-    components.html(html_rodape, height=140)
+    components.html(html_rodape, height=150)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
