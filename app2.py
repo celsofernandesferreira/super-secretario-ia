@@ -1621,6 +1621,23 @@ sincronizar_automaticamente_se_necessario(limite_dias=7)
 
 # --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
 with st.sidebar:
+    # --- ADICIONA ESTA FUNÇÃO AO TEU CÓDIGO ---
+def renderizar_aviso_legal():
+    with st.expander("🛡️ Aviso Legal e Privacidade", expanded=True):
+        st.warning("""
+        **Canal Não Oficial**
+        Esta aplicação é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão à Guimabus.**
+        
+        Depois de confirmares aqui que os teus documentos parecem corretos, ainda precisas de os entregar ou carregar através dos canais oficiais da Guimabus (loja física ou formulário oficial).
+        
+        **Privacidade:** Os documentos que carregares aqui **não são guardados** — são analisados em memória e descartados logo a seguir; não ficam gravados em nenhum ficheiro, base de dados ou log desta aplicação.
+        """)
+
+# --- E CHAMA A FUNÇÃO LOGO NO INÍCIO DO TEU SIDEBAR ---
+with st.sidebar:
+    renderizar_aviso_legal() # Chama aqui
+    st.header("⚙️ Painel do Agente")
+    # ... (o resto do teu código da sidebar continua aqui)
     st.header("⚙️ Painel do Agente")
     if st.button("🗑️ Limpar O Meu Histórico", use_container_width=True):
         st.session_state.messages = [{"role": "assistant", "content": MENSAGEM_INICIAL}]
