@@ -307,49 +307,48 @@ def obter_avisos_facebook():
 
 def renderizar_rodape_anuncios(anuncios_ativos):
     if not anuncios_ativos: return
-    dados_js = json.dumps(anuncios_ativos)
     
-    html_rodape = f"""
-    <div id="ticker-container" style="
-        position: fixed; bottom: 0; left: 0; width: 100%; 
-        background-color: #1e1e1e; color: white; z-index: 9999; 
-        padding: 10px; border-top: 4px solid #2ecc71; 
-        display: flex; align-items: center; justify-content: center; 
-        font-family: sans-serif; box-shadow: 0px -4px 15px rgba(0,0,0,0.5);
-    ">
-        <button onclick="mudarAnuncio(-1)" style="background:none; border:none; color:white; font-size:24px; cursor:pointer; padding:0 15px;">❮</button>
-        
-        <div id="ticker-content" style="display: flex; align-items: center; max-width: 900px; flex-grow: 1;">
-            <img id="ticker-img" src="" style="max-height: 80px; border-radius: 6px; margin-right: 20px; display: none; cursor: pointer; border: 1px solid #444;" onclick="window.open(this.src, '_blank');">
-            <span id="ticker-text" style="font-size: 16px; font-weight: bold; flex: 1;">A carregar avisos...</span>
-        </div>
-        
-        <button onclick="mudarAnuncio(1)" style="background:none; border:none; color:white; font-size:24px; cursor:pointer; padding:0 15px;">❯</button>
+    # Criamos o HTML com uma animação CSS de 'scroll'
+    html_rodape = """
+    <style>
+        .marquee-container {
+            position: fixed; bottom: 0; left: 0; width: 100%;
+            background-color: #1e1e1e; color: white; z-index: 9999;
+            padding: 10px 0; border-top: 4px solid #2ecc71;
+            overflow: hidden; white-space: nowrap;
+        }
+        .marquee-text {
+            display: inline-block;
+            padding-left: 100%;
+            animation: scroll 30s linear infinite;
+            font-size: 18px; font-weight: bold;
+        }
+        @keyframes scroll {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(-100%, 0); }
+        }
+        .post-item { display: inline-block; margin-right: 50px; cursor: pointer; }
+    </style>
+    <div class="marquee-container">
+        <div class="marquee-text" id="ticker"></div>
     </div>
-
     <script>
-        const anuncios = {dados_js};
-        let indice = 0;
+        const anuncios = DADOS_PLACEHOLDER;
+        const container = document.getElementById('ticker');
         
-        function atualizar() {{
-            const a = anuncios[indice];
-            document.getElementById('ticker-text').innerText = "🚨 " + a.texto;
-            const img = document.getElementById('ticker-img');
-            if (a.imagem) {{ img.src = a.imagem; img.style.display = "block"; }}
-            else {{ img.style.display = "none"; }}
-        }}
-        
-        function mudarAnuncio(dir) {{
-            indice = (indice + dir + anuncios.length) % anuncios.length;
-            atualizar();
-        }}
-        
-        atualizar();
-        // Rotação automática a cada 10 segundos
-        setInterval(() => mudarAnuncio(1), 10000);
+        anuncios.forEach(a => {
+            const span = document.createElement('span');
+            span.className = 'post-item';
+            span.innerHTML = (a.prioridade === 'alta' ? '🚨 ' : 'ℹ️ ') + a.titulo + " (Clica para ver imagem)";
+            if(a.imagem) {
+                span.onclick = () => window.open(a.imagem, '_blank');
+            }
+            container.appendChild(span);
+        });
     </script>
-    """
-    components.html(html_rodape, height=130)
+    """.replace("DADOS_PLACEHOLDER", json.dumps(anuncios_ativos))
+    
+    components.html(html_rodape, height=60)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
