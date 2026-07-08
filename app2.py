@@ -312,50 +312,54 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     dados_js = json.dumps(anuncios_ativos)
     
     html_rodape = f"""
-    <div id="footer-container" style="
-        position: fixed; bottom: 0; left: 0; width: 100%; 
-        background-color: #1e1e1e; color: white; z-index: 9999; 
-        padding: 20px; border-top: 4px solid #2ecc71; 
-        display: flex; align-items: center; justify-content: center; 
-        font-family: sans-serif; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
-    ">
-        <div id="ticker-content" style="display: flex; align-items: center; max-width: 1200px; width: 100%;">
-            <img id="ticker-img" src="" style="max-height: 120px; border-radius: 8px; margin-right: 25px; display: none; cursor: pointer; border: 2px solid #555;" onclick="window.open(this.src, '_blank');">
-            <span id="ticker-text" style="font-size: 20px; font-weight: bold; line-height: 1.4;"></span>
-        </div>
+    <style>
+        .ticker-wrapper {{
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 120px;
+            background-color: #1e1e1e; color: white; z-index: 9999;
+            display: flex; align-items: center; border-top: 4px solid #2ecc71;
+            box-shadow: 0px -4px 20px rgba(0,0,0,0.8); overflow: hidden;
+        }}
+        #ticker-img {{ height: 100px; margin-left: 20px; border-radius: 6px; cursor: pointer; border: 1px solid #555; }}
+        .scroll-text {{
+            white-space: nowrap; font-size: 20px; font-weight: bold;
+            padding-left: 100%; animation: marquee 30s linear infinite;
+        }}
+        @keyframes marquee {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
+    </style>
+    
+    <div class="ticker-wrapper">
+        <img id="ticker-img" src="" style="display:none;" onclick="window.open(this.src, '_blank');">
+        <div id="ticker-text" class="scroll-text"></div>
     </div>
 
     <script>
         const anuncios = {dados_js};
         let indice = 0;
         
-        function atualizar() {{
+        function proximo() {{
             const a = anuncios[indice];
-            const imgElement = document.getElementById('ticker-img');
-            const textElement = document.getElementById('ticker-text');
+            const img = document.getElementById('ticker-img');
+            const txt = document.getElementById('ticker-text');
             
-            // Define o texto com verificação de segurança
-            textElement.innerText = "🚨 AVISO: " + (a.texto || a.titulo || "Sem descrição disponível");
+            // Texto com fallback de segurança para evitar 'undefined'
+            txt.innerText = "🚨 AVISO: " + (a.texto || a.titulo || "Aviso sem descrição");
             
-            // Define a imagem com verificação de segurança
+            // Imagem
             if (a.imagem && a.imagem.startsWith('http')) {{
-                imgElement.src = a.imagem;
-                imgElement.style.display = "block";
+                img.src = a.imagem;
+                img.style.display = "block";
             }} else {{
-                imgElement.style.display = "none";
+                img.style.display = "none";
             }}
             
-            // Passa para o próximo
             indice = (indice + 1) % anuncios.length;
         }}
         
-        // Arranca
-        atualizar();
-        // Muda de aviso a cada 10 segundos
-        setInterval(atualizar, 10000);
+        proximo();
+        setInterval(proximo, 10000); // Troca o aviso a cada 10 segundos
     </script>
     """
-    components.html(html_rodape, height=160)
+    components.html(html_rodape, height=140)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
