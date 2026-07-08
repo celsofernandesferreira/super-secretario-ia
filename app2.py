@@ -284,28 +284,31 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     
     dados_js = json.dumps(anuncios_ativos)
     
+    # O HTML agora inclui o disclaimer no topo da caixa fixa
     html_rodape = f"""
     <style>
-        .footer-wrapper {{
-            position: fixed; bottom: 0; left: 0; width: 100%; height: 130px;
+        .footer-container {{
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
             background-color: #1e1e1e; color: white; z-index: 9999;
             padding: 10px 20px; border-top: 4px solid #2ecc71;
-            display: flex; align-items: center; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            display: flex; flex-direction: column; align-items: center;
         }}
-        .img-box {{ flex: 0 0 150px; display: flex; align-items: center; justify-content: center; }}
-        #ticker-img {{ max-height: 100px; border-radius: 6px; cursor: pointer; border: 2px solid #555; display: none; }}
-        .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
-        #ticker-text {{ 
-            position: absolute; white-space: nowrap; font-size: 22px; 
-            font-weight: bold; top: 35px; left: 50%; 
+        .disclaimer {{
+            font-size: 12px; color: #aaa; margin-bottom: 5px; 
+            text-align: center; font-style: italic; opacity: 0.8;
         }}
+        .ticker-main {{
+            display: flex; align-items: center; max-width: 1200px; width: 100%; height: 100px;
+        }}
+        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; margin-right: 20px; }}
+        #ticker-text {{ font-size: 19px; font-weight: bold; line-height: 1.4; }}
     </style>
     
-    <div class="footer-wrapper">
-        <div class="img-box">
-            <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
-        </div>
-        <div class="text-container">
+    <div class="footer-container">
+        <div class="disclaimer">Esta é uma ferramenta de apoio independente. Não possui vínculo oficial com a Guimabus.</div>
+        <div class="ticker-main">
+            <img id="ticker-img" src="" style="display:none;" onclick="window.open(this.src, '_blank');">
             <div id="ticker-text"></div>
         </div>
     </div>
@@ -313,40 +316,29 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     <script>
         const anuncios = {dados_js};
         let indice = 0;
-        const txt = document.getElementById('ticker-text');
-        const img = document.getElementById('ticker-img');
-        const container = document.querySelector('.text-container');
-
-        async function correrAviso() {{
+        
+        function atualizar() {{
             const a = anuncios[indice];
-            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
-            img.style.display = a.imagem ? "block" : "none";
-            img.src = a.imagem || "";
+            const img = document.getElementById('ticker-img');
+            const txt = document.getElementById('ticker-text');
             
-            // Posicionar no meio
-            let pos = container.offsetWidth / 2;
-            txt.style.left = pos + "px";
+            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso importante");
             
-            // Loop de movimento
-            function animar() {{
-                pos -= 2; // Velocidade constante (aumenta para andar mais rápido)
-                txt.style.left = pos + "px";
-                
-                // Se o texto saiu todo para a esquerda
-                if (pos < -txt.offsetWidth) {{
-                    indice = (indice + 1) % anuncios.length;
-                    setTimeout(correrAviso, 2000); // Pausa de 2 segundos antes de recomeçar
-                }} else {{
-                    requestAnimationFrame(animar);
-                }}
+            if (a.imagem && a.imagem.startsWith('http')) {{
+                img.src = a.imagem;
+                img.style.display = "block";
+            }} else {{
+                img.style.display = "none";
             }}
-            animar();
+            
+            indice = (indice + 1) % anuncios.length;
         }}
-        correrAviso();
+        
+        atualizar();
+        setInterval(atualizar, 10000); // 10 segundos
     </script>
     """
-    components.html(html_rodape, height=140)
-
+    components.html(html_rodape, height=170)
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
