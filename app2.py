@@ -264,7 +264,6 @@ def obter_avisos_facebook():
         - Exclui avisos de datas passadas que já terminaram.
         
         Devolve APENAS um array JSON com os IDs das publicações que devem aparecer. Ex: [0, 2].
-        """
         
         REGRAS DE SELEÇÃO ESTRITAS:
         1. Se a publicação menciona um intervalo de datas (ex: "de 1 de abril a 20 de maio") e o dia de hoje ({data_hoje_pt}) ESTÁ dentro desse intervalo, deves selecioná-la.
