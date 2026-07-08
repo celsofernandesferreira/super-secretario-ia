@@ -205,57 +205,38 @@ except Exception:
 def obter_avisos_facebook():
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
+    
+    # Palavras-chave que forçam prioridade máxima
+    gatilhos_urgentes = ["greve", "corte", "obra", "trânsito", "urgente", "proibição"]
 
     try:
         response = requests.get(url_rss, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
-        posts = []
-        for i, item in enumerate(itens[:10]):
+        
+        for item in itens[:10]:
             titulo = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            posts.append({
-                "id": i, 
-                "titulo": titulo, 
-                "texto": BeautifulSoup(desc, "html.parser").get_text().strip(), 
-                "imagem": item.find("enclosure").get("url") if item.find("enclosure") else ""
+            texto_limpo = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            
+            # Buscar imagem de forma robusta
+            img = item.find("enclosure").get("url") if item.find("enclosure") else ""
+            if not img:
+                img_match = re.search(r'src="([^"]+)"', desc)
+                if img_match: img = img_match.group(1)
+
+            # Lógica de prioridade: 5 se for urgente, 1 se for normal
+            prioridade = 5 if any(p in texto_limpo.lower() for p in gatilhos_urgentes) else 1
+            
+            avisos_ativos.append({
+                "texto": texto_limpo,
+                "imagem": img,
+                "prioridade": prioridade
             })
-
-        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-        data_hoje_str = agora.strftime("%d de %B de %Y")
-
-        # Prompt mais rigoroso com lógica de comparação
-        prompt = f"""
-        Hoje é dia {data_hoje_str}. Analisa os avisos abaixo.
-        1. Para cada aviso, lê a data mencionada no texto.
-        2. Se o aviso refere uma data limite que já passou (ex: "até 20 de maio" e hoje é julho), classifica como EXPIRADO.
-        3. Se o aviso não menciona datas, assume que é para hoje (ativo).
-        4. Se o aviso menciona datas futuras, assume que é ATIVO.
-        
-        Devolve APENAS um JSON com os IDs dos avisos que NÃO estão expirados.
-        Exemplo de resposta: {{"ativos": [1, 2, 4]}}
-        
-        Avisos: {json.dumps(posts, ensure_ascii=False)}
-        """
-        
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        resp = model.generate_content(prompt)
-        match = re.search(r'\{.*\}', resp.text, re.DOTALL)
-        
-        if match:
-            resultado = json.loads(match.group(0))
-            ids_ativos = resultado.get("ativos", [])
             
-            for p in posts:
-                if p["id"] in ids_ativos:
-                    avisos_ativos.append({
-                        "texto": p["texto"], 
-                        "imagem": p["imagem"], 
-                        "prioridade": 5 if "greve" in p["texto"].lower() or "corte" in p["texto"].lower() else 1
-                    })
-            
-            avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+        # Ordenar: Prioridade 5 primeiro
+        avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
             
     except Exception as e:
         logging.error(f"Erro RSS: {e}")
