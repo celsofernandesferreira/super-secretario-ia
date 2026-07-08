@@ -306,49 +306,56 @@ def obter_avisos_facebook():
     return avisos_ativos
 
 def renderizar_rodape_anuncios(anuncios_ativos):
-    if not anuncios_ativos: return
-    
-    # Criamos o HTML com uma animação CSS de 'scroll'
-    html_rodape = """
-    <style>
-        .marquee-container {
-            position: fixed; bottom: 0; left: 0; width: 100%;
-            background-color: #1e1e1e; color: white; z-index: 9999;
-            padding: 10px 0; border-top: 4px solid #2ecc71;
-            overflow: hidden; white-space: nowrap;
-        }
-        .marquee-text {
-            display: inline-block;
-            padding-left: 100%;
-            animation: scroll 30s linear infinite;
-            font-size: 18px; font-weight: bold;
-        }
-        @keyframes scroll {
-            0% { transform: translate(0, 0); }
-            100% { transform: translate(-100%, 0); }
-        }
-        .post-item { display: inline-block; margin-right: 50px; cursor: pointer; }
-    </style>
-    <div class="marquee-container">
-        <div class="marquee-text" id="ticker"></div>
-    </div>
-    <script>
-        const anuncios = DADOS_PLACEHOLDER;
-        const container = document.getElementById('ticker');
+    if not anuncios_ativos: 
+        return
         
-        anuncios.forEach(a => {
-            const span = document.createElement('span');
-            span.className = 'post-item';
-            span.innerHTML = (a.prioridade === 'alta' ? '🚨 ' : 'ℹ️ ') + a.titulo + " (Clica para ver imagem)";
-            if(a.imagem) {
-                span.onclick = () => window.open(a.imagem, '_blank');
-            }
-            container.appendChild(span);
-        });
-    </script>
-    """.replace("DADOS_PLACEHOLDER", json.dumps(anuncios_ativos))
+    dados_js = json.dumps(anuncios_ativos)
     
-    components.html(html_rodape, height=60)
+    html_rodape = f"""
+    <div id="footer-container" style="
+        position: fixed; bottom: 0; left: 0; width: 100%; 
+        background-color: #1e1e1e; color: white; z-index: 9999; 
+        padding: 20px; border-top: 4px solid #2ecc71; 
+        display: flex; align-items: center; justify-content: center; 
+        font-family: sans-serif; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+    ">
+        <div id="ticker-content" style="display: flex; align-items: center; max-width: 1200px; width: 100%;">
+            <img id="ticker-img" src="" style="max-height: 120px; border-radius: 8px; margin-right: 25px; display: none; cursor: pointer; border: 2px solid #555;" onclick="window.open(this.src, '_blank');">
+            <span id="ticker-text" style="font-size: 20px; font-weight: bold; line-height: 1.4;"></span>
+        </div>
+    </div>
+
+    <script>
+        const anuncios = {dados_js};
+        let indice = 0;
+        
+        function atualizar() {{
+            const a = anuncios[indice];
+            const imgElement = document.getElementById('ticker-img');
+            const textElement = document.getElementById('ticker-text');
+            
+            // Define o texto com verificação de segurança
+            textElement.innerText = "🚨 AVISO: " + (a.texto || a.titulo || "Sem descrição disponível");
+            
+            // Define a imagem com verificação de segurança
+            if (a.imagem && a.imagem.startsWith('http')) {{
+                imgElement.src = a.imagem;
+                imgElement.style.display = "block";
+            }} else {{
+                imgElement.style.display = "none";
+            }}
+            
+            // Passa para o próximo
+            indice = (indice + 1) % anuncios.length;
+        }}
+        
+        // Arranca
+        atualizar();
+        // Muda de aviso a cada 10 segundos
+        setInterval(atualizar, 10000);
+    </script>
+    """
+    components.html(html_rodape, height=160)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
