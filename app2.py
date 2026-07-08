@@ -203,80 +203,50 @@ except Exception:
 # --- INTEGRAÇÃO FACEBOOK RSS (COM INTELIGÊNCIA ARTIFICIAL PARA DATAS) ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
-    """
-    Lê os últimos 10 avisos do Facebook e usa a IA para ler datas.
-    """
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
 
     try:
-        # 1. Obter os dados do RSS
         response = requests.get(url_rss, timeout=10)
-        response.raise_for_status()
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
-        
-        posts_para_analisar = []
+        posts = []
         for i, item in enumerate(itens[:10]):
-            texto_titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
-            
-            # Tenta buscar o conteúdo completo (content:encoded) ou a descrição
+            titulo = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
-            desc_raw = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            
-            # Tentar extrair a imagem
-            imagem_url = ""
-            enclosure = item.find("enclosure")
-            if enclosure and enclosure.get("url"):
-                imagem_url = enclosure.get("url")
-            elif desc_raw:
-                img_match = re.search(r'src="([^"]+)"', desc_raw)
-                if img_match: imagem_url = img_match.group(1)
-            
-            # Limpar HTML e manter o texto limpo
-            texto_limpo = BeautifulSoup(desc_raw, "html.parser").get_text(separator=" ").strip()
-            
-            posts_para_analisar.append({
-                "id": i,
-                "titulo": texto_titulo,
-                "texto_completo": texto_limpo, # Isto é a tua descrição limpa
-                "imagem": imagem_url
-            })
-            
-        if not posts_para_analisar:
-            return []
+            desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
+            posts.append({"id": i, "titulo": titulo, "texto": BeautifulSoup(desc, "html.parser").get_text().strip(), "imagem": item.find("enclosure").get("url") if item.find("enclosure") else ""})
 
-        # 2. --- FILTRAGEM DINÂMICA COM IA ---
-        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-        meses_pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
-        data_hoje_pt = f"{agora.day} de {meses_pt[agora.month - 1]} de {agora.year}"
-
-        prompt_filtro = f"""
-        Hoje é {data_hoje_pt}. Aqui tens uma lista de publicações da Guimabus.
-        Devolve um JSON com os IDs das publicações que devem aparecer.
-        Publicações: {json.dumps([{"id": p["id"], "texto": p["texto_completo"]} for p in posts_para_analisar], ensure_ascii=False)}
+        # IA atribui prioridade (1 a 5, onde 5 é urgente)
+        prompt = f"""
+        Analisa estes avisos da Guimabus e atribui uma 'prioridade' de 1 a 5.
+        - 5: Greves, cortes de trânsito, obras graves ou avisos urgentes para hoje.
+        - 3: Alterações de percurso normais.
+        - 1: Eventos, piscinas ou avisos genéricos.
+        Devolve um JSON: [ {{"id": 0, "prioridade": 5}}, ... ]
+        Posts: {json.dumps(posts, ensure_ascii=False)}
         """
+        model = genai.GenerativeModel("gemini-3.5-flash")
+        resp = model.generate_content(prompt)
+        match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
         
-        model_filtro = genai.GenerativeModel("gemini-3.5-flash")
-        resp = model_filtro.generate_content(prompt_filtro, request_options={"timeout": 15})
-        
-        match_json = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
-        if match_json:
-            try:
-                ids_ativos = json.loads("[" + match_json.group(1) + "]")
-                for p in posts_para_analisar:
-                    if p["id"] in ids_ativos:
-                        # --- AQUI É ONDE MUDÁMOS: p["texto_completo"] em vez de p["titulo"] ---
-                        avisos_ativos.append({"texto": p["texto_completo"], "imagem": p["imagem"]})
-            except: pass
-        
-        # Fallback
-        if not avisos_ativos and posts_para_analisar: 
-            avisos_ativos.append({"texto": posts_para_analisar[0]["texto_completo"], "imagem": posts_para_analisar[0]["imagem"]})
-
+        if match:
+            prioridades = json.loads("[" + match.group(1) + "]")
+            # Unir prioridades com os posts
+            for p in posts:
+                # Procura a prioridade atribuída pela IA
+                p_info = next((x for x in prioridades if x["id"] == p["id"]), {"prioridade": 1})
+                avisos_ativos.append({
+                    "texto": p["texto"], 
+                    "imagem": p["imagem"], 
+                    "prioridade": p_info["prioridade"]
+                })
+            
+            # ORDENAR: Os de prioridade maior (5) ficam no início da lista
+            avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+            
     except Exception as e:
-        logging.error(f"Erro ao obter Facebook RSS: {e}")
-        
+        logging.error(f"Erro RSS: {e}")
     return avisos_ativos
 
 def renderizar_rodape_anuncios(anuncios_ativos):
