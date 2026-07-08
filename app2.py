@@ -284,58 +284,64 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     
     dados_js = json.dumps(anuncios_ativos)
     
-    # O HTML agora inclui o disclaimer no topo da caixa fixa
     html_rodape = f"""
     <style>
-        .footer-container {{
+        /* Container principal fixo no fundo */
+        .footer-fixed {{
             position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
-            background-color: #1e1e1e; color: white; z-index: 9999;
-            padding: 10px 20px; border-top: 4px solid #2ecc71;
+            background-color: #1e1e1e; z-index: 9999;
+            display: flex; flex-direction: column;
+            border-top: 4px solid #2ecc71;
             box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
-            display: flex; flex-direction: column; align-items: center;
         }}
-        .disclaimer {{
-            font-size: 12px; color: #aaa; margin-bottom: 5px; 
-            text-align: center; font-style: italic; opacity: 0.8;
+        /* Faixa do Aviso Legal (Fora do ticker) */
+        .disclaimer-area {{
+            background-color: #333; color: #ddd; font-size: 12px;
+            padding: 5px 20px; text-align: center; font-style: italic;
         }}
-        .ticker-main {{
-            display: flex; align-items: center; max-width: 1200px; width: 100%; height: 100px;
+        /* Faixa dos Anúncios */
+        .ticker-area {{
+            flex: 1; display: flex; align-items: center; padding: 0 20px;
+            overflow: hidden; position: relative;
         }}
-        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; margin-right: 20px; }}
-        #ticker-text {{ font-size: 19px; font-weight: bold; line-height: 1.4; }}
+        .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
+        #ticker-text {{ 
+            position: absolute; white-space: nowrap; font-size: 20px; 
+            font-weight: bold; color: white; top: 35px; 
+            animation: scroll-left 25s linear infinite;
+        }}
+        @keyframes scroll-left {{ 0% {{ transform: translateX(100%); }} 100% {{ transform: translateX(-100%); }} }}
     </style>
     
-    <div class="footer-container">
-        <div class="disclaimer">Esta é uma ferramenta de apoio independente. Não possui vínculo oficial com a Guimabus.</div>
-        <div class="ticker-main">
-            <img id="ticker-img" src="" style="display:none;" onclick="window.open(this.src, '_blank');">
-            <div id="ticker-text"></div>
+    <div class="footer-fixed">
+        <div class="disclaimer-area">
+            Aviso: Esta é uma ferramenta de apoio. Não é um canal oficial de submissão da Guimabus. Os dados não são gravados.
+        </div>
+        <div class="ticker-area">
+            <div class="text-container">
+                <div id="ticker-text"></div>
+            </div>
         </div>
     </div>
 
     <script>
         const anuncios = {dados_js};
         let indice = 0;
-        
+        const txt = document.getElementById('ticker-text');
+
         function atualizar() {{
             const a = anuncios[indice];
-            const img = document.getElementById('ticker-img');
-            const txt = document.getElementById('ticker-text');
-            
             txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso importante");
-            
-            if (a.imagem && a.imagem.startsWith('http')) {{
-                img.src = a.imagem;
-                img.style.display = "block";
-            }} else {{
-                img.style.display = "none";
-            }}
-            
             indice = (indice + 1) % anuncios.length;
+            
+            // Reinicia a animação ao trocar de texto
+            txt.style.animation = 'none';
+            txt.offsetHeight; 
+            txt.style.animation = null; 
         }}
         
         atualizar();
-        setInterval(atualizar, 10000); // 10 segundos
+        setInterval(atualizar, 10000); // Muda de aviso a cada 10 segundos
     </script>
     """
     components.html(html_rodape, height=170)
