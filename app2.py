@@ -218,25 +218,24 @@ def obter_avisos_facebook():
         itens = soup.find_all("item")
         
         posts_para_analisar = []
-        for i, item in enumerate(itens[:10]): # Analisamos os últimos 10 posts
+        for i, item in enumerate(itens[:10]):
             texto_titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
-            desc = item.find("description")
-            desc_text = desc.text if desc else ""
+            
+            # Tenta buscar o conteúdo completo (content:encoded) ou a descrição
+            content_encoded = item.find("content:encoded")
+            desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
             
             # Tentar extrair a imagem
             imagem_url = ""
             enclosure = item.find("enclosure")
             if enclosure and enclosure.get("url"):
                 imagem_url = enclosure.get("url")
-            elif desc_text:
-                img_match = re.search(r'src="([^"]+)"', desc_text)
-                if img_match:
-                    imagem_url = img_match.group(1)
+            elif desc:
+                img_match = re.search(r'src="([^"]+)"', desc)
+                if img_match: imagem_url = img_match.group(1)
             
-            # Limpar as tags HTML da descrição para não confundir a IA
-            texto_limpo = texto_titulo
-            if desc_text:
-                texto_limpo += " - " + BeautifulSoup(desc_text, "html.parser").get_text(separator=" ").strip()
+            # Limpar HTML e manter o texto limpo
+            texto_limpo = texto_titulo + " - " + BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
             posts_para_analisar.append({
                 "id": i,
