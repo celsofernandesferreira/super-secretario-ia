@@ -206,9 +206,8 @@ def obter_avisos_facebook():
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
     
-    # 1. Obter a data correta no momento da execução
     agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-    data_hoje_str = agora.strftime("%d de %B de %Y") # Formato dinâmico
+    data_hoje_str = agora.strftime("%d de %B de %Y")
 
     try:
         response = requests.get(url_rss, timeout=10)
@@ -222,12 +221,26 @@ def obter_avisos_facebook():
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
             texto_limpo = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
+            # --- CORREÇÃO: Lógica de Extração de Imagem Robusta ---
+            # 1. Tenta encontrar no enclosure
+            enclosure = item.find("enclosure")
+            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
+            
+            # 2. Se não encontrar, procura a tag <img> dentro do código da descrição
+            if not img_url and desc:
+                img_match = re.search(r'src="([^"]+)"', desc)
+                if img_match:
+                    img_url = img_match.group(1)
+            # ----------------------------------------------------
+            
             posts.append({
-                "id": i, "titulo": titulo, "texto": texto_limpo, 
-                "imagem": item.find("enclosure").get("url") if item.find("enclosure") else ""
+                "id": i, 
+                "titulo": titulo, 
+                "texto": texto_limpo, 
+                "imagem": img_url
             })
 
-        # 2. O Prompt agora usa a variável dinâmica {data_hoje_str}
+        # IA para filtragem e prioridade
         prompt = f"""
         Hoje é {data_hoje_str}. Analisa os posts abaixo.
         1. Identifica a data limite de cada aviso.
@@ -247,7 +260,9 @@ def obter_avisos_facebook():
                 p = next((x for x in posts if x["id"] == r["id"]), None)
                 if p:
                     avisos_ativos.append({
-                        "texto": p["texto"], "imagem": p["imagem"], "prioridade": r["prioridade"]
+                        "texto": p["texto"], 
+                        "imagem": p["imagem"], 
+                        "prioridade": r["prioridade"]
                     })
             avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
             
