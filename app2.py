@@ -203,50 +203,43 @@ except Exception:
 # --- INTEGRAÇÃO FACEBOOK RSS (COM INTELIGÊNCIA ARTIFICIAL PARA DATAS) ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
-    """
-    Lê os últimos 10 avisos do Facebook e usa a Inteligência Artificial para ler
-    as datas no meio do texto, mostrando apenas os que estão ativos no dia de hoje.
-    """
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
-    avisos_ativos = []
+    avisos = []
 
     try:
-        # 1. Obter os dados do RSS
         response = requests.get(url_rss, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
         
-        posts_para_analisar = []
-        for i, item in enumerate(itens[:10]): # Analisamos os últimos 10 posts
-            texto_titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
-            desc = item.find("description")
-            desc_text = desc.text if desc else ""
+        posts = []
+        for i, item in enumerate(itens[:10]):
+            titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
+            desc = BeautifulSoup(item.find("description").text, "html.parser").get_text() if item.find("description") else ""
+            img = item.find("enclosure").get("url") if item.find("enclosure") else ""
             
-            # Tentar extrair a imagem
-            imagem_url = ""
-            enclosure = item.find("enclosure")
-            if enclosure and enclosure.get("url"):
-                imagem_url = enclosure.get("url")
-            elif desc_text:
-                img_match = re.search(r'src="([^"]+)"', desc_text)
-                if img_match:
-                    imagem_url = img_match.group(1)
+            posts.append({"id": i, "titulo": titulo, "texto": desc, "imagem": img})
             
-            # Limpar as tags HTML da descrição para não confundir a IA
-            texto_limpo = texto_titulo
-            if desc_text:
-                texto_limpo += " - " + BeautifulSoup(desc_text, "html.parser").get_text(separator=" ").strip()
+        if not posts: return []
+
+        # Pedimos à IA para classificar a importância (Priority High para trânsito)
+        prompt_classificacao = f"""
+        Analisa a lista de posts e classifica cada um com 'prioridade': 'alta' se for sobre trânsito, obras ou greves, e 'normal' para o resto (ex: piscinas, eventos).
+        Devolve APENAS um array JSON com os objetos enriquecidos.
+        Publicações: {json.dumps(posts, ensure_ascii=False)}
+        """
+        
+        model = genai.GenerativeModel("gemini-3.5-flash")
+        resp = model.generate_content(prompt_classificacao)
+        match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
+        if match:
+            avisos = json.loads("[" + match.group(1) + "]")
+            # Ordenar para o trânsito (prioridade alta) aparecer primeiro
+            avisos.sort(key=lambda x: x.get('prioridade', 'normal') == 'alta', reverse=True)
             
-            posts_para_analisar.append({
-                "id": i,
-                "titulo": texto_titulo,
-                "texto_completo": texto_limpo,
-                "imagem": imagem_url
-            })
-            
-        if not posts_para_analisar:
-            return []
+    except Exception as e:
+        logging.error(f"Erro RSS: {e}")
+    return avisos
 
         # 2. --- O CÉREBRO DA OPERAÇÃO: FILTRAGEM DINÂMICA COM IA ---
         agora = datetime.now(ZoneInfo("Europe/Lisbon"))
