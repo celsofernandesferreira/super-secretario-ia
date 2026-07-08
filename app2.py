@@ -206,37 +206,50 @@ def obter_avisos_facebook():
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
     
-    # Palavras-chave que forçam prioridade máxima
-    gatilhos_urgentes = ["greve", "corte", "obra", "trânsito", "urgente", "proibição"]
+    # 1. Obter a data correta no momento da execução
+    agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+    data_hoje_str = agora.strftime("%d de %B de %Y") # Formato dinâmico
 
     try:
         response = requests.get(url_rss, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
+        posts = []
         
-        for item in itens[:10]:
+        for i, item in enumerate(itens[:10]):
             titulo = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
             texto_limpo = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
-            # Buscar imagem de forma robusta
-            img = item.find("enclosure").get("url") if item.find("enclosure") else ""
-            if not img:
-                img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match: img = img_match.group(1)
-
-            # Lógica de prioridade: 5 se for urgente, 1 se for normal
-            prioridade = 5 if any(p in texto_limpo.lower() for p in gatilhos_urgentes) else 1
-            
-            avisos_ativos.append({
-                "texto": texto_limpo,
-                "imagem": img,
-                "prioridade": prioridade
+            posts.append({
+                "id": i, "titulo": titulo, "texto": texto_limpo, 
+                "imagem": item.find("enclosure").get("url") if item.find("enclosure") else ""
             })
-            
-        # Ordenar: Prioridade 5 primeiro
-        avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+
+        # 2. O Prompt agora usa a variável dinâmica {data_hoje_str}
+        prompt = f"""
+        Hoje é {data_hoje_str}. Analisa os posts abaixo.
+        1. Identifica a data limite de cada aviso.
+        2. Se a data limite já passou em relação a {data_hoje_str}, considera o aviso EXPIROU.
+        3. Se o aviso é sobre obras/trânsito/greves, prioridade 5. Caso contrário, prioridade 1.
+        4. Devolve APENAS um JSON: [ {{"id": 0, "prioridade": 5}}, ... ] (apenas os ATIVOS).
+        Posts: {json.dumps(posts, ensure_ascii=False)}
+        """
+        
+        model = genai.GenerativeModel("gemini-3.5-flash")
+        resp = model.generate_content(prompt)
+        match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
+        
+        if match:
+            resultado = json.loads("[" + match.group(1) + "]")
+            for r in resultado:
+                p = next((x for x in posts if x["id"] == r["id"]), None)
+                if p:
+                    avisos_ativos.append({
+                        "texto": p["texto"], "imagem": p["imagem"], "prioridade": r["prioridade"]
+                    })
+            avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
             
     except Exception as e:
         logging.error(f"Erro RSS: {e}")
