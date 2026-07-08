@@ -204,7 +204,8 @@ except Exception:
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
     """
-    Lê os últimos 10 avisos do Facebook e usa a IA para filtrar por data.
+    Lê os últimos 10 avisos do Facebook e usa a Inteligência Artificial para ler
+    as datas no meio do texto, mostrando apenas os que estão ativos no dia de hoje.
     """
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
@@ -246,95 +247,6 @@ def obter_avisos_facebook():
             
         if not posts_para_analisar:
             return []
-
-        # 2. --- FILTRAGEM DINÂMICA COM IA ---
-        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-        meses_pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
-        data_hoje_pt = f"{agora.day} de {meses_pt[agora.month - 1]} de {agora.year}"
-
-        prompt_filtro = f"""
-        Hoje é {data_hoje_pt}. Aqui tens uma lista de publicações do Facebook da Guimabus em JSON.
-        Lê o 'texto_completo' de cada uma.
-        
-        CRITÉRIOS DE SELEÇÃO:
-        - Seleciona tudo o que seja alteração de percurso, greves ou obras.
-        - Se a publicação descreve um evento ou obra com data, inclui-a se o período de validade abranger o dia de hoje OU se for um evento futuro que acontecerá nos próximos 7 dias.
-        - Se for um aviso urgente publicado há menos de 48 horas, inclui-o sempre.
-        - Exclui avisos de datas passadas que já terminaram.
-        
-        Devolve APENAS um array JSON com os IDs das publicações que devem aparecer. Ex: [0, 2].
-        
-        Publicações a analisar:
-        {json.dumps([{"id": p["id"], "texto_completo": p["texto_completo"]} for p in posts_para_analisar], ensure_ascii=False)}
-        """
-        
-        model_filtro = genai.GenerativeModel("gemini-3.5-flash")
-        resp = model_filtro.generate_content(prompt_filtro, request_options={"timeout": 15})
-        
-        # Procuramos o array [ ] na resposta da IA
-        match_json = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
-        if match_json:
-            try:
-                ids_ativos = json.loads("[" + match_json.group(1) + "]")
-                for p in posts_para_analisar:
-                    if p["id"] in ids_ativos:
-                        avisos_ativos.append({"titulo": p["titulo"], "imagem": p["imagem"]})
-            except:
-                pass
-        
-        # Fallback de Segurança
-        if not avisos_ativos and posts_para_analisar: 
-            avisos_ativos.append({"titulo": posts_para_analisar[0]["titulo"], "imagem": posts_para_analisar[0]["imagem"]})
-
-    except Exception as e:
-        logging.error(f"Erro ao obter Facebook RSS: {e}")
-        
-    return avisos_ativos
-
-        # 2. --- FILTRAGEM DINÂMICA COM IA ---
-        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-        meses_pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
-        data_hoje_pt = f"{agora.day} de {meses_pt[agora.month - 1]} de {agora.year}"
-
-        prompt_filtro = f"""
-        Hoje é dia {data_hoje_pt}.
-        Abaixo tens uma lista de publicações recentes do Facebook da Guimabus em JSON.
-        Lê o 'texto_completo' de cada uma e identifica se descreve uma alteração de percurso, greve ou obra com um período de validade.
-        
-        REGRAS DE SELEÇÃO ESTRITAS:
-        1. Se a publicação menciona um intervalo de datas (ex: "de 1 de abril a 20 de maio") e o dia de hoje ({data_hoje_pt}) ESTÁ dentro desse intervalo, deves selecioná-la.
-        2. Se a publicação refere uma data passada que já terminou, NÃO a seleciones.
-        3. Se a publicação refere uma data futura que ainda não começou, NÃO a seleciones.
-        4. Se for um aviso genérico ou urgente (ex: "Amanhã greve", "Acidente na nacional") publicado há menos de 48 horas, seleciona-o.
-        
-        Devolve APENAS E ESTRITAMENTE um array JSON com os IDs numéricos das publicações que estão ATIVAS para o dia de hoje. 
-        Exemplo: [0, 3]. Se não houver nenhuma ativa, devolve []. Não escrevas absolutamente mais nenhum texto além do JSON.
-        
-        Publicações a analisar:
-        {json.dumps([{"id": p["id"], "texto_completo": p["texto_completo"]} for p in posts_para_analisar], ensure_ascii=False)}
-        """
-        
-        model_filtro = genai.GenerativeModel("gemini-3.5-flash")
-        resp = model_filtro.generate_content(prompt_filtro, request_options={"timeout": 15})
-        
-        match_json = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
-        if match_json:
-            try:
-                ids_ativos = json.loads("[" + match_json.group(1) + "]")
-                for p in posts_para_analisar:
-                    if p["id"] in ids_ativos:
-                        avisos_ativos.append({"texto": p["titulo"], "imagem": p["imagem"]})
-            except:
-                pass
-        
-        # Fallback de Segurança
-        if not avisos_ativos and not match_json and posts_para_analisar: 
-            avisos_ativos.append({"texto": posts_para_analisar[0]["titulo"], "imagem": posts_para_analisar[0]["imagem"]})
-
-    except Exception as e:
-        logging.error(f"Erro ao obter Facebook RSS: {e}")
-        
-    return avisos_ativos
 
         # 2. --- O CÉREBRO DA OPERAÇÃO: FILTRAGEM DINÂMICA COM IA ---
         agora = datetime.now(ZoneInfo("Europe/Lisbon"))
@@ -395,48 +307,49 @@ def obter_avisos_facebook():
 
 def renderizar_rodape_anuncios(anuncios_ativos):
     if not anuncios_ativos: return
+    dados_js = json.dumps(anuncios_ativos)
     
-    # Criamos o HTML com uma animação CSS de 'scroll'
-    html_rodape = """
-    <style>
-        .marquee-container {
-            position: fixed; bottom: 0; left: 0; width: 100%;
-            background-color: #1e1e1e; color: white; z-index: 9999;
-            padding: 10px 0; border-top: 4px solid #2ecc71;
-            overflow: hidden; white-space: nowrap;
-        }
-        .marquee-text {
-            display: inline-block;
-            padding-left: 100%;
-            animation: scroll 30s linear infinite;
-            font-size: 18px; font-weight: bold;
-        }
-        @keyframes scroll {
-            0% { transform: translate(0, 0); }
-            100% { transform: translate(-100%, 0); }
-        }
-        .post-item { display: inline-block; margin-right: 50px; cursor: pointer; }
-    </style>
-    <div class="marquee-container">
-        <div class="marquee-text" id="ticker"></div>
-    </div>
-    <script>
-        const anuncios = DADOS_PLACEHOLDER;
-        const container = document.getElementById('ticker');
+    html_rodape = f"""
+    <div id="ticker-container" style="
+        position: fixed; bottom: 0; left: 0; width: 100%; 
+        background-color: #1e1e1e; color: white; z-index: 9999; 
+        padding: 10px; border-top: 4px solid #2ecc71; 
+        display: flex; align-items: center; justify-content: center; 
+        font-family: sans-serif; box-shadow: 0px -4px 15px rgba(0,0,0,0.5);
+    ">
+        <button onclick="mudarAnuncio(-1)" style="background:none; border:none; color:white; font-size:24px; cursor:pointer; padding:0 15px;">❮</button>
         
-        anuncios.forEach(a => {
-            const span = document.createElement('span');
-            span.className = 'post-item';
-            span.innerHTML = (a.prioridade === 'alta' ? '🚨 ' : 'ℹ️ ') + a.titulo + " (Clica para ver imagem)";
-            if(a.imagem) {
-                span.onclick = () => window.open(a.imagem, '_blank');
-            }
-            container.appendChild(span);
-        });
+        <div id="ticker-content" style="display: flex; align-items: center; max-width: 900px; flex-grow: 1;">
+            <img id="ticker-img" src="" style="max-height: 80px; border-radius: 6px; margin-right: 20px; display: none; cursor: pointer; border: 1px solid #444;" onclick="window.open(this.src, '_blank');">
+            <span id="ticker-text" style="font-size: 16px; font-weight: bold; flex: 1;">A carregar avisos...</span>
+        </div>
+        
+        <button onclick="mudarAnuncio(1)" style="background:none; border:none; color:white; font-size:24px; cursor:pointer; padding:0 15px;">❯</button>
+    </div>
+
+    <script>
+        const anuncios = {dados_js};
+        let indice = 0;
+        
+        function atualizar() {{
+            const a = anuncios[indice];
+            document.getElementById('ticker-text').innerText = "🚨 " + a.texto;
+            const img = document.getElementById('ticker-img');
+            if (a.imagem) {{ img.src = a.imagem; img.style.display = "block"; }}
+            else {{ img.style.display = "none"; }}
+        }}
+        
+        function mudarAnuncio(dir) {{
+            indice = (indice + dir + anuncios.length) % anuncios.length;
+            atualizar();
+        }}
+        
+        atualizar();
+        // Rotação automática a cada 10 segundos
+        setInterval(() => mudarAnuncio(1), 10000);
     </script>
-    """.replace("DADOS_PLACEHOLDER", json.dumps(anuncios_ativos))
-    
-    components.html(html_rodape, height=60)
+    """
+    components.html(html_rodape, height=130)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
