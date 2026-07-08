@@ -313,31 +313,31 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     html_rodape = f"""
     <style>
         .footer-wrapper {{
-            position: fixed; bottom: 0; left: 0; width: 100%; height: 140px;
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 130px;
             background-color: #1e1e1e; color: white; z-index: 9999;
-            display: flex; align-items: center; border-top: 4px solid #2ecc71;
-            box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            padding: 10px 20px; border-top: 4px solid #2ecc71;
+            display: flex; align-items: center; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
         }}
-        .image-box {{ flex: 0 0 150px; display: flex; justify-content: center; align-items: center; }}
-        #ticker-img {{ max-height: 120px; border-radius: 8px; cursor: pointer; border: 2px solid #555; }}
+        .img-box {{ flex: 0 0 120px; display: flex; align-items: center; }}
+        #ticker-img {{ max-height: 100px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
         
-        .text-box {{ flex: 1; overflow: hidden; white-space: nowrap; position: relative; }}
-        .scroll-text {{
-            display: inline-block; white-space: nowrap; font-size: 20px; font-weight: bold;
-            animation: scroll-left 20s linear infinite;
+        .text-box {{ 
+            flex: 1; height: 100px; overflow: hidden; 
+            display: flex; align-items: center; padding-left: 20px;
         }}
-        @keyframes scroll-left {{
-            0% {{ transform: translateX(100%); }}
-            100% {{ transform: translateX(-100%); }}
+        #ticker-text {{ 
+            font-size: 18px; font-weight: bold; line-height: 1.3;
+            animation: slide-up 0.5s ease-out;
         }}
+        @keyframes slide-up {{ 0% {{ opacity: 0; transform: translateY(20px); }} 100% {{ opacity: 1; transform: translateY(0); }} }}
     </style>
     
     <div class="footer-wrapper">
-        <div class="image-box">
+        <div class="img-box">
             <img id="ticker-img" src="" style="display:none;" onclick="window.open(this.src, '_blank');">
         </div>
         <div class="text-box">
-            <div id="ticker-text" class="scroll-text"></div>
+            <div id="ticker-text"></div>
         </div>
     </div>
 
@@ -350,10 +350,9 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             const img = document.getElementById('ticker-img');
             const txt = document.getElementById('ticker-text');
             
-            // Texto seguro
-            txt.innerText = "🚨 AVISO: " + (a.texto || a.titulo || "Aviso importante");
+            // Texto formatado (preserva quebras de linha se existirem no texto do post)
+            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
             
-            // Imagem
             if (a.imagem && a.imagem.startsWith('http')) {{
                 img.src = a.imagem;
                 img.style.display = "block";
@@ -365,7 +364,7 @@ def renderizar_rodape_anuncios(anuncios_ativos):
         }}
         
         atualizar();
-        setInterval(atualizar, 10000); // Troca o aviso a cada 10s
+        setInterval(atualizar, 10000); // Muda a cada 10s
     </script>
     """
     components.html(html_rodape, height=150)
