@@ -293,8 +293,8 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             display: flex; flex-direction: column; overflow: hidden;
         }}
         .disclaimer {{
-            background: #2a2a2a; color: #ccc; font-size: 11px; padding: 3px 20px;
-            text-align: center; font-style: italic; border-bottom: 1px solid #444;
+            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
+            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
         }}
         .content-area {{ 
             display: flex; align-items: center; flex: 1; padding: 0 20px; 
@@ -310,7 +310,7 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     
     <div class="footer-wrapper">
         <div class="disclaimer">
-            Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.
+            ⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.
         </div>
         <div class="content-area">
             <div class="img-box">
@@ -333,7 +333,6 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             const a = anuncios[indice];
             txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
             
-            // Corrige o problema da imagem desaparecer:
             if (a.imagem && a.imagem.startsWith('http')) {{
                 img.src = a.imagem;
                 img.style.display = "block";
@@ -341,11 +340,9 @@ def renderizar_rodape_anuncios(anuncios_ativos):
                 img.style.display = "none";
             }}
             
-            // Posicionar no meio
             let pos = container.offsetWidth / 2;
             txt.style.left = pos + "px";
             
-            // Loop de movimento
             function animar() {{
                 pos -= 2; 
                 txt.style.left = pos + "px";
