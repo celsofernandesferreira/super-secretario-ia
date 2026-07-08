@@ -232,7 +232,7 @@ def obter_avisos_facebook():
                 if img_match:
                     imagem_url = img_match.group(1)
             
-            # Limpar as tags HTML da descrição
+            # Limpar as tags HTML da descrição para não confundir a IA
             texto_limpo = texto_titulo
             if desc_text:
                 texto_limpo += " - " + BeautifulSoup(desc_text, "html.parser").get_text(separator=" ").strip()
@@ -246,6 +246,52 @@ def obter_avisos_facebook():
             
         if not posts_para_analisar:
             return []
+
+        # 2. --- O CÉREBRO DA OPERAÇÃO: FILTRAGEM DINÂMICA COM IA ---
+        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+        meses_pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+        data_hoje_pt = f"{agora.day} de {meses_pt[agora.month - 1]} de {agora.year}"
+
+        prompt_filtro = f"""
+        Hoje é dia {data_hoje_pt}.
+        Abaixo tens uma lista de publicações recentes do Facebook da Guimabus em JSON.
+        Lê o 'texto_completo' de cada uma e identifica se descreve uma alteração de percurso, greve ou obra com um período de validade.
+        
+        REGRAS DE SELEÇÃO ESTRITAS:
+        1. Se a publicação menciona um intervalo de datas (ex: "de 1 de abril a 20 de maio") e o dia de hoje ({data_hoje_pt}) ESTÁ dentro desse intervalo, deves selecioná-la.
+        2. Se a publicação refere uma data passada que já terminou, NÃO a seleciones.
+        3. Se a publicação refere uma data futura que ainda não começou, NÃO a seleciones.
+        4. Se for um aviso genérico ou urgente (ex: "Amanhã greve", "Acidente na nacional") publicado há menos de 48 horas, seleciona-o.
+        
+        Devolve APENAS E ESTRITAMENTE um array JSON com os IDs numéricos das publicações que estão ATIVAS para o dia de hoje. 
+        Exemplo: [0, 3]. Se não houver nenhuma ativa, devolve []. Não escrevas absolutamente mais nenhum texto além do JSON.
+        
+        Publicações a analisar:
+        {json.dumps([{"id": p["id"], "texto_completo": p["texto_completo"]} for p in posts_para_analisar], ensure_ascii=False)}
+        """
+        
+        model_filtro = genai.GenerativeModel("gemini-3.5-flash")
+        resp = model_filtro.generate_content(prompt_filtro, request_options={"timeout": 15})
+        
+        # Procuramos o array [ ] na resposta da IA
+        match_json = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
+        if match_json:
+            try:
+                ids_ativos = json.loads("[" + match_json.group(1) + "]")
+                for p in posts_para_analisar:
+                    if p["id"] in ids_ativos:
+                        avisos_ativos.append({"texto": p["titulo"], "imagem": p["imagem"]})
+            except:
+                pass
+        
+        # Fallback de Segurança
+        if not avisos_ativos and not match_json and posts_para_analisar: 
+            avisos_ativos.append({"texto": posts_para_analisar[0]["titulo"], "imagem": posts_para_analisar[0]["imagem"]})
+
+    except Exception as e:
+        logging.error(f"Erro ao obter Facebook RSS: {e}")
+        
+    return avisos_ativos
 
         # 2. --- FILTRAGEM DINÂMICA COM IA ---
         agora = datetime.now(ZoneInfo("Europe/Lisbon"))
