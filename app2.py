@@ -203,43 +203,94 @@ except Exception:
 # --- INTEGRAÇÃO FACEBOOK RSS (COM INTELIGÊNCIA ARTIFICIAL PARA DATAS) ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
+    """
+    Lê os últimos 10 avisos do Facebook e usa a IA para ler datas.
+    """
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
-    avisos = []
+    avisos_ativos = []
 
     try:
+        # 1. Obter os dados do RSS
         response = requests.get(url_rss, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
         
-        posts = []
+        posts_para_analisar = []
         for i, item in enumerate(itens[:10]):
-            titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
-            desc = BeautifulSoup(item.find("description").text, "html.parser").get_text() if item.find("description") else ""
-            img = item.find("enclosure").get("url") if item.find("enclosure") else ""
+            texto_titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
+            desc = item.find("description")
+            desc_text = desc.text if desc else ""
             
-            posts.append({"id": i, "titulo": titulo, "texto": desc, "imagem": img})
+            # Tentar extrair a imagem
+            imagem_url = ""
+            enclosure = item.find("enclosure")
+            if enclosure and enclosure.get("url"):
+                imagem_url = enclosure.get("url")
+            elif desc_text:
+                img_match = re.search(r'src="([^"]+)"', desc_text)
+                if img_match:
+                    imagem_url = img_match.group(1)
             
-        if not posts: return []
+            # Limpar as tags HTML da descrição
+            texto_limpo = texto_titulo
+            if desc_text:
+                texto_limpo += " - " + BeautifulSoup(desc_text, "html.parser").get_text(separator=" ").strip()
+            
+            posts_para_analisar.append({
+                "id": i,
+                "titulo": texto_titulo,
+                "texto_completo": texto_limpo,
+                "imagem": imagem_url
+            })
+            
+        if not posts_para_analisar:
+            return []
 
-        # Pedimos à IA para classificar a importância (Priority High para trânsito)
-        prompt_classificacao = f"""
-        Analisa a lista de posts e classifica cada um com 'prioridade': 'alta' se for sobre trânsito, obras ou greves, e 'normal' para o resto (ex: piscinas, eventos).
-        Devolve APENAS um array JSON com os objetos enriquecidos.
-        Publicações: {json.dumps(posts, ensure_ascii=False)}
+        # 2. --- FILTRAGEM DINÂMICA COM IA ---
+        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+        meses_pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+        data_hoje_pt = f"{agora.day} de {meses_pt[agora.month - 1]} de {agora.year}"
+
+        prompt_filtro = f"""
+        Hoje é dia {data_hoje_pt}.
+        Abaixo tens uma lista de publicações recentes do Facebook da Guimabus em JSON.
+        Lê o 'texto_completo' de cada uma e identifica se descreve uma alteração de percurso, greve ou obra com um período de validade.
+        
+        REGRAS DE SELEÇÃO ESTRITAS:
+        1. Se a publicação menciona um intervalo de datas (ex: "de 1 de abril a 20 de maio") e o dia de hoje ({data_hoje_pt}) ESTÁ dentro desse intervalo, deves selecioná-la.
+        2. Se a publicação refere uma data passada que já terminou, NÃO a seleciones.
+        3. Se a publicação refere uma data futura que ainda não começou, NÃO a seleciones.
+        4. Se for um aviso genérico ou urgente (ex: "Amanhã greve", "Acidente na nacional") publicado há menos de 48 horas, seleciona-o.
+        
+        Devolve APENAS E ESTRITAMENTE um array JSON com os IDs numéricos das publicações que estão ATIVAS para o dia de hoje. 
+        Exemplo: [0, 3]. Se não houver nenhuma ativa, devolve []. Não escrevas absolutamente mais nenhum texto além do JSON.
+        
+        Publicações a analisar:
+        {json.dumps([{"id": p["id"], "texto_completo": p["texto_completo"]} for p in posts_para_analisar], ensure_ascii=False)}
         """
         
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        resp = model.generate_content(prompt_classificacao)
-        match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
-        if match:
-            avisos = json.loads("[" + match.group(1) + "]")
-            # Ordenar para o trânsito (prioridade alta) aparecer primeiro
-            avisos.sort(key=lambda x: x.get('prioridade', 'normal') == 'alta', reverse=True)
-            
+        model_filtro = genai.GenerativeModel("gemini-3.5-flash")
+        resp = model_filtro.generate_content(prompt_filtro, request_options={"timeout": 15})
+        
+        match_json = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
+        if match_json:
+            try:
+                ids_ativos = json.loads("[" + match_json.group(1) + "]")
+                for p in posts_para_analisar:
+                    if p["id"] in ids_ativos:
+                        avisos_ativos.append({"texto": p["titulo"], "imagem": p["imagem"]})
+            except:
+                pass
+        
+        # Fallback de Segurança
+        if not avisos_ativos and not match_json and posts_para_analisar: 
+            avisos_ativos.append({"texto": posts_para_analisar[0]["titulo"], "imagem": posts_para_analisar[0]["imagem"]})
+
     except Exception as e:
-        logging.error(f"Erro RSS: {e}")
-    return avisos
+        logging.error(f"Erro ao obter Facebook RSS: {e}")
+        
+    return avisos_ativos
 
         # 2. --- O CÉREBRO DA OPERAÇÃO: FILTRAGEM DINÂMICA COM IA ---
         agora = datetime.now(ZoneInfo("Europe/Lisbon"))
