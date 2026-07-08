@@ -266,9 +266,11 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
             text-align: center; font-weight: bold; border-bottom: 1px solid #444;
         }}
-        .content-area {{ display: flex; align-items: center; flex: 1; padding: 0 20px; }}
+        .content-area {{ 
+            display: flex; align-items: center; flex: 1; padding: 0 20px; 
+        }}
         .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
-        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; display: none; }}
+        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
         .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
         #ticker-text {{ 
             position: absolute; white-space: nowrap; font-size: 20px; 
@@ -278,7 +280,7 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     
     <div class="footer-wrapper">
         <div class="disclaimer">
-            ⚠️ Aviso importante: Esta é uma ferramenta de apoio. Não é um canal oficial de submissão à Guimabus.
+            ⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.
         </div>
         <div class="content-area">
             <div class="img-box">
@@ -299,16 +301,23 @@ def renderizar_rodape_anuncios(anuncios_ativos):
 
         async function correrAviso() {{
             const a = anuncios[indice];
-            // Se a prioridade for 5, adicionamos um destaque visual
-            const prefixo = a.prioridade >= 4 ? "🚨 URGENTE: " : "ℹ️ ";
-            txt.innerText = prefixo + (a.texto || "Aviso");
             
-            if (a.imagem && a.imagem.startsWith('http')) {{
+            // Texto
+            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
+            
+            // Imagem - CORREÇÃO: Forçamos a visibilidade e o src
+            if (a.imagem && a.imagem.trim() !== "") {{
                 img.src = a.imagem;
-                img.style.display = "block";
+                img.style.display = "block"; // Força o display como bloco
+                img.style.visibility = "visible"; // Garante visibilidade
             }} else {{
                 img.style.display = "none";
             }}
+            
+            // Reset da animação
+            txt.style.animation = 'none';
+            txt.offsetHeight; // Truque para o browser "re-ler" o CSS
+            txt.style.animation = 'scroll-left 25s linear infinite';
             
             let pos = container.offsetWidth / 2;
             txt.style.left = pos + "px";
