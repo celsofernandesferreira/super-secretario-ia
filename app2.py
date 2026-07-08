@@ -204,7 +204,7 @@ except Exception:
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
     """
-    Lê os últimos 10 avisos do Facebook e usa a IA para ler datas.
+    Lê os últimos 10 avisos do Facebook e usa a IA para filtrar por data.
     """
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
@@ -217,7 +217,7 @@ def obter_avisos_facebook():
         itens = soup.find_all("item")
         
         posts_para_analisar = []
-        for i, item in enumerate(itens[:10]):
+        for i, item in enumerate(itens[:10]): # Analisamos os últimos 10 posts
             texto_titulo = item.find("title").text if item.find("title") else "Aviso Guimabus"
             desc = item.find("description")
             desc_text = desc.text if desc else ""
@@ -247,24 +247,22 @@ def obter_avisos_facebook():
         if not posts_para_analisar:
             return []
 
-        # 2. --- O CÉREBRO DA OPERAÇÃO: FILTRAGEM DINÂMICA COM IA ---
+        # 2. --- FILTRAGEM DINÂMICA COM IA ---
         agora = datetime.now(ZoneInfo("Europe/Lisbon"))
         meses_pt = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
         data_hoje_pt = f"{agora.day} de {meses_pt[agora.month - 1]} de {agora.year}"
 
         prompt_filtro = f"""
-        Hoje é dia {data_hoje_pt}.
-        Abaixo tens uma lista de publicações recentes do Facebook da Guimabus em JSON.
-        Lê o 'texto_completo' de cada uma e identifica se descreve uma alteração de percurso, greve ou obra com um período de validade.
+        Hoje é {data_hoje_pt}. Aqui tens uma lista de publicações do Facebook da Guimabus em JSON.
+        Lê o 'texto_completo' de cada uma.
         
-        REGRAS DE SELEÇÃO ESTRITAS:
-        1. Se a publicação menciona um intervalo de datas (ex: "de 1 de abril a 20 de maio") e o dia de hoje ({data_hoje_pt}) ESTÁ dentro desse intervalo, deves selecioná-la.
-        2. Se a publicação refere uma data passada que já terminou, NÃO a seleciones.
-        3. Se a publicação refere uma data futura que ainda não começou, NÃO a seleciones.
-        4. Se for um aviso genérico ou urgente (ex: "Amanhã greve", "Acidente na nacional") publicado há menos de 48 horas, seleciona-o.
+        CRITÉRIOS DE SELEÇÃO:
+        - Seleciona tudo o que seja alteração de percurso, greves ou obras.
+        - Se a publicação descreve um evento ou obra com data, inclui-a se o período de validade abranger o dia de hoje OU se for um evento futuro que acontecerá nos próximos 7 dias.
+        - Se for um aviso urgente publicado há menos de 48 horas, inclui-o sempre.
+        - Exclui avisos de datas passadas que já terminaram.
         
-        Devolve APENAS E ESTRITAMENTE um array JSON com os IDs numéricos das publicações que estão ATIVAS para o dia de hoje. 
-        Exemplo: [0, 3]. Se não houver nenhuma ativa, devolve []. Não escrevas absolutamente mais nenhum texto além do JSON.
+        Devolve APENAS um array JSON com os IDs das publicações que devem aparecer. Ex: [0, 2].
         
         Publicações a analisar:
         {json.dumps([{"id": p["id"], "texto_completo": p["texto_completo"]} for p in posts_para_analisar], ensure_ascii=False)}
@@ -280,13 +278,13 @@ def obter_avisos_facebook():
                 ids_ativos = json.loads("[" + match_json.group(1) + "]")
                 for p in posts_para_analisar:
                     if p["id"] in ids_ativos:
-                        avisos_ativos.append({"texto": p["titulo"], "imagem": p["imagem"]})
+                        avisos_ativos.append({"titulo": p["titulo"], "imagem": p["imagem"]})
             except:
                 pass
         
         # Fallback de Segurança
-        if not avisos_ativos and not match_json and posts_para_analisar: 
-            avisos_ativos.append({"texto": posts_para_analisar[0]["titulo"], "imagem": posts_para_analisar[0]["imagem"]})
+        if not avisos_ativos and posts_para_analisar: 
+            avisos_ativos.append({"titulo": posts_para_analisar[0]["titulo"], "imagem": posts_para_analisar[0]["imagem"]})
 
     except Exception as e:
         logging.error(f"Erro ao obter Facebook RSS: {e}")
