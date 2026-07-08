@@ -96,6 +96,15 @@ def inicializar_bd():
             ultima_atualizacao TEXT
         )
     """)
+    # Tabela: Freguesia de cada paragem (enriquecimento único via geocodificação OpenStreetMap/Nominatim)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_paragem_freguesia (
+            paragem TEXT PRIMARY KEY,
+            freguesia TEXT,
+            fonte TEXT,
+            ultima_atualizacao TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -221,17 +230,14 @@ def obter_avisos_facebook():
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
             texto_limpo = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
-            # --- CORREÇÃO: Lógica de Extração de Imagem Robusta ---
-            # 1. Tenta encontrar no enclosure
+            # --- Lógica de Extração de Imagem Robusta ---
             enclosure = item.find("enclosure")
             img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
             
-            # 2. Se não encontrar, procura a tag <img> dentro do código da descrição
             if not img_url and desc:
                 img_match = re.search(r'src="([^"]+)"', desc)
                 if img_match:
                     img_url = img_match.group(1)
-            # ----------------------------------------------------
             
             posts.append({
                 "id": i, 
@@ -323,21 +329,18 @@ def renderizar_rodape_anuncios(anuncios_ativos):
         async function correrAviso() {{
             const a = anuncios[indice];
             
-            // Texto
             txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
             
-            // Imagem - CORREÇÃO: Forçamos a visibilidade e o src
             if (a.imagem && a.imagem.trim() !== "") {{
                 img.src = a.imagem;
-                img.style.display = "block"; // Força o display como bloco
-                img.style.visibility = "visible"; // Garante visibilidade
+                img.style.display = "block";
+                img.style.visibility = "visible";
             }} else {{
                 img.style.display = "none";
             }}
             
-            // Reset da animação
             txt.style.animation = 'none';
-            txt.offsetHeight; // Truque para o browser "re-ler" o CSS
+            txt.offsetHeight;
             txt.style.animation = 'scroll-left 25s linear infinite';
             
             let pos = container.offsetWidth / 2;
@@ -442,13 +445,11 @@ def obter_horarios_paragem(stop_id: str):
     origem_texto = str(stop_id).strip().lower()
     id_numérico = None
     
-    # Tenta traduzir pelo dicionário rápido primeiro
     for nome_p, id_p in DICIONARIO_PARAGENS_CONHECIDAS.items():
         if nome_p in origem_texto:
             id_numérico = id_p
             break
             
-    # Se encontramos um ID numérico ou se o input já era um número, faz a query à API real
     if id_numérico or origem_texto.isdigit():
         target_id = id_numérico if id_numérico else origem_texto
         headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
@@ -471,11 +472,9 @@ def obter_horarios_paragem(stop_id: str):
                     resumo += f"- Linha {linha}{destino_txt}: {eta_txt}\n"
                 return resumo
         except Exception:
-            pass # Se falhar a API ou der sem previsão, cai direto no motor de busca inteligente abaixo
+            pass
 
-    # --- MOTOR DE BUSCA EM CACHE POR MÚLTIPLAS PALAVRAS-CHAVE ---
     try:
-        # Remove termos comuns que possam poluir a pesquisa estruturada
         termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', origem_texto).split()
         if not termos_pesquisa:
             termos_pesquisa = [origem_texto]
@@ -483,7 +482,6 @@ def obter_horarios_paragem(stop_id: str):
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
         
-        # Constrói dinamicamente uma cláusula WHERE que força a correspondência de TODAS as palavras-chave (ex: "vaca" AND "negra")
         condicoes = " AND ".join(["conteudo_txt LIKE ?" for _ in termos_pesquisa])
         valores = [f"%{termo}%" for termo in termos_pesquisa]
         
@@ -498,7 +496,6 @@ def obter_horarios_paragem(stop_id: str):
                 num_linha = row[0]
                 texto_completo = row[1]
                 
-                # Extrai as linhas do texto plano para isolar tabelas e rotas relevantes
                 linhas_texto = texto_completo.split("\n")
                 trecho_relevante = []
                 for l in linhas_texto:
@@ -539,9 +536,6 @@ def sincronizar_todos_horarios_guimabus():
                     linha_id = match.group(1).upper()
                     if linha_id not in links_pdf:
                         links_pdf[linha_id] = href
-                        # O texto visível do link normalmente é o título da linha, ex:
-                        # "171 Quintães - Guimarães (via S. Torcato e Atães)" — isto menciona
-                        # freguesias que os nomes de paragem, por si só, não indicam.
                         texto_link = link.get_text(strip=True)
                         if texto_link:
                             titulos_linha[linha_id] = texto_link
@@ -570,17 +564,15 @@ def sincronizar_todos_horarios_guimabus():
                     texto_extraido = []
                     with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
                         for idx, pagina in enumerate(pdf.pages):
+                            # layout=True preserva a posição horizontal do texto — método já
+                            # confirmado como correto. NÃO usamos extract_tables() aqui: para
+                            # PDFs sem grelha visível (como estes), a deteção automática de
+                            # tabelas do pdfplumber pode desalinhar colunas e produzir dados
+                            # conflituosos com o texto correto acima — foi identificada como
+                            # causa provável de horários errados nalgumas linhas (ex: 170).
                             texto_pag = pagina.extract_text(layout=True)
                             if texto_pag:
-                                texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
-
-                            try:
-                                tabelas = pagina.extract_tables()
-                                for t_idx, tabela in enumerate(tabelas):
-                                    linhas_tabela = ["\t".join(cell if cell else "" for cell in linha) for linha in tabela]
-                                    texto_extraido.append(f"[PÁGINA {idx+1} - TABELA {t_idx+1}]\n" + "\n".join(linhas_tabela))
-                            except Exception as e_tabela:
-                                logging.warning(f"Não foi possível extrair tabelas da página {idx+1} da linha {linha_id}: {e_tabela}")
+                                texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
 
                     conteudo_final = "\n\n".join(texto_extraido)
                     if not conteudo_final.strip():
@@ -626,6 +618,9 @@ def sincronizar_todos_horarios_guimabus():
         return error_msg
 
 def consultar_cache_horario_linha(linha_id: str):
+    """Consulta os horários de uma linha em cache. Inclui sempre o link oficial do PDF
+    para o utilizador poder confirmar diretamente na fonte, já que a extração de texto
+    de PDFs pode ocasionalmente ter pequenos erros."""
     try:
         entrada = str(linha_id).strip().upper()
         if not entrada:
@@ -644,14 +639,16 @@ def consultar_cache_horario_linha(linha_id: str):
         cursor = conn.cursor()
         resultado = None
         for candidato in candidatos:
-            cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (candidato,))
+            cursor.execute("SELECT conteudo_txt, url, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (candidato,))
             resultado = cursor.fetchone()
             if resultado:
                 break
         conn.close()
         
         if resultado:
-            return f"Horários em Cache para a Linha {linha_id} (Atualizado em {resultado[1]}):\n\n{resultado[0]}"
+            conteudo_txt, url_pdf, ultima_atualizacao = resultado
+            link_txt = f"\n\n🔗 Link oficial para confirmares: {url_pdf}" if url_pdf else ""
+            return f"Horários em Cache para a Linha {linha_id} (Atualizado em {ultima_atualizacao}):\n\n{conteudo_txt}{link_txt}"
         return f"Não existem horários em cache para a linha {linha_id}. Peça ao administrador para rodar a Sincronização Geral."
     except Exception as e:
         return f"Erro na leitura da cache SQLite: {e}"
@@ -680,7 +677,6 @@ def obter_idade_cache_horarios_dias():
         return None
 
 def obter_idade_cache_titulos_dias():
-    """Devolve há quantos dias foi a última sincronização de títulos/tarifário, ou None se nunca correu."""
     try:
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -696,7 +692,6 @@ def obter_idade_cache_titulos_dias():
         return None
 
 def obter_contagem_indice_paragens():
-    """Devolve quantas associações linha-paragem existem no índice, para saber se está vazio."""
     try:
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -721,9 +716,6 @@ def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
             resultado_indice = construir_indice_paragens()
             logging.info(resultado_indice)
     elif obter_contagem_indice_paragens() == 0:
-        # Os horários já estavam frescos, mas o índice de paragens (tabela nova) ainda
-        # nunca foi construído a partir deles — sem isto, ficaria vazio indefinidamente
-        # até os horários voltarem a expirar daqui a 7 dias.
         with st.spinner("🗺️ A construir o índice de paragens pela primeira vez..."):
             resultado_indice = construir_indice_paragens()
             logging.info(f"Índice de paragens construído (cache de horários já estava fresca): {resultado_indice}")
@@ -735,10 +727,6 @@ def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
             logging.info(f"Sincronização automática de títulos/tarifário executada: {resultado}")
 
 # --- SCRAPING DINÂMICO: TIPOLOGIAS DE PASSE E TARIFÁRIO ---
-# Em vez de dados fixos no código, isto vai sempre buscar à página oficial, porque as
-# tipologias, preços e documentos exigidos podem mudar (a Guimabus já mudou preços/regras
-# no passado sem aviso). Segue o mesmo padrão de cache + auto-sincronização dos horários.
-
 TIPOLOGIAS_PASSE_FALLBACK = {
     "Mensal": {
         "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
@@ -748,12 +736,8 @@ TIPOLOGIAS_PASSE_FALLBACK = {
         "documentos": ["Cartão de Cidadão / Documento de identificação"],
     },
 }
-# ^ Fallback mínimo só para o formulário nunca ficar completamente vazio antes da primeira
-# sincronização bem-sucedida. Os dados reais e completos vêm sempre do scraping abaixo.
 
 def sincronizar_titulos_guimabus():
-    """Faz scraping de https://guimabus.pt/titulos/ e guarda cada tipologia de passe
-    (descrição, preço, custo do cartão, prazo, documentos exigidos) na cache local."""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     url = "https://guimabus.pt/titulos/"
 
@@ -791,10 +775,10 @@ def sincronizar_titulos_guimabus():
 
             resto_texto = "\n".join(linhas_bloco[1:])
 
-            match_prazo = re.search(r'(S\u00f3 podem ser emitidos.*?\.)', resto_texto, re.IGNORECASE)
+            match_prazo = re.search(r'(Só podem ser emitidos.*?\.)', resto_texto, re.IGNORECASE)
             prazo = match_prazo.group(1).strip() if match_prazo else "Prazo não indicado na página."
 
-            match_preco = re.search(r'Pre\u00e7o:\s*(.+)', resto_texto)
+            match_preco = re.search(r'Preço:\s*(.+)', resto_texto)
             if match_preco:
                 preco = match_preco.group(1).strip()
             elif re.search(r'\bGRATUITO\b', resto_texto, re.IGNORECASE):
@@ -803,18 +787,18 @@ def sincronizar_titulos_guimabus():
                 match_desconto = re.search(r'(\d{1,3}%\s*de desconto[^\n.]*\.)', resto_texto, re.IGNORECASE)
                 preco = match_desconto.group(1).strip() if match_desconto else "Consultar tabela tarifária"
 
-            match_cartao = re.search(r'Custo do cart\u00e3o:\s*([\d,]+\u20ac)', resto_texto)
+            match_cartao = re.search(r'Custo do cartão:\s*([\d,]+€)', resto_texto)
             custo_cartao = match_cartao.group(1).strip() if match_cartao else "Não indicado"
 
-            match_descricao = re.match(r'(.*?)(?:Pre\u00e7o:|GRATUITO|Gratuito|\*\*Documentos necess\u00e1rios)', resto_texto, re.DOTALL)
+            match_descricao = re.match(r'(.*?)(?:Preço:|GRATUITO|Gratuito|\*\*Documentos necessários)', resto_texto, re.DOTALL)
             descricao = match_descricao.group(1).strip().replace("\n", " ") if match_descricao else ""
 
-            match_docs = re.search(r'\*\*Documentos necess\u00e1rios:\*\*(.*?)(?:S\u00f3 podem ser emitidos|$)', resto_texto, re.DOTALL)
+            match_docs = re.search(r'\*\*Documentos necessários:\*\*(.*?)(?:Só podem ser emitidos|$)', resto_texto, re.DOTALL)
             documentos = []
             if match_docs:
                 candidatos_doc = [d.strip() for d in match_docs.group(1).split("\n") if d.strip()]
                 for d in candidatos_doc:
-                    if re.match(r'^(Custo do cart\u00e3o|Pre\u00e7o)', d, re.IGNORECASE):
+                    if re.match(r'^(Custo do cartão|Preço)', d, re.IGNORECASE):
                         continue
                     documentos.append(d)
             if not documentos:
@@ -829,7 +813,7 @@ def sincronizar_titulos_guimabus():
         conn.commit()
         conn.close()
 
-        msg = f"Sincronização de titles concluída: {len(tipologias_processadas)} tipologias encontradas ({', '.join(tipologias_processadas)})."
+        msg = f"Sincronização de títulos concluída: {len(tipologias_processadas)} tipologias encontradas ({', '.join(tipologias_processadas)})."
         logging.info(msg)
         return msg
 
@@ -839,8 +823,6 @@ def sincronizar_titulos_guimabus():
         return error_msg
 
 def sincronizar_tarifario_guimabus():
-    """Vai a https://guimabus.pt/tarifarios/, encontra o PDF da tabela tarifária atual
-    (o nome do ficheiro muda todos os anos) e extrai o texto para a cache local."""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     url_pagina = "https://guimabus.pt/tarifarios/"
 
@@ -872,14 +854,7 @@ def sincronizar_tarifario_guimabus():
             for idx, pagina in enumerate(pdf.pages):
                 texto_pag = pagina.extract_text(layout=True)
                 if texto_pag:
-                    texto_extraido.append(f"[PÁGINA {idx+1} - TEXTO]\n{texto_pag}")
-                try:
-                    tabelas = pagina.extract_tables()
-                    for t_idx, tabela in enumerate(tabelas):
-                        linhas_tabela = ["\t".join(cell if cell else "" for cell in linha) for linha in tabela]
-                        texto_extraido.append(f"[PÁGINA {idx+1} - TABELA {t_idx+1}]\n" + "\n".join(linhas_tabela))
-                except Exception as e_tabela:
-                    logging.warning(f"Não foi possível extrair tabelas da página {idx+1} do tarifário: {e_tabela}")
+                    texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
 
         conteudo_final = "\n\n".join(texto_extraido)
         if not conteudo_final.strip():
@@ -905,16 +880,12 @@ def sincronizar_tarifario_guimabus():
         return error_msg
 
 def sincronizar_titulos_e_tarifario():
-    """Corre as duas sincronizações (títulos + tarifário) e devolve um resumo combinado."""
     resultado_titulos = sincronizar_titulos_guimabus()
     resultado_tarifario = sincronizar_tarifario_guimabus()
     return f"{resultado_titulos}\n{resultado_tarifario}"
 
 # --- ÍNDICE PARAGEM <-> LINHA (para sugerir transbordos) ---
 def _extrair_paragens_de_texto(texto: str):
-    """Lê o texto de um horário (já extraído do PDF) e devolve o conjunto de nomes de paragem
-    encontrados. Cada linha de horário tem o formato 'Nome da Paragem  07:20 08:10 - 09:40 ...',
-    por isso procuramos linhas que terminem em pelo menos 3 tokens de hora (HH:MM) ou '-'."""
     paragens = set()
     padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
     for linha_texto in texto.split("\n"):
@@ -929,8 +900,6 @@ def _extrair_paragens_de_texto(texto: str):
     return paragens
 
 def construir_indice_paragens():
-    """Percorre todo o texto de horários já em cache e reconstrói o índice paragem<->linha.
-    Deve ser chamado depois de sincronizar_todos_horarios_guimabus()."""
     try:
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -960,11 +929,6 @@ def construir_indice_paragens():
         return error_msg
 
 def _normalizar_nome_paragem(texto: str):
-    """Os horários oficiais usam abreviaturas (ex: 'S. Torcato' em vez de 'São Torcato'),
-    mas as pessoas escrevem por extenso. Sem isto, uma pesquisa por 'São Torcato' nunca
-    encontra 'S. Torcato' no texto, mesmo sendo exatamente a mesma paragem. Também removemos
-    acentos/diacríticos (ex: 'gonca' precisa de encontrar 'Gonça' — para o computador,
-    'c' e 'ç' são caracteres completamente diferentes sem esta normalização)."""
     t = texto.lower().strip()
     t = re.sub(r'\bsão\b', 's.', t)
     t = re.sub(r'\bsanta\b', 'sta.', t)
@@ -975,17 +939,147 @@ def _normalizar_nome_paragem(texto: str):
     t = re.sub(r'\s+', ' ', t).strip()
     return t
 
+def _procurar_linhas_por_titulo(termo_norm: str):
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT linha, titulo FROM cache_titulo_linha")
+        todos_titulos = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Erro ao consultar títulos de linha: {e}")
+        return set(), []
+
+    linhas_encontradas = set()
+    titulos_encontrados = []
+    for linha_id, titulo in todos_titulos:
+        if not titulo:
+            continue
+        titulo_norm = _normalizar_nome_paragem(titulo)
+        if termo_norm in titulo_norm:
+            linhas_encontradas.add(linha_id)
+            titulos_encontrados.append(f"Linha {linha_id}: {titulo}")
+    return linhas_encontradas, titulos_encontrados
+
+# --- ENRIQUECIMENTO ÚNICO: FREGUESIA DE CADA PARAGEM (via OpenStreetMap/Nominatim, grátis) ---
+def enriquecer_paragens_com_freguesia(progresso_callback=None):
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT paragem FROM cache_paragens_linha")
+        todas_paragens = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT paragem FROM cache_paragem_freguesia")
+        ja_feitas = {row[0] for row in cursor.fetchall()}
+        conn.close()
+    except Exception as e:
+        return f"Erro ao preparar o enriquecimento: {e}"
+
+    paragens_a_fazer = [p for p in todas_paragens if p not in ja_feitas]
+    if not paragens_a_fazer:
+        return "Todas as paragens já têm freguesia associada — nada a fazer."
+
+    headers = {
+        'User-Agent': 'SuperSecretarioIA-Guimaraes/1.0 (projeto pessoal de Celso Ferreira; uso pontual e não comercial)'
+    }
+
+    conn = sqlite3.connect("agente_memoria.db")
+    cursor = conn.cursor()
+    timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sucesso = 0
+    falha = 0
+
+    for idx, paragem in enumerate(paragens_a_fazer):
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": f"{paragem}, Guimarães, Portugal",
+                    "format": "json",
+                    "addressdetails": 1,
+                    "countrycodes": "pt",
+                    "limit": 1,
+                },
+                headers=headers,
+                timeout=10
+            )
+            resp.raise_for_status()
+            resultados = resp.json()
+            freguesia = None
+            if resultados:
+                endereco = resultados[0].get("address", {})
+                freguesia = (endereco.get("suburb") or endereco.get("city_district")
+                             or endereco.get("village") or endereco.get("town")
+                             or endereco.get("municipality"))
+
+            if freguesia:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao)
+                    VALUES (?, ?, ?, ?)
+                """, (paragem, freguesia, "nominatim", timestamp_atual))
+                sucesso += 1
+            else:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao)
+                    VALUES (?, ?, ?, ?)
+                """, (paragem, None, "sem_resultado", timestamp_atual))
+                falha += 1
+
+            if progresso_callback:
+                progresso_callback(idx + 1, len(paragens_a_fazer), paragem)
+
+        except Exception as e:
+            logging.warning(f"Falha ao geocodificar '{paragem}': {e}")
+            falha += 1
+
+        time.sleep(1.1)
+
+    conn.commit()
+    conn.close()
+
+    msg = f"Enriquecimento de freguesias concluído: {sucesso} paragens associadas com sucesso, {falha} sem resultado, de {len(paragens_a_fazer)} novas paragens processadas."
+    logging.info(msg)
+    return msg
+
+def obter_freguesia_de_paragem(nome_paragem: str):
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL")
+        todas = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Erro ao consultar freguesia de paragem: {e}")
+        return None
+
+    nome_norm = _normalizar_nome_paragem(nome_paragem)
+    for paragem, freguesia in todas:
+        if nome_norm in _normalizar_nome_paragem(paragem) or _normalizar_nome_paragem(paragem) in nome_norm:
+            return freguesia
+    return None
+
+def procurar_paragens_por_freguesia(nome_freguesia: str):
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL")
+        todas = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Erro ao procurar paragens por freguesia: {e}")
+        return []
+
+    freguesia_norm = _normalizar_nome_paragem(nome_freguesia)
+    return [paragem for paragem, freguesia in todas if freguesia_norm in _normalizar_nome_paragem(freguesia)]
+
 def planear_viagem_com_transbordo(origem: str, destino: str):
     """Ferramenta do agente: dado o nome (aproximado) de uma paragem de origem e de destino,
     procura no índice local (construído a partir dos horários reais já em cache) se existe uma
-    linha direta, ou sugere um ponto de transbordo (uma paragem comum a uma linha que passa na
-    origem e uma linha que passa no destino).
+    linha direta, ou sugere um ponto de transbordo.
 
-    NOTA IMPORTANTE: isto só identifica QUAIS linhas usar e ONDE fazer transbordo, com base nos
-    nomes de paragem encontrados no texto dos horários. NÃO calcula automaticamente se os horários
-    das duas viagens encaixam a tempo — para isso, o agente deve depois consultar os horários
-    completos de cada linha sugerida (com consultar_cache_horario_linha) e cruzar os horários ele
-    próprio, com base na hora atual do sistema."""
+    NOTA IMPORTANTE: isto só identifica QUAIS linhas usar e ONDE fazer transbordo. NÃO calcula
+    automaticamente se os horários das duas viagens encaixam a tempo — para isso, o agente deve
+    depois consultar os horários completos de cada linha sugerida (com consultar_cache_horario_linha)
+    e cruzar os horários ele próprio, com base na hora atual do sistema."""
     if not origem or not destino:
         return "É necessário indicar a paragem de origem e a paragem de destino."
 
@@ -1009,7 +1103,7 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
     paragens_origem_encontradas = set()
     linhas_destino = set()
     paragens_destino_encontradas = set()
-    mapa_linha_paragens = {}  # linha -> set de paragens (para calcular interseção depois)
+    mapa_linha_paragens = {}
 
     for linha_id, paragem in todas:
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
@@ -1032,14 +1126,35 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
     else:
         aviso_destino_por_titulo = False
 
+    aviso_origem_por_freguesia = None
+    aviso_destino_por_freguesia = None
     if not linhas_origem:
-        return (f"Não encontrei nenhuma paragem nem nenhuma linha cujo título mencione '{origem}' "
-                f"nos dados em cache. Confirma o nome (pode ser uma freguesia servida por uma linha "
-                f"cujo título não a menciona explicitamente).")
+        paragens_da_freguesia = procurar_paragens_por_freguesia(origem)
+        if paragens_da_freguesia:
+            for paragem_freg in paragens_da_freguesia:
+                for linha_id, paragem_indice in todas:
+                    if _normalizar_nome_paragem(paragem_freg) == _normalizar_nome_paragem(paragem_indice):
+                        linhas_origem.add(linha_id)
+                        paragens_origem_encontradas.add(paragem_indice)
+            if linhas_origem:
+                aviso_origem_por_freguesia = paragens_da_freguesia
     if not linhas_destino:
-        return (f"Não encontrei nenhuma paragem nem nenhuma linha cujo título mencione '{destino}' "
-                f"nos dados em cache. Confirma o nome (pode ser uma freguesia servida por uma linha "
-                f"cujo título não a menciona explicitamente).")
+        paragens_da_freguesia = procurar_paragens_por_freguesia(destino)
+        if paragens_da_freguesia:
+            for paragem_freg in paragens_da_freguesia:
+                for linha_id, paragem_indice in todas:
+                    if _normalizar_nome_paragem(paragem_freg) == _normalizar_nome_paragem(paragem_indice):
+                        linhas_destino.add(linha_id)
+                        paragens_destino_encontradas.add(paragem_indice)
+            if linhas_destino:
+                aviso_destino_por_freguesia = paragens_da_freguesia
+
+    if not linhas_origem:
+        return (f"Não encontrei nenhuma paragem, título de linha nem freguesia que corresponda a '{origem}' "
+                f"nos dados em cache. Confirma o nome.")
+    if not linhas_destino:
+        return (f"Não encontrei nenhuma paragem, título de linha nem freguesia que corresponda a '{destino}' "
+                f"nos dados em cache. Confirma o nome.")
 
     aviso_precisao = ""
     if aviso_origem_por_titulo:
@@ -1050,6 +1165,12 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
         aviso_precisao += (f"\n⚠️ Nota: '{destino}' não corresponde a uma paragem exata — foi encontrada "
                            f"apenas porque o TÍTULO da linha menciona essa freguesia/localidade "
                            f"(ex: {', '.join(titulos_destino[:2])}). A paragem exata a usar pode ter outro nome.")
+    if aviso_origem_por_freguesia:
+        aviso_precisao += (f"\n📍 '{origem}' foi reconhecida como freguesia — paragens encontradas nessa "
+                           f"freguesia: {', '.join(aviso_origem_por_freguesia[:4])}.")
+    if aviso_destino_por_freguesia:
+        aviso_precisao += (f"\n📍 '{destino}' foi reconhecida como freguesia — paragens encontradas nessa "
+                           f"freguesia: {', '.join(aviso_destino_por_freguesia[:4])}.")
 
     linhas_diretas = linhas_origem & linhas_destino
     if linhas_diretas:
@@ -1058,11 +1179,10 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
             resumo += f"- Linha {linha_id}\n"
         resumo += f"\nParagens correspondentes à origem: {', '.join(sorted(paragens_origem_encontradas))}"
         resumo += f"\nParagens correspondentes ao destino: {', '.join(sorted(paragens_destino_encontradas))}"
-        resumo += "\n\nPróximo passo: consulta os horários desta(s) linha(s) com consultar_cache_horario_linha para dar a hora exata ao utilizador."
+        resumo += "\n\nPróximo passo: consulta os horários desta(s) linha(s) com consultar_cache_horario_linha (que já inclui o link oficial) para dar a hora exata ao utilizador."
         resumo += aviso_precisao
         return resumo
 
-    # Sem linha direta - procurar ponto de transbordo: paragem comum a uma linha da origem e uma linha do destino
     stops_linhas_origem = set()
     for linha_id in linhas_origem:
         stops_linhas_origem |= mapa_linha_paragens.get(linha_id, set())
@@ -1071,7 +1191,6 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
         stops_linhas_destino |= mapa_linha_paragens.get(linha_id, set())
 
     transbordos_candidatos = stops_linhas_origem & stops_linhas_destino
-    # remove as próprias paragens de origem/destino da lista de candidatos a transbordo
     transbordos_candidatos -= paragens_origem_encontradas
     transbordos_candidatos -= paragens_destino_encontradas
 
@@ -1087,39 +1206,27 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
         resumo += f"- Via **{paragem_transbordo}**: apanha a linha {'/'.join(linhas_ate_transbordo)} desde '{origem}', desce em '{paragem_transbordo}', e apanha a linha {'/'.join(linhas_desde_transbordo)} até '{destino}'.\n"
 
     resumo += ("\nPróximo passo: consulta os horários completos de cada linha sugerida (com "
-               "consultar_cache_horario_linha) e cruza os horários tu próprio para escolher a combination "
-               "que encaixa melhor com a hora atual, dando margem para a troca de autocarro.")
+               "consultar_cache_horario_linha, que já inclui o link oficial) e cruza os horários tu próprio "
+               "para escolher a combinação que encaixa melhor com a hora atual, dando margem para a troca de autocarro.")
     resumo += aviso_precisao
     return resumo
 
-def _procurar_linhas_por_titulo(termo_norm: str):
-    """Fallback quando o termo (ex: uma freguesia) não corresponde a nenhuma paragem exata:
-    procura nos TÍTULOS das linhas (ex: '171 Quintães - Guimarães (via S. Torcato e Atães)'),
-    que muitas vezes mencionam freguesias que os nomes de paragem, por si só, não indicam."""
-    try:
-        conn = sqlite3.connect("agente_memoria.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT linha, titulo FROM cache_titulo_linha")
-        todos_titulos = cursor.fetchall()
-        conn.close()
-    except Exception as e:
-        logging.error(f"Erro ao consultar títulos de linha: {e}")
-        return set(), []
+def consultar_freguesia_paragem_tool(nome: str):
+    if not nome:
+        return "É necessário indicar o nome da paragem ou da freguesia."
 
-    linhas_encontradas = set()
-    titulos_encontrados = []
-    for linha_id, titulo in todos_titulos:
-        if not titulo:
-            continue
-        titulo_norm = _normalizar_nome_paragem(titulo)
-        if termo_norm in titulo_norm:
-            linhas_encontradas.add(linha_id)
-            titulos_encontrados.append(f"Linha {linha_id}: {titulo}")
-    return linhas_encontradas, titulos_encontrados
+    freguesia = obter_freguesia_de_paragem(nome)
+    if freguesia:
+        return f"A paragem '{nome}' fica na freguesia de {freguesia}."
+
+    paragens = procurar_paragens_por_freguesia(nome)
+    if paragens:
+        return f"Paragens conhecidas na freguesia de '{nome}': {', '.join(paragens)}."
+
+    return (f"Não tenho ainda informação de freguesia para '{nome}'. Pode ser necessário o "
+            f"administrador correr o enriquecimento de freguesias (botão na barra lateral).")
 
 def obter_tipologias_cache():
-    """Lê as tipologias de passe da cache local (SQLite). Se a cache estiver vazia
-    (primeira execução antes de qualquer sincronização), usa um fallback mínimo."""
     try:
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -1156,7 +1263,6 @@ def obter_tipologias_cache():
         return TIPOLOGIAS_PASSE_FALLBACK, None
 
 def consultar_tarifario_cache():
-    """Ferramenta do agente: lê o texto do tarifário (tabela de preços) guardado em cache."""
     try:
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -1170,7 +1276,6 @@ def consultar_tarifario_cache():
         return f"Erro na leitura da cache do tarifário: {e}"
 
 def consultar_tipologias_cache_tool():
-    """Ferramenta do agente: lê as tipologias de passe e documentos exigidos, guardados em cache."""
     tipologias, ultima_atualizacao = obter_tipologias_cache()
     if not tipologias:
         return "Não existem tipologias de passe em cache."
@@ -1180,7 +1285,6 @@ def consultar_tipologias_cache_tool():
         docs_txt = "; ".join(info["documentos"])
         resumo += f"- **{nome}**: {info['descricao']} Preço: {info['preco']}. Custo do cartão: {info['custo_cartao']}. Prazo: {info['prazo']}. Documentos: {docs_txt}.\n"
     return resumo
-
 
 def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
     tipologias_atuais, _ = obter_tipologias_cache()
@@ -1224,10 +1328,6 @@ def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
         return f"Não foi possível verificar os documentos neste momento: {e}"
 
 def recomendar_tipologias_passe(respostas: dict, tipologias_disponiveis: dict):
-    """Aplica regras simples (idade, estudante, residência, etc.) às tipologias REAIS
-    disponíveis na cache, e devolve as que parecem aplicáveis à pessoa. As regras espelham
-    os critérios descritos em guimabus.pt/titulos/ — se a Guimabus mudar os critérios, os
-    NOMES das tipologias na cache podem mudar e estas regras precisam de ser revistas."""
     idade = respostas.get("idade")
     estudante = respostas.get("estudante")
     nivel_estudo = respostas.get("nivel_estudo")
@@ -1271,20 +1371,17 @@ def recomendar_tipologias_passe(respostas: dict, tipologias_disponiveis: dict):
     if usa_passe_cp and _tem("Mensal CP"):
         candidatas.append(_tem("Mensal CP"))
 
-    # Se nada específico se aplicar, sugere as opções de passe mensal com desconto conforme residência
     if not candidatas:
         if residente_gmr and _tem("CIM AVE 50% + 10% CMG"):
             candidatas.append(_tem("CIM AVE 50% + 10% CMG"))
         elif residente_gmr and _tem("CIM AVE 50%"):
             candidatas.append(_tem("CIM AVE 50%"))
-        elif _tem("Mensal") and not _tem("CIM") :
-            # tipologia genérica "Mensal" (evita apanhar variantes CIM/CP por engano)
+        elif _tem("Mensal") and not _tem("CIM"):
             for nome in tipologias_disponiveis:
                 if nome.strip().lower() == "mensal":
                     candidatas.append(nome)
                     break
 
-    # Remove duplicados mantendo ordem
     vistos = set()
     candidatas_unicas = []
     for c in candidatas:
@@ -1459,13 +1556,11 @@ def renderizar_jogo():
 
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
 
-                // Passenger
                 ctx.fillStyle = '#3498db'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI); ctx.fill();
                 ctx.fillStyle = '#ffffff'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
-                // Bus
                 for(var i=0; i<snake.length; i++) {
                     if (i === 0) {
                         ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
@@ -1489,7 +1584,6 @@ def renderizar_jogo():
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
 
-                // Leaderboard
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
@@ -1632,14 +1726,18 @@ if "jogo_ativo" not in st.session_state:
 sincronizar_automaticamente_se_necessario(limite_dias=7)
 
 # --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
-
-
-# --- E CHAMA A FUNÇÃO LOGO NO INÍCIO DO TEU SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Painel do Agente")
     if st.button("🗑️ Limpar O Meu Histórico", use_container_width=True):
         st.session_state.messages = [{"role": "assistant", "content": MENSAGEM_INICIAL}]
         st.session_state.jogo_ativo = False
+        st.rerun()
+    st.divider()
+
+    st.subheader("🕹️ Entretenimento")
+    texto_botao_jogo = "Fechar Jogo X" if st.session_state.jogo_ativo else "Abrir Mini-Game 👾"
+    if st.button(texto_botao_jogo, use_container_width=True):
+        st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
     st.divider()
 
@@ -1682,7 +1780,6 @@ with st.sidebar:
     else:
         st.sidebar.success("Sessão de administrador activa.")
         
-        # BOTÃO EXCLUSIVO DE ADMIN: Dispara o Scraping Automático em Background
         st.sidebar.subheader("🕷️ Automação Web")
         if st.sidebar.button("🔄 Sincronizar Todos os Horários (Scraping)", use_container_width=True):
             with st.spinner("O robô está a ler o site da Guimabus..."):
@@ -1694,6 +1791,18 @@ with st.sidebar:
         if st.sidebar.button("🗺️ Reconstruir Índice de Paragens (sem re-sincronizar)", use_container_width=True):
             with st.spinner("A reconstruir o índice a partir da cache já existente..."):
                 st.sidebar.success(construir_indice_paragens())
+
+        if st.sidebar.button("📍 Descobrir Freguesia de Cada Paragem (1x, ~2-3 min)", use_container_width=True):
+            st.sidebar.caption("A perguntar ao OpenStreetMap onde fica cada paragem (1 pedido/segundo, é a regra deles)...")
+            barra_progresso = st.sidebar.progress(0.0)
+            texto_progresso = st.sidebar.empty()
+
+            def _atualizar_progresso(atual, total, paragem_atual):
+                barra_progresso.progress(atual / total)
+                texto_progresso.caption(f"{atual}/{total}: {paragem_atual}")
+
+            resultado_enriquecimento = enriquecer_paragens_com_freguesia(progresso_callback=_atualizar_progresso)
+            st.sidebar.success(resultado_enriquecimento)
 
         if st.sidebar.button("🔄 Sincronizar Títulos e Tarifário", use_container_width=True):
             with st.spinner("O robô está a ler titulos/ e tarifarios/..."):
@@ -1802,23 +1911,22 @@ if prompt:
                 És um Agente focado em automação, suporte e infraestrutura IT.
                 Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas.
 
-                Tens três ferramentas relacionadas com a frota local da Guimabus:
+                Tens estas ferramentas relacionadas com a frota local da Guimabus:
                 - obter_dados_guimabus: estado em tempo real da frota (autocarros em circulação/atrasos). Aceita um "route_id".
-                - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica. Aceita tanto o ID numérico como o nome em texto da paragem (ex: "vaca negra").
-                - consultar_cache_horario_linha: consulta a cache local da base de dados SQLite para ler os horários e tabelas fixas de uma determinada linha (ex: "101").
+                - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica. Aceita tanto o ID numérico como o nome em texto da paragem.
+                - consultar_cache_horario_linha: consulta a cache local para ler os horários e tabelas fixas de uma determinada linha (ex: "101"). Devolve também o link oficial do PDF — inclui sempre esse link na resposta para o utilizador poder confirmar na fonte.
                 - consultar_tipologias_cache_tool: lê as tipologias de passe (descrição, preço, custo do cartão, prazo, documentos exigidos), sincronizadas automaticamente de guimabus.pt/titulos/.
                 - consultar_tarifario_cache: lê a tabela tarifária completa (preços por distância), sincronizada automaticamente de guimabus.pt/tarifarios/.
-                - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e uma de destino, diz se há linha direta ou sugere onde fazer transbordo (com base num índice construído a partir dos horários reais). Usa esta ferramenta sempre que o utilizador pedir para ir de um sítio para outro e não for óbvio que linha usar.
+                - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e uma de destino, diz se há linha direta ou sugere onde fazer transbordo. Usa esta ferramenta sempre que o utilizador pedir para ir de um sítio para outro e não for óbvio que linha usar.
+                - consultar_freguesia_paragem_tool: dado o nome de uma paragem, diz em que freguesia fica; dado o nome de uma freguesia, lista as paragens conhecidas lá.
 
-                Depois de planear_viagem_com_transbordo indicar quais linhas usar (diretas ou com transbordo), consulta os horários completos dessas linhas com consultar_cache_horario_linha e cruza tu próprio os horários das duas viagens (usando a hora atual do sistema) para dar ao utilizador uma sugestão concreta de que autocarro apanhar em cada troço, com margem de segurança para trocar de autocarro.
+                Depois de planear_viagem_com_transbordo indicar quais linhas usar, consulta os horários completos dessas linhas com consultar_cache_horario_linha (que já inclui o link oficial) e cruza tu próprio os horários das duas viagens (usando a hora atual do sistema) para dar ao utilizador uma sugestão concreta, com margem de segurança para trocar de autocarro.
 
                 Usa sempre consultar_tipologias_cache_tool e consultar_tarifario_cache para perguntas sobre preços, tipologias de passe ou documentos exigidos — não confies em memória para isto, porque os preços mudam. Se o utilizador quiser efetivamente PEDIR um passe e carregar documentos, informa-o que existe um formulário dedicado na barra lateral ("🎫 Pedir Passe") para isso — esse formulário também tem um pequeno questionário que recomenda a tipologia automaticamente.
 
-                Se o utilizador perguntar "qual o passe/tipologia certo para mim" (ou similar), e ainda não tiver dado informação suficiente, PERGUNTA os critérios relevantes antes de responder (idade, se é estudante e que nível de ensino, se reside no concelho de Guimarães, se tem grau de incapacidade ≥60%, se é antigo combatente, se tem passe CP, se está em reforma antecipada entre os 60-65 anos). Depois de teres essa informação, chama consultar_tipologias_cache_tool e aplica as descrições de cada tipologia (que dizem explicitamente "residente"/"não residente", "estudante", faixas etárias, etc.) para RECOMENDAR a tipologia certa, explicando o porquê com base nos critérios que a pessoa deu. Por exemplo: estudante universitário com 40 anos que vive fora do concelho de Guimarães → "Universitário Não Residente" (não pela idade, mas porque é estudante do ensino superior e não reside no concelho). Não te limites a listar todas as tipologias quando a pessoa já deu informação suficiente para identificar uma específica.
+                Se o utilizador perguntar "qual o passe/tipologia certo para mim" (ou similar), e ainda não tiver dado informação suficiente, PERGUNTA os critérios relevantes antes de responder (idade, se é estudante e que nível de ensino, se reside no concelho de Guimarães, se tem grau de incapacidade ≥60%, se é antigo combatente, se tem passe CP, se está em reforma antecipada entre os 60-65 anos). Depois de teres essa informação, chama consultar_tipologias_cache_tool e aplica as descrições de cada tipologia para RECOMENDAR a tipologia certa, explicando o porquê. Não te limites a listar todas as tipologias quando a pessoa já deu informação suficiente para identificar uma específica.
 
-                REGRAS DE OURO PARA MAIOR AUTOMAÇÃO:
-                1. Se o utilizador perguntar "Quais as linhas que passam no local X para ir para o local Y" ou apenas "Estou no local X, como vou para Y?", deves chamar OBRIGATORIAMENTE a ferramenta `obter_horarios_paragem` passando o nome da paragem de origem "X".
-                2. Com o resultado retornado por esta ferramenta (que varre dinamicamente a cache local de texto por palavras-chave), tu irás descobrir imediatamente no próprio output quais as linhas que contêm essa paragem e o destino. Responde logo com os horários da linha encontrada, calculando os minutos em falta com base na hora atual do sistema. Nunca peças ao utilizador para adivinhar a linha se ela já puder ser descoberta por texto!
+                Sempre que discutires uma linha específica (ex: "linha 170"), inclui SEMPRE o link oficial do PDF de horários dessa linha (devolvido por consultar_cache_horario_linha) na tua resposta, para o utilizador poder confirmar diretamente na fonte oficial — isto é especialmente importante porque a extração automática de texto de PDFs pode ocasionalmente ter pequenos erros.
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. Isto inclui: números de autocarro, atrasos, percursos, horários, nomes/números de linhas, E TAMBÉM datas e dias da semana. Para saber que dia é "hoje" ou "amanhã", usa SEMPRE e apenas a informação em "[DATA E HORA ATUAL DO SISTEMA]" fornecida no início do contexto — nunca assumas ou inventes uma data a partir de memória. NUNCA digas que "consultaste" uma ferramenta, cache ou base de dados que não chamaste de facto. Se as ferramentas devolverem uma lista vazia, um erro, ou "não existem horários em cache", e a Knowledge Base também não tiver essa informação, diz clara e honestamente ao utilizador que não tens essa informação disponível neste momento — nunca substituas por uma resposta que pareça plausível mas seja inventada. É preferível admitir "não sei" do que dar uma resposta errada com aparência de certeza."""
@@ -1860,11 +1968,6 @@ if prompt:
                 def _formatar_data_pt(dt):
                     return f"{DIAS_SEMANA_PT[dt.weekday()]}, {dt.day} de {MESES_PT[dt.month - 1]} de {dt.year}"
 
-                # O servidor onde a app corre normalmente usa UTC, não a hora de Portugal —
-                # sem isto, "agora" ficava sistematicamente atrasado 1h (ou 2h no inverno).
-                # Isto afeta só o texto mostrado ao utilizador; os timestamps internos da BD
-                # continuam em hora do servidor, o que não é problema (só servem para comparações
-                # relativas entre si, ex: "há quantos dias foi a última sincronização").
                 agora = datetime.now(ZoneInfo("Europe/Lisbon"))
                 amanha = agora + timedelta(days=1)
                 contexto_data = (
@@ -1873,18 +1976,9 @@ if prompt:
                     f"Amanhã será {_formatar_data_pt(amanha)}.]"
                 )
 
-                # --- INTERCEÇÃO DE PARAGENS DIRETAMENTE EM PYTHON (PRÉ-ROUTING PREVENTIVO) ---
-                contexto_intercecao = ""
-                # Se o prompt do utilizador focar uma paragem conhecida ou requisição de rotas
-                if any(p in prompt_normalizado for p in ["vaca negra", "hospital", "central", "universidade", "estacao", "paragem", "linhas"]):
-                    # Extrai o termo geográfico para a pesquisa por tokens
-                    busca_local = "vaca negra" if "vaca negra" in prompt_normalizado else prompt
-                    dados_extraidos = obter_horarios_paragem(busca_local)
-                    contexto_intercecao = f"\n[DADOS DE CACHE DISPARADOS COMPLEMENTARES: {dados_extraidos}]\n"
-
-                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}{contexto_intercecao}\n\nUser Prompt: {prompt}"
+                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool]
                 
                 # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
