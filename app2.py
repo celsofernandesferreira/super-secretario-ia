@@ -310,109 +310,81 @@ def obter_avisos_facebook():
 def renderizar_rodape_anuncios(anuncios_ativos):
     if not anuncios_ativos: return
     
-    dados_js = json.dumps(anuncios_ativos)
+    # Junta todos os textos dos avisos numa única string longa para o letreiro
+    texto_ticker = "     |     ".join([f"🚨 {a.get('texto', a.get('titulo', 'Aviso'))}" for a in anuncios_ativos])
     
     html_rodape = f"""
     <style>
-        /* Limpeza das margens do body interno do iframe */
-        body {{ margin: 0; padding: 0; overflow: hidden; }}
+        /* O container fixa-se nativamente no fundo do ecrã */
+        .footer-container-global {{
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 90px;
+            background-color: #1e1e1e;
+            color: white;
+            z-index: 999999;
+            border-top: 4px solid #2ecc71;
+            box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+        }}
+        .footer-disclaimer {{
+            background: #2a2a2a;
+            color: #eee;
+            font-size: 13px;
+            padding: 4px 20px;
+            text-align: center;
+            font-weight: bold;
+            border-bottom: 1px solid #444;
+        }}
+        .ticker-wrapper {{
+            overflow: hidden;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            flex: 1;
+            width: 100%;
+        }}
+        .ticker-text {{
+            display: inline-block;
+            white-space: nowrap;
+            font-size: 20px;
+            font-weight: bold;
+            padding-left: 100%; /* Começa fora do ecrã à direita */
+            animation: marquee 35s linear infinite; /* Animação CSS pura (sem JS) */
+        }}
         
-        .footer-wrapper {{
-            /* Agora usamos absolute porque o iframe em si é que será fixed */
-            position: absolute; top: 0; left: 0; width: 100%; height: 160px;
-            background-color: #1e1e1e; color: white;
-            border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
-            display: flex; flex-direction: column; overflow: hidden;
+        /* A magia do movimento sem JavaScript */
+        @keyframes marquee {{
+            0%   {{ transform: translateX(0); }}
+            100% {{ transform: translateX(-100%); }}
         }}
-        .disclaimer {{
-            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
-            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
+        
+        /* Levantar a caixa de texto do chat para não ficar escondida debaixo do rodapé */
+        .stChatInputContainer {{
+            bottom: 100px !important;
         }}
-        .content-area {{ 
-            display: flex; align-items: center; flex: 1; padding: 0 20px; 
-        }}
-        .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
-        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; display: none; }}
-        .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
-        #ticker-text {{ 
-            position: absolute; white-space: nowrap; font-size: 20px; 
-            font-weight: bold; top: 35px; left: 50%;
+        
+        /* Levantar o botão de áudio de acordo com a nova posição da barra */
+        div[data-testid="stAudioInput"] {{
+            bottom: 108px !important;
         }}
     </style>
     
-    <div class="footer-wrapper">
-        <div class="disclaimer">
-            ⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.
+    <div class="footer-container-global">
+        <div class="footer-disclaimer">
+            ⚠️ Aviso importante: Esta é uma ferramenta de apoio. Não é um canal oficial da Guimabus.
         </div>
-        <div class="content-area">
-            <div class="img-box">
-                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
-            </div>
-            <div class="text-container">
-                <div id="ticker-text"></div>
-            </div>
+        <div class="ticker-wrapper">
+            <div class="ticker-text">{texto_ticker}</div>
         </div>
     </div>
-
-    <script>
-        // --- HACK DO ENGENHEIRO: FIXAR O IFRAME NA JANELA PRINCIPAL ---
-        try {{
-            const frame = window.frameElement;
-            if (frame) {{
-                frame.style.position = 'fixed';
-                // Colocamos a 85px do fundo para não tapar o st.chat_input
-                frame.style.bottom = '85px'; 
-                frame.style.left = '0';
-                frame.style.width = '100%';
-                frame.style.zIndex = '999';
-                frame.style.border = 'none';
-            }}
-        }} catch(e) {{
-            console.warn("Bloqueio de CORS ao tentar aceder ao frame pai.");
-        }}
-
-        const anuncios = {dados_js};
-        let indice = 0;
-        const txt = document.getElementById('ticker-text');
-        const img = document.getElementById('ticker-img');
-        const container = document.querySelector('.text-container');
-
-        async function correrAviso() {{
-            const a = anuncios[indice];
-            
-            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
-            
-            if (a.imagem && a.imagem.trim() !== "") {{
-                img.src = a.imagem;
-                img.style.display = "block";
-                img.style.visibility = "visible";
-            }} else {{
-                img.style.display = "none";
-            }}
-            
-            txt.style.animation = 'none';
-            txt.offsetHeight; // Forçar o reflow do DOM
-            
-            // Garantir que o texto começa fora da caixa do lado direito
-            let pos = container.offsetWidth;
-            txt.style.left = pos + "px";
-            
-            function animar() {{
-                pos -= 2; 
-                txt.style.left = pos + "px";
-                if (pos < -txt.offsetWidth) {{
-                    indice = (indice + 1) % anuncios.length;
-                    setTimeout(correrAviso, 2000); 
-                }} else {{
-                    requestAnimationFrame(animar);
-                }}
-            }}
-            animar();
-        }}
-        correrAviso();
-    </script>
     """
-    components.html(html_rodape, height=160)
+    
+    # Injeta diretamente no Streamlit sem criar um Iframe problemático
+    st.markdown(html_rodape, unsafe_allow_html=True)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
