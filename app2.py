@@ -1977,6 +1977,7 @@ with st.sidebar:
         if st.sidebar.button("📥 Importar Ficheiro JSON Local", use_container_width=True):
             with st.spinner("A ler geo_guimaraes.json..."):
                 st.sidebar.success(importar_json_local())
+                
         if st.sidebar.button("🔍 Inspecionar Conteúdo Geográfico", use_container_width=True):
             conn = sqlite3.connect("agente_memoria.db")
             cursor = conn.cursor()
