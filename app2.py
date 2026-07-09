@@ -1973,6 +1973,10 @@ with st.sidebar:
         if st.sidebar.button(ui["sync_tickets"], use_container_width=True):
             with st.spinner(ui["robot_reading_tickets"]):
                 st.sidebar.success(sincronizar_titulos_e_tarifario())
+
+        if st.sidebar.button("📥 Importar Ficheiro JSON Local", use_container_width=True):
+            with st.spinner("A ler geo_guimaraes.json..."):
+                st.sidebar.success(importar_json_local())
                 
         if st.sidebar.button(ui["logout_admin"], key="admin_logout_btn"):
             st.session_state.admin_autenticado = False
