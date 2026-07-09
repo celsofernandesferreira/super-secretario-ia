@@ -1009,17 +1009,30 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
 
 def encontrar_paragem_mais_proxima_tool(local_nome: str):
     if not local_nome: return "É necessário indicar o nome do local."
+    
+    # 1. Normaliza o termo de pesquisa do utilizador
+    termo_pesquisa = _normalizar_nome_paragem(local_nome)
+    
     try:
+        conn = sqlite3.connect("agente_memoria.db")
+        # Registar a função de normalização para o SQLite
         conn.create_function("_normalizar_nome_paragem", 1, _normalizar_nome_paragem)
         cursor = conn.cursor()
         
-        # 1. Procura o local pedido (ex: Coelima)
-        cursor.execute("SELECT nome, latitude, longitude FROM nos_geograficos WHERE nome LIKE ? LIMIT 1", (f"%{local_nome}%",))
+        # 2. Pesquisa usando normalização na base de dados e no termo
+        # Isto transforma "Café Rio" -> "cafe rio" e pesquisa em "restaurante_cafe_rio"
+        query = """
+            SELECT nome, latitude, longitude 
+            FROM nos_geograficos 
+            WHERE _normalizar_nome_paragem(nome) LIKE ? 
+            LIMIT 1
+        """
+        cursor.execute(query, (f"%{termo_pesquisa}%",))
         local = cursor.fetchone()
         
         if not local:
             conn.close()
-            return f"Não tenho as coordenadas de '{local_nome}'. Confirma se está no ficheiro geo_guimaraes.json."
+            return f"Não encontrei coordenadas para '{local_nome}'. Tenta ser mais específico."
             
         nome_real, lat_local, lon_local = local
         
