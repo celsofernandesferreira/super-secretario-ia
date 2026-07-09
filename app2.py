@@ -13,7 +13,6 @@ import time
 import threading
 import pdfplumber
 import unicodedata
-import folium
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -111,23 +110,6 @@ def inicializar_bd():
             ultima_atualizacao TEXT
         )
     """)
-    
-    # --- NOVA TABELA: BASE GEOGRÁFICA UNIFICADA ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS nos_geograficos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tipo TEXT, 
-            nome TEXT,
-            freguesia TEXT,
-            latitude REAL,
-            longitude REAL,
-            linhas_associadas TEXT, 
-            ultima_atualizacao TEXT
-        )
-    """)
-    # Índice para buscas incrivelmente rápidas de locais
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
-
     conn.commit()
     conn.close()
 
@@ -385,7 +367,6 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     </script>
     """
     components.html(html_rodape, height=170)
-
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
@@ -727,162 +708,6 @@ def obter_contagem_indice_paragens():
         logging.error(f"Erro ao contar índice de paragens: {e}")
         return 0
 
-# --- NOVAS FUNÇÕES GEOGRÁFICAS (OVERPASS, FOLIUM, MAPS) ---
-def importar_pois_guimaraes():
-    query = """
-    [out:json][timeout:25];
-    area["name"="Guimarães"]->.searchArea;
-    (
-      node["amenity"~"hospital|clinic|doctors|pharmacy|cafe|restaurant|school|university"](area.searchArea);
-      node["tourism"~"museum|attraction|monument"](area.searchArea);
-      node["shop"~"supermarket|mall|bakery"](area.searchArea);
-    );
-    out center;
-    """
-    url = "https://overpass-api.de/api/interpreter"
-    try:
-        response = requests.post(url, data={'data': query}, timeout=30)
-        dados = response.json()
-        
-        conn = sqlite3.connect("agente_memoria.db")
-        cursor = conn.cursor()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        pois_guardados = 0
-        for elemento in dados.get('elements', []):
-            tags = elemento.get('tags', {})
-            nome_poi = tags.get('name')
-            tipo_poi = tags.get('amenity', tags.get('tourism', tags.get('shop', 'poi')))
-            
-            if nome_poi and 'lat' in elemento and 'lon' in elemento:
-                lat = elemento['lat']
-                lon = elemento['lon']
-                cursor.execute("""
-                    INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (f"poi_{tipo_poi}", nome_poi, lat, lon, timestamp))
-                pois_guardados += 1
-                
-        conn.commit()
-        conn.close()
-        return f"Sucesso: {pois_guardados} Pontos de Interesse (Hospitais, Cafés, etc.) guardados na BD local!"
-    except Exception as e:
-        return f"Erro na extração de POIs: {e}"
-
-def importar_ruas_freguesia(nome_freguesia):
-    url = "https://overpass-api.de/api/interpreter"
-    query = f"""
-    [out:json][timeout:25];
-    area["name"="Guimarães"]->.searchArea;
-    area["name"="{nome_freguesia}"]->.freguesiaArea;
-    way["highway"](area.searchArea)(area.freguesiaArea);
-    out tags center;
-    """
-    try:
-        response = requests.post(url, data={'data': query}, timeout=30)
-        dados = response.json()
-        
-        conn = sqlite3.connect("agente_memoria.db")
-        cursor = conn.cursor()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        ruas_guardadas = set()
-        for elemento in dados.get('elements', []):
-            tags = elemento.get('tags', {})
-            nome_rua = tags.get('name')
-            if nome_rua and 'center' in elemento:
-                lat = elemento['center']['lat']
-                lon = elemento['center']['lon']
-                if nome_rua not in ruas_guardadas:
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO nos_geograficos (tipo, nome, freguesia, latitude, longitude, ultima_atualizacao)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, ("rua", nome_rua, nome_freguesia, lat, lon, timestamp))
-                    ruas_guardadas.add(nome_rua)
-                    
-        conn.commit()
-        conn.close()
-        return f"Sucesso: {len(ruas_guardadas)} ruas importadas para {nome_freguesia}."
-    except Exception as e:
-        return f"Erro na extração Overpass: {e}"
-
-def gerar_mapa_linha_html(linha_id):
-    os.makedirs("maps", exist_ok=True)
-    conn = sqlite3.connect("agente_memoria.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT p.paragem, g.latitude, g.longitude, g.freguesia 
-        FROM cache_paragens_linha p
-        JOIN nos_geograficos g ON _normalizar_nome_paragem(p.paragem) = _normalizar_nome_paragem(g.nome)
-        WHERE p.linha = ? AND g.latitude IS NOT NULL
-    """, (linha_id,))
-    paragens = cursor.fetchall()
-    conn.close()
-    
-    if not paragens:
-        return "Sem dados geográficos suficientes para esta linha."
-    
-    mapa = folium.Map(location=[paragens[0][1], paragens[0][2]], zoom_start=13, tiles="OpenStreetMap")
-    coordenadas_rota = []
-    
-    for nome, lat, lon, freguesia in paragens:
-        coordenadas_rota.append([lat, lon])
-        popup_text = f"<b>Paragem:</b> {nome}<br><b>Freguesia:</b> {freguesia}<br><b>Linha:</b> {linha_id}"
-        folium.Marker(
-            location=[lat, lon],
-            popup=folium.Popup(popup_text, max_width=300),
-            icon=folium.Icon(color="green", icon="bus", prefix="fa")
-        ).add_to(mapa)
-    
-    if len(coordenadas_rota) > 1:
-        folium.PolyLine(coordenadas_rota, color="blue", weight=3, opacity=0.7).add_to(mapa)
-    
-    caminho_ficheiro = f"maps/linha_{linha_id}.html"
-    mapa.save(caminho_ficheiro)
-    return caminho_ficheiro
-
-def gerar_link_google_maps(local_nome: str):
-    """Dado o nome de uma paragem, Ponto de Interesse ou rua, consulta a base de dados 
-    geográfica local, extrai as coordenadas GPS exatas e gera um link direto para o Google Maps."""
-    nome_norm = _normalizar_nome_paragem(local_nome)
-    
-    conn = sqlite3.connect("agente_memoria.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT nome, latitude, longitude FROM nos_geograficos 
-        WHERE _normalizar_nome_paragem(nome) LIKE ? LIMIT 1
-    """, (f"%{nome_norm}%",))
-    resultado = cursor.fetchone()
-    conn.close()
-    
-    if resultado:
-        nome_real, lat, lon = resultado
-        link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-        return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir diretamente no Google Maps aqui: {link_maps}"
-    
-    return f"Não consegui encontrar coordenadas GPS em cache para '{local_nome}'."
-
-# --- THREADS / BACKGROUND JOBS ---
-def verificar_e_sincronizar_pois_background():
-    try:
-        conn = sqlite3.connect("agente_memoria.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM nos_geograficos WHERE tipo LIKE 'poi_%'")
-        contagem = cursor.fetchone()[0]
-        conn.close()
-        
-        if contagem == 0:
-            logging.info("[Segundo plano] Base de dados vazia. A iniciar download automático de POIs...")
-            importar_pois_guimaraes()
-            logging.info("[Segundo plano] POIs sincronizados com sucesso!")
-    except Exception as e:
-        logging.error(f"[Segundo plano] Erro no auto-healing geográfico: {e}")
-
-def arrancar_auto_healing_geografico():
-    if not st.session_state.get("geo_sync_iniciado"):
-        threading.Thread(target=verificar_e_sincronizar_pois_background, daemon=True).start()
-        st.session_state.geo_sync_iniciado = True
-
 def _sync_horarios_em_background():
     """Corre numa thread separada — NUNCA chamar st.* aqui dentro (não é seguro fora
     da thread principal do Streamlit); só regista tudo em log."""
@@ -1161,9 +986,7 @@ def _procurar_linhas_por_titulo(termo_norm: str):
         if not titulo:
             continue
         titulo_norm = _normalizar_nome_paragem(titulo)
-        
-        # --- CORREÇÃO DE REGEX (Evitar Falso Positivo) ---
-        if re.search(r'\b' + re.escape(termo_norm) + r'\b', titulo_norm):
+        if termo_norm in titulo_norm:
             linhas_encontradas.add(linha_id)
             titulos_encontrados.append(f"Linha {linha_id}: {titulo}")
     return linhas_encontradas, titulos_encontrados
@@ -1260,11 +1083,7 @@ def obter_freguesia_de_paragem(nome_paragem: str):
 
     nome_norm = _normalizar_nome_paragem(nome_paragem)
     for paragem, freguesia in todas:
-        paragem_norm = _normalizar_nome_paragem(paragem)
-        # --- CORREÇÃO DE REGEX (Bidirecional) ---
-        match_direto = re.search(r'\b' + re.escape(nome_norm) + r'\b', paragem_norm)
-        match_inverso = re.search(r'\b' + re.escape(paragem_norm) + r'\b', nome_norm)
-        if match_direto or match_inverso:
+        if nome_norm in _normalizar_nome_paragem(paragem) or _normalizar_nome_paragem(paragem) in nome_norm:
             return freguesia
     return None
 
@@ -1280,12 +1099,7 @@ def procurar_paragens_por_freguesia(nome_freguesia: str):
         return []
 
     freguesia_norm = _normalizar_nome_paragem(nome_freguesia)
-    
-    # --- CORREÇÃO DE REGEX ---
-    return [
-        paragem for paragem, freguesia in todas 
-        if re.search(r'\b' + re.escape(freguesia_norm) + r'\b', _normalizar_nome_paragem(freguesia))
-    ]
+    return [paragem for paragem, freguesia in todas if freguesia_norm in _normalizar_nome_paragem(freguesia)]
 
 def planear_viagem_com_transbordo(origem: str, destino: str):
     """Ferramenta do agente: dado o nome (aproximado) de uma paragem de origem e de destino,
@@ -1324,13 +1138,10 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
     for linha_id, paragem in todas:
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
         paragem_norm = _normalizar_nome_paragem(paragem)
-        
-        # --- CORREÇÃO DE REGEX ---
-        if re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm):
+        if origem_norm in paragem_norm:
             linhas_origem.add(linha_id)
             paragens_origem_encontradas.add(paragem)
-            
-        if re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm):
+        if destino_norm in paragem_norm:
             linhas_destino.add(linha_id)
             paragens_destino_encontradas.add(paragem)
 
@@ -1944,9 +1755,6 @@ if "jogo_ativo" not in st.session_state:
 # Mantém a cache de horários sempre fresca sem depender de um admin lembrar-se de clicar
 sincronizar_automaticamente_se_necessario(limite_dias=7)
 
-# --- INICIALIZAÇÃO DO AUTO-HEALING GEOGRÁFICO ---
-arrancar_auto_healing_geografico()
-
 # --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
 with st.sidebar:
     st.header("⚙️ Painel do Agente")
@@ -2141,7 +1949,6 @@ if prompt:
                 - consultar_tarifario_cache: lê a tabela tarifária completa (preços por distância), sincronizada automaticamente de guimabus.pt/tarifarios/.
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e uma de destino, diz se há linha direta ou sugere onde fazer transbordo. Usa esta ferramenta sempre que o utilizador pedir para ir de um sítio para outro e não for óbvio que linha usar.
                 - consultar_freguesia_paragem_tool: dado o nome de uma paragem, diz em que freguesia fica; dado o nome de uma freguesia, lista as paragens conhecidas lá.
-                - gerar_link_google_maps: recebe o nome de um local (paragem, café, hospital) e devolve um link direto do Google Maps para esse sítio.
 
                 Depois de planear_viagem_com_transbordo indicar quais linhas usar, consulta os horários completos dessas linhas com consultar_cache_horario_linha (que já inclui o link oficial) e cruza tu próprio os horários das duas viagens (usando a hora atual do sistema) para dar ao utilizador uma sugestão concreta, com margem de segurança para trocar de autocarro.
 
@@ -2201,12 +2008,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [
-                    obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, 
-                    consultar_tipologias_cache_tool, consultar_tarifario_cache, 
-                    planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, 
-                    gerar_link_google_maps
-                ]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool]
                 
                 # Execução Resiliente com Fallback e timeout explícito
                 TIMEOUT_SEGUNDOS = 25
