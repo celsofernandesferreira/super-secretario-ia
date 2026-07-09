@@ -1889,7 +1889,7 @@ if is_updating:
     st.session_state.is_updating = False
     st.rerun() # Refresh força a libertação do input box abaixo.
     
-    col1, col2, col3 = st.columns([12, 1, 1])
+col1, col2, col3 = st.columns([12, 1, 1])
 with col1:
     st.title(ui["title"])
 with col2:
