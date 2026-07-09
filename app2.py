@@ -221,9 +221,7 @@ st.markdown("""
         div[data-testid="stAudioInput"] label {
             display: none !important;
         }
-    </style>
-""", unsafe_allow_html=True)
-/* Adiciona isto dentro da tua tag <style> no st.markdown da Secção 4 */
+        /* Adiciona isto dentro da tua tag <style> no st.markdown da Secção 4 */
 .stApp > header {
     background: transparent;
 }
@@ -231,6 +229,8 @@ st.markdown("""
     /* Garante que o scroll desce o suficiente para não ficar atrás do rodapé */
     padding-bottom: 260px !important; 
 }
+    </style>
+""", unsafe_allow_html=True)
 
 # 5. Inicialização da API do Gemini
 try:
