@@ -1010,7 +1010,7 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
 def encontrar_paragem_mais_proxima_tool(local_nome: str):
     if not local_nome: return "É necessário indicar o nome do local."
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn.create_function("_normalizar_nome_paragem", 1, _normalizar_nome_paragem)
         cursor = conn.cursor()
         
         # 1. Procura o local pedido (ex: Coelima)
