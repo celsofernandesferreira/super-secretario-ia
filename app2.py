@@ -14,6 +14,7 @@ import threading
 import pdfplumber
 import unicodedata
 import folium
+import math  # <-- ADICIONADO: Para cálculos de distância GPS
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
@@ -386,6 +387,141 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     """
     components.html(html_rodape, height=170)
 
+# --- NOVAS FUNÇÕES GEOGRÁFICAS (JSON ESTÁTICO) ---
+def normalizar_nome_pesquisa(texto):
+    if not texto: return ""
+    t = texto.lower().strip()
+    t = unicodedata.normalize('NFKD', t)
+    t = ''.join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r'[^a-z0-9]', '_', t)
+    t = re.sub(r'_+', '_', t).strip('_')
+    return t
+
+@st.cache_data
+def carregar_mapa_estatico():
+    """Lê o ficheiro JSON de Guimarães diretamente para a memória."""
+    try:
+        with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"Erro ao carregar geo_guimaraes.json: {e}")
+        return {}
+
+# O mapa global carregado em milissegundos
+MAPA_LOCAL = carregar_mapa_estatico()
+
+def calcular_distancia(lat1, lon1, lat2, lon2):
+    """Calcula a distância em metros entre dois pontos GPS usando a Fórmula de Haversine."""
+    R = 6371.0 # Raio da Terra em km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c * 1000 # Distância em metros
+
+def encontrar_paragem_mais_proxima(local_nome: str):
+    """Encontra a paragem de autocarro mais próxima de qualquer café, rua ou fábrica."""
+    if not MAPA_LOCAL:
+        return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
+
+    chave_pesquisa = normalizar_nome_pesquisa(local_nome)
+    local_encontrado = None
+
+    # 1. Encontrar as coordenadas do local pedido (Ex: "Cachorrão")
+    for chave, dados in MAPA_LOCAL.items():
+        if chave_pesquisa in chave or chave in chave_pesquisa:
+            local_encontrado = dados
+            break
+
+    if not local_encontrado:
+        return f"Não consegui localizar '{local_nome}' no mapa estático de Guimarães."
+
+    lat_origem = local_encontrado["lat"]
+    lon_origem = local_encontrado["lon"]
+
+    # 2. Iterar por todas as paragens e calcular a distância matemática
+    paragem_mais_proxima = None
+    menor_distancia = float('inf')
+
+    for chave, dados in MAPA_LOCAL.items():
+        if dados.get("tipo") in ["bus_stop", "public_transport"]:
+            dist = calcular_distancia(lat_origem, lon_origem, dados["lat"], dados["lon"])
+            if dist < menor_distancia:
+                menor_distancia = dist
+                paragem_mais_proxima = dados["nome_real"]
+
+    if paragem_mais_proxima:
+        return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'."
+    else:
+        return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
+
+def gerar_link_google_maps(local_nome: str):
+    """Procura no JSON estático e gera o link do Maps"""
+    if not MAPA_LOCAL:
+        return "O mapa estático não foi carregado corretamente. Verifica se o ficheiro geo_guimaraes.json está na pasta."
+
+    chave_pesquisa = normalizar_nome_pesquisa(local_nome)
+    
+    for chave_mapa, dados_local in MAPA_LOCAL.items():
+        if chave_pesquisa in chave_mapa or chave_mapa in chave_pesquisa:
+            nome_real = dados_local["nome_real"]
+            lat = dados_local["lat"]
+            lon = dados_local["lon"]
+            link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir no Google Maps aqui: {link_maps}"
+            
+    return f"Não encontrei '{local_nome}' no mapa estático de Guimarães."
+
+def gerar_mapa_linha_html(linha_id):
+    """Gera o mapa visual folium cruzando a cache SQLite com o JSON Estático"""
+    os.makedirs("maps", exist_ok=True)
+    
+    # 1. Pega nas paragens da linha
+    conn = sqlite3.connect("agente_memoria.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT paragem FROM cache_paragens_linha WHERE linha = ? OR linha = ?", (linha_id, str(linha_id).zfill(3)))
+    paragens_da_linha = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    if not paragens_da_linha:
+        return "Sem paragens em cache para esta linha."
+    
+    coordenadas_rota = []
+    paragens_com_coord = []
+    
+    # 2. Pesquisa cada paragem no JSON Estático
+    for paragem in paragens_da_linha:
+        chave_p = normalizar_nome_pesquisa(paragem)
+        for k, v in MAPA_LOCAL.items():
+            if chave_p in k or k in chave_p:
+                coordenadas_rota.append([v["lat"], v["lon"]])
+                paragens_com_coord.append({
+                    "nome": paragem,
+                    "lat": v["lat"],
+                    "lon": v["lon"]
+                })
+                break
+    
+    if not paragens_com_coord:
+        return "Sem dados geográficos suficientes no JSON para mapear esta linha."
+        
+    mapa = folium.Map(location=[paragens_com_coord[0]["lat"], paragens_com_coord[0]["lon"]], zoom_start=13, tiles="OpenStreetMap")
+    
+    for p in paragens_com_coord:
+        popup_text = f"<b>Paragem:</b> {p['nome']}<br><b>Linha:</b> {linha_id}"
+        folium.Marker(
+            location=[p["lat"], p["lon"]],
+            popup=folium.Popup(popup_text, max_width=300),
+            icon=folium.Icon(color="green", icon="bus", prefix="fa")
+        ).add_to(mapa)
+        
+    if len(coordenadas_rota) > 1:
+        folium.PolyLine(coordenadas_rota, color="blue", weight=3, opacity=0.7).add_to(mapa)
+        
+    caminho_ficheiro = f"maps/linha_{linha_id}.html"
+    mapa.save(caminho_ficheiro)
+    return caminho_ficheiro
+
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
@@ -712,96 +848,6 @@ def obter_contagem_indice_paragens():
     except Exception as e:
         logging.error(f"Erro ao contar índice de paragens: {e}")
         return 0
-
-# --- NOVAS FUNÇÕES GEOGRÁFICAS (JSON ESTÁTICO) ---
-def normalizar_nome_pesquisa(texto):
-    if not texto: return ""
-    t = texto.lower().strip()
-    t = unicodedata.normalize('NFKD', t)
-    t = ''.join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r'[^a-z0-9]', '_', t)
-    t = re.sub(r'_+', '_', t).strip('_')
-    return t
-
-@st.cache_data
-def carregar_mapa_estatico():
-    """Lê o ficheiro JSON de Guimarães diretamente para a memória."""
-    try:
-        with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logging.error(f"Erro ao carregar geo_guimaraes.json: {e}")
-        return {}
-
-# O mapa global carregado em milissegundos
-MAPA_LOCAL = carregar_mapa_estatico()
-
-def gerar_link_google_maps(local_nome: str):
-    """Procura no JSON estático e gera o link do Maps"""
-    if not MAPA_LOCAL:
-        return "O mapa estático não foi carregado corretamente. Verifica se o ficheiro geo_guimaraes.json está na pasta."
-
-    chave_pesquisa = normalizar_nome_pesquisa(local_nome)
-    
-    for chave_mapa, dados_local in MAPA_LOCAL.items():
-        if chave_pesquisa in chave_mapa or chave_mapa in chave_pesquisa:
-            nome_real = dados_local["nome_real"]
-            lat = dados_local["lat"]
-            lon = dados_local["lon"]
-            link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir no Google Maps aqui: {link_maps}"
-            
-    return f"Não encontrei '{local_nome}' no mapa estático de Guimarães."
-
-def gerar_mapa_linha_html(linha_id):
-    """Gera o mapa visual folium cruzando a cache SQLite com o JSON Estático"""
-    os.makedirs("maps", exist_ok=True)
-    
-    # 1. Pega nas paragens da linha
-    conn = sqlite3.connect("agente_memoria.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT paragem FROM cache_paragens_linha WHERE linha = ? OR linha = ?", (linha_id, str(linha_id).zfill(3)))
-    paragens_da_linha = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    
-    if not paragens_da_linha:
-        return "Sem paragens em cache para esta linha."
-    
-    coordenadas_rota = []
-    paragens_com_coord = []
-    
-    # 2. Pesquisa cada paragem no JSON Estático
-    for paragem in paragens_da_linha:
-        chave_p = normalizar_nome_pesquisa(paragem)
-        for k, v in MAPA_LOCAL.items():
-            if chave_p in k or k in chave_p:
-                coordenadas_rota.append([v["lat"], v["lon"]])
-                paragens_com_coord.append({
-                    "nome": paragem,
-                    "lat": v["lat"],
-                    "lon": v["lon"]
-                })
-                break
-    
-    if not paragens_com_coord:
-        return "Sem dados geográficos suficientes no JSON para mapear esta linha."
-        
-    mapa = folium.Map(location=[paragens_com_coord[0]["lat"], paragens_com_coord[0]["lon"]], zoom_start=13, tiles="OpenStreetMap")
-    
-    for p in paragens_com_coord:
-        popup_text = f"<b>Paragem:</b> {p['nome']}<br><b>Linha:</b> {linha_id}"
-        folium.Marker(
-            location=[p["lat"], p["lon"]],
-            popup=folium.Popup(popup_text, max_width=300),
-            icon=folium.Icon(color="green", icon="bus", prefix="fa")
-        ).add_to(mapa)
-        
-    if len(coordenadas_rota) > 1:
-        folium.PolyLine(coordenadas_rota, color="blue", weight=3, opacity=0.7).add_to(mapa)
-        
-    caminho_ficheiro = f"maps/linha_{linha_id}.html"
-    mapa.save(caminho_ficheiro)
-    return caminho_ficheiro
 
 # --- THREADS / BACKGROUND JOBS ---
 def _sync_horarios_em_background():
@@ -1948,6 +1994,10 @@ if prompt:
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local (paragem, café, hospital, rua) e devolve um link direto do Google Maps para esse sítio.
+                - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse (ex: "Coelima", "Cachorrão").
+
+                LÓGICA DE PLANEAMENTO OBRIGATÓRIA:
+                Se o utilizador pedir direções ou como ir para/de um local que NÃO É UMA PARAGEM (como um café, restaurante, loja ou fábrica), tu DEVES usar primeiro a ferramenta "encontrar_paragem_mais_proxima" para descobrir qual é a paragem da Guimabus que fica perto desse local. SÓ DEPOIS de saberes o nome da paragem oficial é que usas o "planear_viagem_com_transbordo" usando o nome dessa paragem.
 
                 Usa sempre consultar_tipologias_cache_tool e consultar_tarifario_cache para perguntas sobre preços, tipologias de passe ou documentos exigidos.
 
@@ -2003,7 +2053,7 @@ if prompt:
                     obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, 
                     consultar_tipologias_cache_tool, consultar_tarifario_cache, 
                     planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, 
-                    gerar_link_google_maps, gerar_mapa_linha_html
+                    gerar_link_google_maps, gerar_mapa_linha_html, encontrar_paragem_mais_proxima
                 ]
                 
                 TIMEOUT_SEGUNDOS = 25
