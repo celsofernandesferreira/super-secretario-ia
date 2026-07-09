@@ -965,39 +965,65 @@ def importar_pois_guimaraes():
         return f"Erro na extração de POIs: {e}"
         
 def importar_json_local():
-    try:
-        if not os.path.exists("geo_guimaraes.json"):
-            logging.error("ERRO: O ficheiro geo_guimaraes.json não existe na pasta raiz!")
-            return "Ficheiro não encontrado."
+    caminho_json = "geo_guimaraes.json"
+    if not os.path.exists(caminho_json):
+        caminho_absoluto = os.path.abspath(caminho_json)
+        logging.error(f"ERRO: geo_guimaraes.json não existe. Procurado em: {caminho_absoluto}")
+        return f"Ficheiro não encontrado em: {caminho_absoluto}"
 
-        with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
+    try:
+        with open(caminho_json, "r", encoding="utf-8") as f:
             dados_geo = json.load(f)
-            
-        conn = sqlite3.connect("agente_memoria.db")
-        cursor = conn.cursor()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        inseridos = 0
-        for chave, item in dados_geo.items(): # Usamos .items() porque o teu JSON é { "id": {dados...} }
-            cursor.execute("""
-                INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                item.get("tipo", "poi_json"), 
-                item.get("nome_real"), 
-                item.get("lat"), 
-                item.get("lon"), 
-                timestamp
-            ))
-            inseridos += 1
-            
-        conn.commit()
-        conn.close()
-        logging.info(f"Sucesso: {inseridos} locais importados do JSON.")
-        return f"Sucesso: {inseridos} locais importados."
     except Exception as e:
-        logging.error(f"ERRO CRÍTICO NA IMPORTAÇÃO JSON: {e}")
-        return f"Erro: {e}"
+        logging.error(f"ERRO ao ler/parsear geo_guimaraes.json: {e}")
+        return f"Erro ao ler o JSON: {e}"
+
+    conn = sqlite3.connect("agente_memoria.db")
+    cursor = conn.cursor()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    inseridos, ignorados = 0, 0
+
+    for chave, item in dados_geo.items():
+        if not isinstance(item, dict):
+            ignorados += 1
+            continue
+
+        # Aceita várias variantes de nome da chave, robusto a JSON inconsistente
+        nome_real = (
+            item.get("nome_real") or item.get("nome") or
+            item.get("name") or item.get("designacao") or
+            item.get("nome_local") or chave
+        )
+        lat = item.get("lat") or item.get("latitude")
+        lon = item.get("lon") or item.get("lng") or item.get("longitude")
+        tipo = item.get("tipo", "poi_json")
+
+        if not nome_real or lat is None or lon is None:
+            logging.warning(f"Entrada ignorada por dados incompletos: chave={chave}, item={item}")
+            ignorados += 1
+            continue
+
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (ValueError, TypeError):
+            logging.warning(f"Lat/Lon inválidos para '{nome_real}': lat={lat}, lon={lon}")
+            ignorados += 1
+            continue
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
+            VALUES (?, ?, ?, ?, ?)
+        """, (tipo, nome_real, lat, lon, timestamp))
+        inseridos += 1
+
+    conn.commit()
+    conn.close()
+
+    msg = f"Sucesso: {inseridos} locais importados do JSON ({ignorados} ignorados por dados incompletos)."
+    logging.info(msg)
+    return msg
 
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     R = 6371.0 # Raio da Terra em km
