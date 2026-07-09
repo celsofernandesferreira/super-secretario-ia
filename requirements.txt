@@ -9,4 +9,4 @@ openpyxl
 python-docx
 streamlit
 tzdata
-follium
+folium
