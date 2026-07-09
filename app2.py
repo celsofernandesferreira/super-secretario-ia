@@ -14,6 +14,8 @@ import pdfplumber
 import unicodedata
 import folium
 import email.utils
+import json
+import math
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
@@ -208,18 +210,11 @@ logging.basicConfig(
 )
 
 # 2. CONFIGURAÇÃO DA BASE DE DADOS (SQLite Persistente com High Scores e Cache de Horários)
-def get_db_connection():
-    conn = sqlite3.connect("agente_memoria.db", timeout=15.0) 
+def inicializar_bd():
+    conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA busy_timeout=5000;")
-    return conn
-
-def inicializar_bd():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS historico_global (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,7 +237,7 @@ def inicializar_bd():
             linha TEXT PRIMARY KEY,
             url TEXT,
             conteudo_txt TEXT,
-            last_updated TEXT
+            ultima_atualizacao TEXT
         )
     """)
     cursor.execute("""
@@ -305,7 +300,7 @@ def inicializar_bd():
 
 def guardar_mensagem_bd(session_id, role, content):
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
@@ -319,7 +314,7 @@ def guardar_mensagem_bd(session_id, role, content):
 
 def obter_top_10():
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
         cursor.execute("SELECT nome, pontor FROM high_scores ORDER BY pontor DESC, id ASC LIMIT 10")
         resultados = cursor.fetchall()
@@ -331,7 +326,7 @@ def obter_top_10():
 
 def guardar_score_bd(nome, pontor):
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         cursor.execute(
@@ -383,14 +378,30 @@ if "save_nome" in query_params and "save_pontos" in query_params:
 # 4. Injeção de CSS Avançado
 st.markdown("""
     <style>
-        .stChatInputContainer { position: relative; }
-        .stChatInputContainer textarea { padding-left: 55px !important; }
-        div[data-testid="stAudioInput"] {
-            position: absolute; left: 12px; bottom: 8px; z-index: 9999;
-            width: 38px !important; height: 38px !important; background: transparent !important;
+        .stChatInputContainer {
+            position: relative;
         }
-        div[data-testid="stAudioInput"] > div { background: transparent !important; border: none !important; padding: 0 !important; box-shadow: none !important; }
-        div[data-testid="stAudioInput"] label { display: none !important; }
+        .stChatInputContainer textarea {
+            padding-left: 55px !important;
+        }
+        div[data-testid="stAudioInput"] {
+            position: absolute;
+            left: 12px;
+            bottom: 8px;
+            z-index: 9999;
+            width: 38px !important;
+            height: 38px !important;
+            background: transparent !important;
+        }
+        div[data-testid="stAudioInput"] > div {
+            background: transparent !important;
+            border: none !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+        }
+        div[data-testid="stAudioInput"] label {
+            display: none !important;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -399,9 +410,10 @@ try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
     st.error("Erro: Chave API em falta nos Secrets do Streamlit.")
+    logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
     st.stop()
 
-# --- NATIVE DATE EXTRACTOR ---
+# --- INTEGRAÇÃO FACEBOOK RSS (LÓGICA NATIVA INTELIGENTE) ---
 def extrair_data_futura(texto):
     PT_MONTHS = {
         "janeiro": 1, "jan": 1, "fevereiro": 2, "fev": 2, "março": 3, "mar": 3,
@@ -410,44 +422,48 @@ def extrair_data_futura(texto):
         "outubro": 10, "out": 10, "novembro": 11, "nov": 11, "dezembro": 12, "dez": 12
     }
     
-    now = datetime.now()
-    current_year = now.year
-    found_dates = []
+    agora = datetime.now()
+    ano_atual = agora.year
+    datas_encontradas = []
 
     for m in re.finditer(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b', texto):
         dia, mes = int(m.group(1)), int(m.group(2))
-        ano = int(m.group(3)) if m.group(3) else current_year
+        ano = int(m.group(3)) if m.group(3) else ano_atual
         if ano < 100: ano += 2000
-        try: found_dates.append(datetime(ano, mes, dia))
-        except ValueError: pass
+        try:
+            datas_encontradas.append(datetime(ano, mes, dia))
+        except ValueError:
+            pass
 
     for m in re.finditer(r'\b(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(\d{4}))?\b', texto.lower()):
         dia = int(m.group(1))
         mes_str = m.group(2)
-        ano = int(m.group(3)) if m.group(3) else current_year
+        ano = int(m.group(3)) if m.group(3) else ano_atual
         if mes_str in PT_MONTHS:
-            try: found_dates.append(datetime(ano, PT_MONTHS[mes_str], dia))
-            except ValueError: pass
+            try:
+                datas_encontradas.append(datetime(ano, PT_MONTHS[mes_str], dia))
+            except ValueError:
+                pass
 
-    if found_dates: return max(found_dates) 
+    if datas_encontradas:
+        return max(datas_encontradas)
     return None
 
-# --- FACEBOOK RSS INTEGRATION ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
-    rss_url = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
-    active_warnings = []
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    avisos_ativos = []
     
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
 
     try:
-        response = requests.get(rss_url, timeout=10)
+        response = requests.get(url_rss, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
-        items = soup.find_all("item")
+        itens = soup.find_all("item")
         
-        for item in items[:15]: 
-            title = item.find("title").text if item.find("title") else "Warning"
+        for item in itens[:15]: 
+            title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
             clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
@@ -466,9 +482,9 @@ def obter_avisos_facebook():
             data_fim_texto = extrair_data_futura(texto_minusculas)
             
             if data_fim_texto:
-                if data_fim_texto < agora_local: continue
+                if data_fim_texto < agora_local:
+                    continue
                 prioridade_calculada = 30 
-                
             else:
                 pub_date_node = item.find("pubDate")
                 dias_passados = 0
@@ -476,30 +492,40 @@ def obter_avisos_facebook():
                     try:
                         data_post = email.utils.parsedate_to_datetime(pub_date_node.text)
                         dias_passados = (agora_utc - data_post).days
-                    except Exception: pass
+                    except Exception:
+                        pass
                 
-                if dias_passados > 7: continue
+                if dias_passados > 7:
+                    continue
+                    
                 prioridade_calculada = 10 - dias_passados 
                 
                 palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
-                if any(kw in texto_minusculas for kw in palavras_criticas): prioridade_calculada += 20
+                if any(kw in texto_minusculas for kw in palavras_criticas):
+                    prioridade_calculada += 20
             
             texto_final = clean_text if len(clean_text) > 5 else title
-            active_warnings.append({"text": texto_final, "image": img_url, "priority": prioridade_calculada})
             
-        active_warnings.sort(key=lambda x: x["priority"], reverse=True)
-        return active_warnings[:4]
+            avisos_ativos.append({
+                "texto": texto_final, 
+                "imagem": img_url, 
+                "prioridade": prioridade_calculada
+            })
+            
+        avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+        return avisos_ativos[:4]
             
     except Exception as e:
-        logging.error(f"RSS Native Error: {e}")
+        logging.error(f"Erro RSS Nativo: {e}")
         
-    return active_warnings
+    return avisos_ativos
 
-def renderizar_rodape_anuncios(active_ads, ui):
-    if not active_ads: return
-    js_data = json.dumps(active_ads)
+def renderizar_rodape_anuncios(anuncios_ativos, ui):
+    if not anuncios_ativos: return
     
-    footer_html = f"""
+    dados_js = json.dumps(anuncios_ativos)
+    
+    html_rodape = f"""
     <style>
         .footer-wrapper {{
             position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
@@ -507,103 +533,598 @@ def renderizar_rodape_anuncios(active_ads, ui):
             border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
             display: flex; flex-direction: column; overflow: hidden;
         }}
-        .disclaimer {{ background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px; text-align: center; font-weight: bold; border-bottom: 1px solid #444; }}
-        .content-area {{ display: flex; align-items: center; flex: 1; padding: 0 20px; }}
+        .disclaimer {{
+            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
+            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
+        }}
+        .content-area {{ 
+            display: flex; align-items: center; flex: 1; padding: 0 20px; 
+        }}
         .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
         #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
         .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
-        #ticker-text {{ position: absolute; white-space: nowrap; font-size: 20px; font-weight: bold; top: 35px; left: 50%; }}
+        #ticker-text {{ 
+            position: absolute; white-space: nowrap; font-size: 20px; 
+            font-weight: bold; top: 35px; left: 50%;
+        }}
     </style>
     
     <div class="footer-wrapper">
-        <div class="disclaimer">{ui['ad_disclaimer']}</div>
+        <div class="disclaimer">
+            {ui['ad_disclaimer']}
+        </div>
         <div class="content-area">
-            <div class="img-box"><img id="ticker-img" src="" onclick="window.open(this.src, '_blank');"></div>
-            <div class="text-container"><div id="ticker-text"></div></div>
+            <div class="img-box">
+                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
+            </div>
+            <div class="text-container">
+                <div id="ticker-text"></div>
+            </div>
         </div>
     </div>
 
     <script>
-        const ads = {js_data};
-        let index = 0;
+        const anuncios = {dados_js};
+        let indice = 0;
         const txt = document.getElementById('ticker-text');
         const img = document.getElementById('ticker-img');
         const container = document.querySelector('.text-container');
 
-        async function runTicker() {{
-            const a = ads[index];
-            txt.innerText = "🚨 " + (a.text || a.title || "{ui['ad_notice']}");
+        async function correrAviso() {{
+            const a = anuncios[indice];
             
-            if (a.image && a.image.trim() !== "") {{
-                img.src = a.image; img.style.display = "block"; img.style.visibility = "visible";
-            }} else {{ img.style.display = "none"; }}
+            txt.innerText = "🚨 " + (a.texto || a.titulo || "{ui['ad_notice']}");
             
-            txt.style.animation = 'none'; txt.offsetHeight; txt.style.animation = 'scroll-left 25s linear infinite';
+            if (a.imagem && a.imagem.trim() !== "") {{
+                img.src = a.imagem;
+                img.style.display = "block";
+                img.style.visibility = "visible";
+            }} else {{
+                img.style.display = "none";
+            }}
+            
+            txt.style.animation = 'none';
+            txt.offsetHeight;
+            txt.style.animation = 'scroll-left 25s linear infinite';
             
             let pos = container.offsetWidth / 2;
             txt.style.left = pos + "px";
             
-            function animate() {{
-                pos -= 2; txt.style.left = pos + "px";
-                if (pos < -txt.offsetWidth) {{ index = (index + 1) % ads.length; setTimeout(runTicker, 2000); }} 
-                else {{ requestAnimationFrame(animate); }}
+            function animar() {{
+                pos -= 2; 
+                txt.style.left = pos + "px";
+                if (pos < -txt.offsetWidth) {{
+                    indice = (indice + 1) % anuncios.length;
+                    setTimeout(correrAviso, 2000); 
+                }} else {{
+                    requestAnimationFrame(animar);
+                }}
             }}
-            animate();
+            animar();
         }}
-        runTicker();
+        correrAviso();
     </script>
     """
-    components.html(footer_html, height=170)
+    components.html(html_rodape, height=170)
 
-# --- GEOGRAPHIC FUNCTIONS ---
-def _normalizar_nome_paragem(texto: str):
-    t = re.sub(r'\bsão\b', 's.', texto.lower().strip())
-    t = re.sub(r'\bsanta\b', 'sta.', t)
-    t = re.sub(r'\bsanto\b', 'sto.', t).replace('.', '')
-    t = unicodedata.normalize('NFKD', t)
-    return re.sub(r'\s+', ' ', ''.join(c for c in t if not unicodedata.combining(c))).strip()
+# --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
+def _extrair_lista_veiculos(dados):
+    if isinstance(dados, list):
+        return dados
+    if isinstance(dados, dict):
+        for chave in ("vehicles", "data", "results", "items", "veiculos"):
+            valor = dados.get(chave)
+            if isinstance(valor, list):
+                return valor
+        for valor in dados.values():
+            if isinstance(valor, list):
+                return valor
+    return []
 
-def normalize_search_name(text):
-    if not text: return ""
-    t = text.lower().strip()
-    t = unicodedata.normalize('NFKD', t)
-    t = ''.join(c for c in t if not unicodedata.combining(c))
-    return re.sub(r'_+', '_', re.sub(r'[^a-z0-9]', '_', t)).strip('_')
+def _primeiro_valor(dicionario, chaves, default=None):
+    for chave in chaves:
+        if isinstance(dicionario, dict) and chave in dicionario and dicionario[chave] is not None:
+            return dicionario[chave]
+    return default
 
-@st.cache_data
-def load_static_map():
+DICIONARIO_PARAGENS_CONHECIDAS = {
+    "vaca negra": "1103",
+    "central": "1001",
+    "hospital": "1045",
+    "universidade": "1022",
+    "estacao": "1005"
+}
+
+@st.cache_data(ttl=60)
+def obter_dados_guimabus(route_id: str = None):
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
+    url = "https://gmr.elevensystems.pt/api/locations"
+    params = {"passengerInfo": "true"}
+    if route_id:
+        params["routeId"] = route_id
+
     try:
-        with open("geo_guimaraes.json", "r", encoding="utf-8") as f: return json.load(f)
-    except Exception: return {}
+        response = requests.get(url, headers=headers, params=params, timeout=8)
+        response.raise_for_status()
 
-LOCAL_MAP = load_static_map()
+        try:
+            dados = response.json()
+        except ValueError:
+            return "Não foi possível ler os dados da Guimabus (resposta em formato inesperado)."
 
-def calculate_distance(lat1, lon1, lat2, lon2):
-    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
-    return 6371.0 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)) * 1000 
+        veiculos = _extrair_lista_veiculos(dados)
+        if not veiculos:
+            linha_txt = f" da linha {route_id}" if route_id else ""
+            return f"Não há autocarros{linha_txt} em circulação neste momento."
 
-def find_closest_stop(location_name: str):
-    if not LOCAL_MAP: return "Static map is not loaded. Check the geo_guimaraes.json file."
-    search_key = normalize_search_name(location_name)
-    found_location = next((data for key, data in LOCAL_MAP.items() if search_key in key or key in search_key), None)
-    if not found_location: return f"Could not locate '{location_name}' in the static map."
+        total_atraso = 0
+        count_com_atraso = 0
+        resumo = "Dados de frota em tempo real (Guimabus):\n"
+        for bus in veiculos:
+            id_bus = _primeiro_valor(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
+            linha = _primeiro_valor(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
+            status = _primeiro_valor(bus, ["busStatus", "status", "state"], "N/A")
+            atraso = _primeiro_valor(bus, ["delay", "delayMinutes", "delay_min"], None)
 
-    lat_origin, lon_origin = found_location["lat"], found_location["lon"]
-    closest_stop, shortest_dist = None, float('inf')
+            linha_txt = f" (Linha {linha})" if linha else ""
+            atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
+            resumo += f"- Autocarro {id_bus}{linha_txt}: Status {status} (Atraso: {atraso_txt})\n"
 
-    for key, data in LOCAL_MAP.items():
-        if data.get("type") in ["bus_stop", "public_transport"]:
-            dist = calculate_distance(lat_origin, lon_origin, data["lat"], data["lon"])
-            if dist < shortest_dist: shortest_dist, closest_stop = dist, data["nome_real"]
+            if isinstance(atraso, (int, float)):
+                total_atraso += atraso
+                count_com_atraso += 1
 
-    if closest_stop: return f"The location '{found_location['nome_real']}' is {int(shortest_dist)} meters away from the '{closest_stop}' bus stop."
-    return "Location found, but no bus stops in the vicinity."
+        if count_com_atraso > 0:
+            media = total_atraso / count_com_atraso
+            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
+        return resumo
+    except Exception as e:
+        return f"Erro na ligação ao tracking: {e}"
 
-def generate_google_maps_link(location_name: str):
-    nome_norm = _normalizar_nome_paragem(location_name)
+@st.cache_data(ttl=30)
+def obter_horarios_paragem(stop_id: str):
+    if not stop_id:
+        return "É necessário indicar o ID da paragem."
     
-    conn = get_db_connection()
+    origem_texto = str(stop_id).strip().lower()
+    id_numérico = None
+    
+    for nome_p, id_p in DICIONARIO_PARAGENS_CONHECIDAS.items():
+        if nome_p in origem_texto:
+            id_numérico = id_p
+            break
+            
+    if id_numérico or origem_texto.isdigit():
+        target_id = id_numérico if id_numérico else origem_texto
+        headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
+        url = f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes"
+        params = {"shape": "true", "passengerInfo": "true"}
+
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=5)
+            response.raise_for_status()
+            dados = response.json()
+            rotas = _extrair_lista_veiculos(dados)
+            if rotas:
+                resumo = f"Horários/previsões em tempo real para a paragem {target_id}:\n"
+                for rota in rotas:
+                    linha = _primeiro_valor(rota, ["line", "lineName", "route", "routeShortName", "routeId"], "N/A")
+                    destino = _primeiro_valor(rota, ["destination", "headsign", "direction"], None)
+                    eta = _primeiro_valor(rota, ["eta", "etaMinutes", "waitTime", "waitingTime", "arrivalTime", "nextArrival"], None)
+                    destino_txt = f" → {destino}" if destino else ""
+                    eta_txt = f"{eta} min" if eta is not None else "sem previsão"
+                    resumo += f"- Linha {linha}{destino_txt}: {eta_txt}\n"
+                return resumo
+        except Exception:
+            pass
+
+    try:
+        termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', origem_texto).split()
+        if not termos_pesquisa:
+            termos_pesquisa = [origem_texto]
+
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        
+        condicoes = " AND ".join(["conteudo_txt LIKE ?" for _ in termos_pesquisa])
+        valores = [f"%{termo}%" for termo in termos_pesquisa]
+        
+        query_sql = f"SELECT linha, conteudo_txt FROM cache_horarios WHERE {condicoes}"
+        cursor.execute(query_sql, valores)
+        linhas_encontradas = cursor.fetchall()
+        conn.close()
+        
+        if linhas_encontradas:
+            resultado_busca = f"Varri a cache de horários local e identifiquei com sucesso as linhas que contêm referências a '{stop_id}':\n"
+            for row in linhas_encontradas:
+                num_linha = row[0]
+                texto_completo = row[1]
+                
+                linhas_texto = texto_completo.split("\n")
+                trecho_relevante = []
+                for l in linhas_texto:
+                    if any(termo in l.lower() for termo in termos_pesquisa) or "página" in l.lower() or "tabela" in l.lower():
+                        trecho_relevante.append(l)
+                
+                contexto_linha = "\n".join(trecho_relevante[:25])
+                resultado_busca += f"\n--- MAPEAMENTO AUTOMÁTICO DETETADO: LINHA {num_linha} ---\n{contexto_linha}\n"
+            
+            return resultado_busca
+            
+    except Exception as e_db:
+        logging.error(f"Erro no varrimento avançado de texto em BD: {e_db}")
+
+    return f"Não foi possível obter informação em tempo real nem encontrar registos em cache para a localização '{stop_id}'."
+
+# --- FERRAMENTA: AUTOMAÇÃO INTEGRAL DE RASPAGEM DE PDFs ---
+def sincronizar_todos_horarios_guimabus():
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    url_principal = "https://guimabus.pt/horarios-linhas/"
+    
+    try:
+        response = requests.get(url_principal, headers=headers, timeout=12)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        links_pdf = {}
+        titulos_linha = {}
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            if ".pdf" in href and "horario" in href.lower():
+                match = re.search(r'linha-([a-z0-9]+)', href.lower())
+                if match:
+                    linha_id = match.group(1).upper()
+                    if linha_id not in links_pdf:
+                        links_pdf[linha_id] = href
+                        texto_link = link.get_text(strip=True)
+                        if texto_link:
+                            titulos_linha[linha_id] = texto_link
+        
+        if not links_pdf:
+            return "Nenhum ficheiro PDF de horários localizado na página principal."
+        
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        
+        linhas_processadas = []
+        linhas_falhadas = []
+        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        for linha_id, url_pdf in links_pdf.items():
+            sucesso = False
+            ultimo_erro = None
+            for tentativa in range(2):
+                try:
+                    pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
+                    if pdf_response.status_code != 200:
+                        ultimo_erro = f"HTTP {pdf_response.status_code}"
+                        time.sleep(1)
+                        continue
+
+                    texto_extraido = []
+                    with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
+                        for idx, pagina in enumerate(pdf.pages):
+                            texto_pag = pagina.extract_text(layout=True)
+                            if texto_pag:
+                                texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
+
+                    conteudo_final = "\n\n".join(texto_extraido)
+                    if not conteudo_final.strip():
+                        conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
+
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
+                        VALUES (?, ?, ?, ?)
+                    """, (linha_id, url_pdf, conteudo_final, timestamp_atual))
+
+                    if linha_id in titulos_linha:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO cache_titulo_linha (linha, titulo, ultima_atualizacao)
+                            VALUES (?, ?, ?)
+                        """, (linha_id, titulos_linha[linha_id], timestamp_atual))
+
+                    linhas_processadas.append(linha_id)
+                    sucesso = True
+                    break
+                except Exception as e:
+                    ultimo_erro = str(e)
+                    time.sleep(1)
+                    continue
+
+            if not sucesso:
+                linhas_falhadas.append(linha_id)
+                logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
+
+            time.sleep(0.4)
+
+        conn.commit()
+        conn.close()
+        
+        msg_sucesso = f"Sincronização concluída: {len(linhas_processadas)}/{len(links_pdf)} PDFs descarregados e convertidos na BD local!"
+        if linhas_falhadas:
+            msg_sucesso += f" Falharam: {', '.join(linhas_falhadas)}."
+        logging.info(msg_sucesso)
+        return msg_sucesso
+        
+    except Exception as e:
+        error_msg = f"Falha na automação de scraping dos PDFs: {e}"
+        logging.error(error_msg)
+        return error_msg
+
+def consultar_cache_horario_linha(linha_id: str):
+    try:
+        entrada = str(linha_id).strip().upper()
+        if not entrada:
+            return "É necessário indicar o número da linha."
+
+        candidatos = [entrada]
+        if entrada.isdigit():
+            sem_zeros = entrada.lstrip('0') or '0'
+            if sem_zeros not in candidatos:
+                candidatos.append(sem_zeros)
+            com_tres_digitos = entrada.zfill(3)
+            if com_tres_digitos not in candidatos:
+                candidatos.append(com_tres_digitos)
+
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        resultado = None
+        for candidato in candidatos:
+            cursor.execute("SELECT conteudo_txt, url, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (candidato,))
+            resultado = cursor.fetchone()
+            if resultado:
+                break
+        conn.close()
+        
+        if resultado:
+            conteudo_txt, url_pdf, ultima_atualizacao = resultado
+            link_txt = f"\n\n🔗 Link oficial para confirmares: {url_pdf}" if url_pdf else ""
+            return f"Horários em Cache para a Linha {linha_id} (Atualizado em {ultima_atualizacao}):\n\n{conteudo_txt}{link_txt}"
+        return f"Não existem horários em cache para a linha {linha_id}. Peça ao administrador para rodar a Sincronização Geral."
+    except Exception as e:
+        return f"Erro na leitura da cache SQLite: {e}"
+
+def len_knowledge_base():
+    contexto = ""
+    files = glob.glob("knowledge/*.md")
+    for file in files:
+        with open(file, "r", encoding="utf-8") as f:
+            contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
+    return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
+
+def obter_idade_cache_horarios_dias():
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_horarios")
+        resultado = cursor.fetchone()
+        conn.close()
+        if not resultado or not resultado[0]:
+            return None
+        ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - ultima).days
+    except Exception as e:
+        logging.error(f"Erro ao verificar idade da cache de horários: {e}")
+        return None
+
+def obter_idade_cache_titulos_dias():
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos")
+        resultado = cursor.fetchone()
+        conn.close()
+        if not resultado or not resultado[0]:
+            return None
+        ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - ultima).days
+    except Exception as e:
+        logging.error(f"Erro ao verificar idade da cache de títulos: {e}")
+        return None
+
+def obter_contagem_indice_paragens():
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM cache_paragens_linha")
+        resultado = cursor.fetchone()
+        conn.close()
+        return resultado[0] if resultado else 0
+    except Exception as e:
+        logging.error(f"Erro ao contar índice de paragens: {e}")
+        return 0
+
+# --- NOVAS FUNÇÕES GEOGRÁFICAS (OVERPASS, FOLIUM, MAPS) ---
+def importar_pois_guimaraes():
+def importar_json_local():
+    try:
+        # Lê o ficheiro local automaticamente
+        with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
+            dados_geo = json.load(f)
+            
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        inseridos = 0
+        for item in dados_geo:
+            cursor.execute("""
+                INSERT OR IGNORE INTO nos_geograficos (tipo, nome, freguesia, latitude, longitude, ultima_atualizacao)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (item.get("tipo", "poi_json"), item.get("nome"), item.get("freguesia"), item.get("latitude"), item.get("longitude"), timestamp))
+            inseridos += 1
+            
+        conn.commit()
+        conn.close()
+        logging.info(f"Sucesso: {inseridos} locais do geo_guimaraes.json importados na automação de arranque.")
+    except Exception as e:
+        logging.error(f"Erro ao ler geo_guimaraes.json no arranque: {e}")
+
+def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
+    R = 6371.0 # Raio da Terra em km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def encontrar_paragem_mais_proxima_tool(local_nome: str):
+    if not local_nome: return "É necessário indicar o nome do local."
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        
+        # 1. Procura o local pedido (ex: Coelima)
+        cursor.execute("SELECT nome, latitude, longitude FROM nos_geograficos WHERE nome LIKE ? LIMIT 1", (f"%{local_nome}%",))
+        local = cursor.fetchone()
+        
+        if not local:
+            conn.close()
+            return f"Não tenho as coordenadas de '{local_nome}'. Confirma se está no ficheiro geo_guimaraes.json."
+            
+        nome_real, lat_local, lon_local = local
+        
+        # 2. Vai buscar todas as paragens
+        cursor.execute("""
+            SELECT DISTINCT g.nome, g.latitude, g.longitude 
+            FROM cache_paragens_linha p
+            JOIN nos_geograficos g ON _normalizar_nome_paragem(p.paragem) = _normalizar_nome_paragem(g.nome)
+            WHERE g.latitude IS NOT NULL
+        """)
+        paragens = cursor.fetchall()
+        conn.close()
+        
+        if not paragens: return "Ainda não tenho coordenadas das paragens sincronizadas."
+            
+        # 3. Calcula a distância matemática
+        mais_proxima, menor_distancia = None, float('inf')
+        for p_nome, p_lat, p_lon in paragens:
+            dist = calcular_distancia_haversine(lat_local, lon_local, p_lat, p_lon)
+            if dist < menor_distancia:
+                menor_distancia, mais_proxima = dist, p_nome
+                
+        if mais_proxima:
+            dist_metros = int(menor_distancia * 1000)
+            return f"A paragem mais próxima de '{nome_real}' é **'{mais_proxima}'**, a cerca de {dist_metros} metros."
+            
+    except Exception as e:
+        return f"Erro a calcular proximidade: {e}"
+    query = """
+    [out:json][timeout:25];
+    area["name"="Guimarães"]->.searchArea;
+    (
+      node["amenity"~"hospital|clinic|doctors|pharmacy|cafe|restaurant|school|university"](area.searchArea);
+      node["tourism"~"museum|attraction|monument"](area.searchArea);
+      node["shop"~"supermarket|mall|bakery"](area.searchArea);
+    );
+    out center;
+    """
+    url = "https://overpass-api.de/api/interpreter"
+    try:
+        response = requests.post(url, data={'data': query}, timeout=30)
+        dados = response.json()
+        
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        pois_guardados = 0
+        for elemento in dados.get('elements', []):
+            tags = elemento.get('tags', {})
+            nome_poi = tags.get('name')
+            tipo_poi = tags.get('amenity', tags.get('tourism', tags.get('shop', 'poi')))
+            
+            if nome_poi and 'lat' in elemento and 'lon' in elemento:
+                lat = elemento['lat']
+                lon = elemento['lon']
+                cursor.execute("""
+                    INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (f"poi_{tipo_poi}", nome_poi, lat, lon, timestamp))
+                pois_guardados += 1
+                
+        conn.commit()
+        conn.close()
+        return f"Sucesso: {pois_guardados} Pontos de Interesse (Hospitais, Cafés, etc.) guardados na BD local!"
+    except Exception as e:
+        return f"Erro na extração de POIs: {e}"
+
+def importar_ruas_freguesia(nome_freguesia):
+    url = "https://overpass-api.de/api/interpreter"
+    query = f"""
+    [out:json][timeout:25];
+    area["name"="Guimarães"]->.searchArea;
+    area["name"="{nome_freguesia}"]->.freguesiaArea;
+    way["highway"](area.searchArea)(area.freguesiaArea);
+    out tags center;
+    """
+    try:
+        response = requests.post(url, data={'data': query}, timeout=30)
+        dados = response.json()
+        
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        ruas_guardadas = set()
+        for elemento in dados.get('elements', []):
+            tags = elemento.get('tags', {})
+            nome_rua = tags.get('name')
+            if nome_rua and 'center' in elemento:
+                lat = elemento['center']['lat']
+                lon = elemento['center']['lon']
+                if nome_rua not in ruas_guardadas:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO nos_geograficos (tipo, nome, freguesia, latitude, longitude, ultima_atualizacao)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, ("rua", nome_rua, nome_freguesia, lat, lon, timestamp))
+                    ruas_guardadas.add(nome_rua)
+                    
+        conn.commit()
+        conn.close()
+        return f"Sucesso: {len(ruas_guardadas)} ruas importadas para {nome_freguesia}."
+    except Exception as e:
+        return f"Erro na extração Overpass: {e}"
+
+def gerar_mapa_linha_html(linha_id):
+    os.makedirs("maps", exist_ok=True)
+    conn = sqlite3.connect("agente_memoria.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT p.paragem, g.latitude, g.longitude, g.freguesia 
+        FROM cache_paragens_linha p
+        JOIN nos_geograficos g ON _normalizar_nome_paragem(p.paragem) = _normalizar_nome_paragem(g.nome)
+        WHERE p.linha = ? AND g.latitude IS NOT NULL
+    """, (linha_id,))
+    paragens = cursor.fetchall()
+    conn.close()
+    
+    if not paragens:
+        return "Sem dados geográficos suficientes para esta linha."
+    
+    mapa = folium.Map(location=[paragens[0][1], paragens[0][2]], zoom_start=13, tiles="OpenStreetMap")
+    coordenadas_rota = []
+    
+    for nome, lat, lon, freguesia in paragens:
+        coordenadas_rota.append([lat, lon])
+        popup_text = f"<b>Paragem:</b> {nome}<br><b>Freguesia:</b> {freguesia}<br><b>Linha:</b> {linha_id}"
+        folium.Marker(
+            location=[lat, lon],
+            popup=folium.Popup(popup_text, max_width=300),
+            icon=folium.Icon(color="green", icon="bus", prefix="fa")
+        ).add_to(mapa)
+    
+    if len(coordenadas_rota) > 1:
+        folium.PolyLine(coordenadas_rota, color="blue", weight=3, opacity=0.7).add_to(mapa)
+    
+    caminho_ficheiro = f"maps/linha_{linha_id}.html"
+    mapa.save(caminho_ficheiro)
+    return caminho_ficheiro
+
+def gerar_link_google_maps(local_nome: str):
+    nome_norm = _normalizar_nome_paragem(local_nome)
+    
+    conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
     cursor.execute("""
         SELECT nome, latitude, longitude FROM nos_geograficos 
@@ -617,241 +1138,7 @@ def generate_google_maps_link(location_name: str):
         link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
         return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir diretamente no Google Maps aqui: {link_maps}"
     
-    return f"Não consegui encontrar coordenadas GPS em cache para '{location_name}'."
-
-def consultar_base_geografica_tool(termo_pesquisa: str):
-    """Procura na base de dados geográfica (JSON e SQLite) por locais, POIs, ruas ou paragens, devolvendo coordenadas e freguesia."""
-    if not termo_pesquisa: return "É necessário indicar um termo de pesquisa."
-    termo_norm = _normalizar_nome_paragem(termo_pesquisa)
-    resultados = []
-    
-    if LOCAL_MAP:
-        for chave, dados in LOCAL_MAP.items():
-            if termo_norm in chave or chave in termo_norm:
-                resultados.append(f"[JSON] {dados.get('nome_real', chave)} (Tipo: {dados.get('tipo', 'poi')}) - Lat: {dados['lat']}, Lon: {dados['lon']}")
-    try:
-        conn = get_db_connection()
-        db_data = conn.execute("SELECT tipo, nome, freguesia, latitude, longitude FROM nos_geograficos").fetchall()
-        conn.close()
-        for r in db_data:
-            nome_bd_norm = _normalizar_nome_paragem(r[1]) if r[1] else ""
-            if termo_norm in nome_bd_norm or nome_bd_norm in termo_norm:
-                freg = f" (Freguesia: {r[2]})" if r[2] else ""
-                resultados.append(f"[SQLite] {r[1]}{freg} (Tipo: {r[0]}) - Lat: {r[3]}, Lon: {r[4]}")
-    except Exception as e:
-        pass
-    
-    if resultados:
-        return f"Encontrei {len(resultados)} locais para '{termo_pesquisa}':\n" + "\n".join(resultados[:20])
-    return f"Não encontrei '{termo_pesquisa}' no JSON nem na base de dados local."
-
-def generate_line_map_html(linha_id):
-    os.makedirs("maps", exist_ok=True)
-    conn = get_db_connection()
-    line_stops = [row[0] for row in conn.execute("SELECT stop FROM stop_line_cache WHERE line = ? OR line = ?", (linha_id, str(linha_id).zfill(3))).fetchall()]
-    conn.close()
-    
-    if not line_stops: return "No cached stops for this line."
-    
-    route_coordinates, stops_with_coords = [], []
-    for stop in line_stops:
-        search_key = normalize_search_name(stop)
-        for k, v in LOCAL_MAP.items():
-            if search_key in k or k in search_key:
-                route_coordinates.append([v["lat"], v["lon"]])
-                stops_with_coords.append({"name": stop, "lat": v["lat"], "lon": v["lon"]})
-                break
-    
-    if not stops_with_coords: return "Not enough geographic data to map this line."
-        
-    map_obj = folium.Map(location=[stops_with_coords[0]["lat"], stops_with_coords[0]["lon"]], zoom_start=13, tiles="OpenStreetMap")
-    for p in stops_with_coords:
-        folium.Marker(location=[p["lat"], p["lon"]], popup=folium.Popup(f"<b>Stop:</b> {p['name']}<br><b>Line:</b> {linha_id}", max_width=300), icon=folium.Icon(color="green", icon="bus", prefix="fa")).add_to(map_obj)
-        
-    if len(route_coordinates) > 1: folium.PolyLine(route_coordinates, color="blue", weight=3, opacity=0.7).add_to(map_obj)
-        
-    file_path = f"maps/linha_{linha_id}.html"
-    map_obj.save(file_path)
-    return file_path
-
-# --- CONTEXT TOOLS ---
-def _extrair_lista_veiculos(dados):
-    if isinstance(dados, list): return dados
-    if isinstance(dados, dict):
-        for key in ("vehicles", "data", "results", "items", "veiculos"):
-            if isinstance(data.get(key), list): return data.get(key)
-        for val in data.values():
-            if isinstance(val, list): return val
-    return []
-
-def _primeiro_valor(dicionario, chaves, default=None):
-    for chave in chaves:
-        if isinstance(dicionario, dict) and chave in dicionario and dicionario[chave] is not None:
-            return dicionario[chave]
-    return default
-
-DICIONARIO_PARAGENS_CONHECIDAS = {"vaca negra": "1103", "central": "1001", "hospital": "1045", "universidade": "1022", "estacao": "1005"}
-
-@st.cache_data(ttl=60)
-def obter_dados_guimabus(route_id: str = None):
-    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
-    params = {"passengerInfo": "true"}
-    if route_id: params["routeId"] = route_id
-    try:
-        response = requests.get("https://gmr.elevensystems.pt/api/locations", headers=headers, params=params, timeout=8)
-        response.raise_for_status()
-        try: data = response.json()
-        except ValueError: return "Unable to read Guimabus data."
-        vehicles = _extrair_lista_veiculos(data)
-        if not vehicles: return f"There are currently no buses in circulation."
-
-        total_delay, delayed_count, summary = 0, 0, "Real-time fleet data (Guimabus):\n"
-        for bus in vehicles:
-            bus_id = _primeiro_valor(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
-            line = _first_value(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
-            status = _first_value(bus, ["busStatus", "status", "state"], "N/A")
-            delay = _first_value(bus, ["delay", "delayMinutes", "delay_min"], None)
-
-            line_txt = f" (Line {line})" if line else ""
-            delay_txt = f"{delay}min" if delay is not None else "unknown"
-            summary += f"- Bus {bus_id}{line_txt}: Status {status} (Delay: {delay_txt})\n"
-
-            if isinstance(delay, (int, float)):
-                total_delay += delay
-                delayed_count += 1
-
-        if delayed_count > 0: summary += f"\n--- Statistic: Average fleet delay: {total_delay / delayed_count:.1f} minutes. ---"
-        return summary
-    except Exception as e: return f"Tracking connection error: {e}"
-
-@st.cache_data(ttl=30)
-def obter_horarios_paragem(stop_id: str):
-    if not stop_id: return "Stop ID is required."
-    source_text = str(stop_id).strip().lower()
-    numeric_id = next((id_p for name_p, id_p in DICIONARIO_PARAGENS_CONHECIDAS.items() if name_p in source_text), None)
-            
-    if numeric_id or source_text.isdigit():
-        target_id = numeric_id if numeric_id else source_text
-        try:
-            response = requests.get(f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes", headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}, params={"shape": "true", "passengerInfo": "true"}, timeout=5)
-            response.raise_for_status()
-            routes = _extrair_lista_veiculos(response.json())
-            if routes:
-                summary = f"Real-time forecasts for stop {target_id}:\n"
-                for route in routes:
-                    line = _first_value(route, ["line", "lineName", "route", "routeShortName", "routeId"], "N/A")
-                    dest = _first_value(route, ["destination", "headsign", "direction"], None)
-                    eta = _first_value(route, ["eta", "etaMinutes", "waitTime", "waitingTime", "arrivalTime", "nextArrival"], None)
-                    summary += f"- Line {line}{f' → {dest}' if dest else ''}: {f'{eta} min' if eta is not None else 'no forecast'}\n"
-                return summary
-        except Exception: pass
-
-    try:
-        search_terms = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', source_text).split()
-        if not search_terms: search_terms = [source_text]
-        conn = get_db_connection()
-        query_sql = f"SELECT linha, conteudo_txt FROM cache_horarios WHERE {' AND '.join(['conteudo_txt LIKE ?' for _ in search_terms])}"
-        found_lines = conn.execute(query_sql, [f"%{term}%" for term in search_terms]).fetchall()
-        conn.close()
-        
-        if found_lines:
-            search_result = f"Scanned local schedule cache and identified lines referencing '{stop_id}':\n"
-            for row in found_lines:
-                relevant_snippet = [l for l in row[1].split("\n") if any(term in l.lower() for term in search_terms) or "página" in l.lower() or "tabela" in l.lower()]
-                search_result += f"\n--- AUTOMATIC MAPPING DETECTED: LINE {row[0]} ---\n{chr(10).join(relevant_snippet[:25])}\n"
-            return search_result
-    except Exception: pass
-    return f"Could not fetch information for location '{stop_id}'."
-
-def sincronizar_todos_horarios_guimabus():
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        response = requests.get("https://guimabus.pt/horarios-linhas/", headers=headers, timeout=12)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        pdf_links, line_titles = {}, {}
-        for link in soup.find_all('a', href=True):
-            if ".pdf" in link['href'] and "horario" in link['href'].lower():
-                match = re.search(r'linha-([a-z0-9]+)', link['href'].lower())
-                if match and match.group(1).upper() not in pdf_links:
-                    pdf_links[match.group(1).upper()] = link['href']
-                    if link.get_text(strip=True): line_titles[match.group(1).upper()] = link.get_text(strip=True)
-        
-        if not pdf_links: return "No schedule PDF files found on the main page."
-        
-        conn = get_db_connection()
-        processed_lines = []
-        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for line_id, pdf_url in pdf_links.items():
-            for attempt in range(2):
-                try:
-                    pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
-                    if pdf_resp.status_code != 200: time.sleep(1); continue
-                    extracted_text = []
-                    with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
-                        for idx, page in enumerate(pdf.pages):
-                            page_text = page.extract_text(layout=True)
-                            if page_text: extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
-                            time.sleep(0.05) 
-                    final_content = "\n\n".join(extracted_text) or "PDF is image-based or copy-protected."
-
-                    conn.execute("INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, last_updated) VALUES (?, ?, ?, ?)", (line_id, pdf_url, final_content, current_timestamp))
-                    if line_id in line_titles:
-                        conn.execute("INSERT OR REPLACE INTO cache_titulo_linha (linha, titulo, ultima_atualizacao) VALUES (?, ?, ?)", (line_id, line_titles[line_id], current_timestamp))
-                    processed_lines.append(line_id)
-                    break
-                except Exception: time.sleep(1); continue
-            time.sleep(0.2)
-        conn.commit(); conn.close()
-        return f"Sync completed: {len(processed_lines)}/{len(pdf_links)} PDFs downloaded!"
-    except Exception as e: return f"Scraping failed: {e}"
-
-def consultar_cache_horario_linha(line_id: str):
-    try:
-        user_input = str(line_id).strip().upper()
-        if not user_input: return "Line number is required."
-        candidates = [user_input]
-        if user_input.isdigit():
-            no_zeros = user_input.lstrip('0') or '0'
-            if no_zeros not in candidates: candidates.append(no_zeros)
-            three_digits = user_input.zfill(3)
-            if three_digits not in candidates: candidates.append(three_digits)
-
-        conn = get_db_connection()
-        result = next((conn.execute("SELECT conteudo_txt, url, last_updated FROM cache_horarios WHERE linha = ?", (c,)).fetchone() for c in candidates if conn.execute("SELECT conteudo_txt, url, last_updated FROM cache_horarios WHERE linha = ?", (c,)).fetchone()), None)
-        conn.close()
-        
-        if result: return f"Cached Schedules for Line {line_id} (Updated on {result[2]}):\n\n{result[0]}{f'{chr(10)}{chr(10)}🔗 Official Link: {result[1]}' if result[1] else ''}"
-        return f"No cached schedules for line {line_id}."
-    except Exception as e: return f"SQLite read error: {e}"
-
-def len_knowledge_base():
-    return "".join(f"\n--- CONTENT FROM {os.path.basename(file)} ---\n{open(file, 'r', encoding='utf-8').read()}" for file in glob.glob("knowledge/*.md")) or "No extra documentation found."
-
-def obter_idade_cache_horarios_dias():
-    try:
-        conn = get_db_connection()
-        res = conn.execute("SELECT MAX(ultima_atualizacao) FROM cache_horarios").fetchone()
-        conn.close()
-        return (datetime.now() - datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")).days if res and res[0] else None
-    except Exception: return None
-
-def obter_idade_cache_titulos_dias():
-    try:
-        conn = get_db_connection()
-        res = conn.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos").fetchone()
-        conn.close()
-        return (datetime.now() - datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")).days if res and res[0] else None
-    except Exception: return None
-
-def obter_contagem_indice_paragens():
-    try:
-        conn = get_db_connection()
-        res = conn.execute("SELECT COUNT(*) FROM cache_paragens_linha").fetchone()
-        conn.close()
-        return res[0] if res else 0
-    except Exception: return 0
+    return f"Não consegui encontrar coordenadas GPS em cache para '{local_nome}'."
 
 # --- SISTEMA BLOQUEANTE DE SINCRONIZAÇÃO NO ARRANQUE ---
 def verificar_necessidade_sync(limite_dias: int = 7):
@@ -867,7 +1154,7 @@ def verificar_necessidade_sync(limite_dias: int = 7):
     needs_geo = False
 
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect("agente_memoria.db")
         count_geo = conn.execute("SELECT COUNT(*) FROM nos_geograficos WHERE tipo LIKE 'poi_%'").fetchone()[0]
         needs_geo = (count_geo == 0)
         conn.close()
@@ -884,313 +1171,491 @@ def verificar_necessidade_sync(limite_dias: int = 7):
     return st.session_state.is_updating
 
 # --- SCRAPING DINÂMICO: TIPOLOGIAS DE PASSE E TARIFÁRIO ---
-TIPOLOGIAS_PASSE_FALLBACK = {"Mensal": {"descricao": "Valid for the month. Unlimited trips.", "preco": "Consult tariff", "custo_cartao": "5€", "prazo": "18th", "documentos": ["ID Card"]}}
+TIPOLOGIAS_PASSE_FALLBACK = {
+    "Mensal": {
+        "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
+        "preco": "Consultar tabela tarifária",
+        "custo_cartao": "5€",
+        "prazo": "Só pode ser emitido ou carregado até ao dia 18 de cada mês.",
+        "documentos": ["Cartão de Cidadão / Documento de identificação"],
+    },
+}
 
 def sincronizar_titulos_guimabus():
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    url = "https://guimabus.pt/titulos/"
+
     try:
-        response = requests.get("https://guimabus.pt/titulos/", headers=headers, timeout=12)
+        response = requests.get(url, headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']): tag.decompose()
-        full_text = soup.get_text(separator="\n")
-        normalized_text = "\n".join([l.strip() for l in full_text.split("\n") if l.strip()])
-        blocos = re.split(r'\nPASSE[.\s]*\n', "\n" + normalized_text)[1:]
-        if not blocos: return "No ticket types found."
 
-        conn = get_db_connection()
+        for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']):
+            tag.decompose()
+
+        texto_completo = soup.get_text(separator="\n")
+        linhas_texto = [l.strip() for l in texto_completo.split("\n")]
+        linhas_texto = [l for l in linhas_texto if l]
+        texto_normalizado = "\n".join(linhas_texto)
+
+        blocos = re.split(r'\nPASSE\n', "\n" + texto_normalizado)
+        blocos = [b for b in blocos[1:]]
+
+        if not blocos:
+            return "Não foi possível identificar nenhuma tipologia de passe na página."
+
+        conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tipologias_processadas = []
 
-        for block in blocos:
-            lines = block.split("\n")
-            if not lines or not lines[0].strip(): continue
-            type_name = lines[0].strip()
-            
-            price, card_cost, deadline = "Consult tariff table", "Not specified", "Deadline not specified on website."
-            docs_list, description_lines = [], []
+        for bloco in blocos:
+            linhas_bloco = bloco.split("\n")
+            if not linhas_bloco: continue
+            nome_tipologia = linhas_bloco[0].strip()
+            if not nome_tipologia: continue
+
+            preco, custo_cartao, prazo = "Consultar tabela tarifária", "Não indicado", "Prazo não indicado na página."
+            documentos, description_lines = [], []
             parsing_mode = "desc"
-            
-            for line in lines[1:]:
-                line_lower = line.lower()
-                line_stripped = line.strip()
-                
-                if not line_stripped: continue
-                    
-                if "só podem ser" in line_lower or "até ao dia" in line_lower or ("carregamento" in line_lower and "mês" in line_lower):
-                    deadline = line_stripped
-                    parsing_mode = "deadline"
+
+            for linha in linhas_bloco[1:]:
+                linha_lower = linha.lower()
+                linha_stripped = linha.strip()
+
+                if not linha_stripped: continue
+
+                if "só podem ser" in linha_lower or "até ao dia" in linha_lower or ("carregamento" in linha_lower and "mês" in linha_lower):
+                    prazo = linha_stripped
+                    parsing_mode = "prazo"
                     continue
-                    
-                if "preço:" in line_lower:
-                    val = re.split(r'preço:', line, flags=re.IGNORECASE)[1].strip()
-                    if val: price = val
-                    parsing_mode = "price"
+
+                if "preço:" in linha_lower:
+                    val = re.split(r'preço:', linha, flags=re.IGNORECASE)[1].strip()
+                    if val: preco = val
+                    parsing_mode = "preco"
                     continue
-                    
-                if line_lower == "gratuito":
-                    price = "Gratuito"
-                    parsing_mode = "price"
+
+                if linha_lower == "gratuito":
+                    preco = "Gratuito"
+                    parsing_mode = "preco"
                     continue
-                    
-                if "custo do cartão:" in line_lower:
-                    val = re.split(r'custo do cartão:', line, flags=re.IGNORECASE)[1].strip()
-                    if val: card_cost = val
-                    parsing_mode = "card"
+
+                if "custo do cartão:" in linha_lower:
+                    val = re.split(r'custo do cartão:', linha, flags=re.IGNORECASE)[1].strip()
+                    if val: custo_cartao = val
+                    parsing_mode = "cartao"
                     continue
-                    
-                if "documentos necessários:" in line_lower:
+
+                if "documentos necessários:" in linha_lower:
                     parsing_mode = "docs"
-                    val = re.split(r'documentos necessários:', line, flags=re.IGNORECASE)[1].strip()
-                    if val: docs_list.append(val)
+                    val = re.split(r'documentos necessários:', linha, flags=re.IGNORECASE)[1].strip()
+                    if val: documentos.append(val)
                     continue
-                    
-                if parsing_mode == "desc": description_lines.append(line_stripped)
-                elif parsing_mode == "docs": docs_list.append(line_stripped)
-                elif parsing_mode == "deadline": deadline += " " + line_stripped
-                elif parsing_mode == "price" and price in ["Consult tariff table", ""]:
-                    price = line_stripped
-                    parsing_mode = "done" 
-                elif parsing_mode == "card" and card_cost in ["Not specified", ""]:
-                    card_cost = line_stripped
+
+                if parsing_mode == "desc":
+                    description_lines.append(linha_stripped)
+                elif parsing_mode == "docs":
+                    documentos.append(linha_stripped)
+                elif parsing_mode == "prazo":
+                    prazo += " " + linha_stripped
+                elif parsing_mode == "preco" and preco in ["Consultar tabela tarifária", ""]:
+                    preco = linha_stripped
+                    parsing_mode = "done"
+                elif parsing_mode == "cartao" and custo_cartao in ["Não indicado", ""]:
+                    custo_cartao = linha_stripped
                     parsing_mode = "done"
 
-            description = " ".join(description_lines)
-            if not docs_list: docs_list = ["ID Card / Identification Document"]
+            descricao = " ".join(description_lines)
+            if not documentos:
+                documentos = ["Cartão de Cidadão / Documento de Identificação"]
 
-            cursor.execute("INSERT OR REPLACE INTO cache_titulos (tipologia, descricao, preco, custo_cartao, prazo, documentos_json, ultima_atualizacao) VALUES (?, ?, ?, ?, ?, ?, ?)", (type_name, description, price, card_cost, deadline, json.dumps(docs_list, ensure_ascii=False), ts))
-            
+            cursor.execute("""
+                INSERT OR REPLACE INTO cache_titulos (tipologia, descricao, preco, custo_cartao, prazo, documentos_json, ultima_atualizacao)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (nome_tipologia, descricao, preco, custo_cartao, prazo, json.dumps(documentos, ensure_ascii=False), timestamp_atual))
+            tipologias_processadas.append(nome_tipologia)
+
         conn.commit()
         conn.close()
-        return "Ticket sync complete."
-    except Exception as e: return f"Failed to sync ticket types: {e}"
+        return f"Sincronização de títulos concluída: {len(tipologias_processadas)} tipologias encontradas."
+    except Exception as e:
+        return f"Falha ao sincronizar títulos de passe: {e}"
 
 def sincronizar_tarifario_guimabus():
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    url_pagina = "https://guimabus.pt/tarifarios/"
+
     try:
-        response = requests.get("https://guimabus.pt/tarifarios/", headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
+        response = requests.get(url_pagina, headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        pdf_url = next((link['href'] for link in soup.find_all('a', href=True) if ".pdf" in link['href'].lower()), None)
-        if not pdf_url: return "No tariff PDF found."
-        
-        pdf_resp = requests.get(pdf_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
-        pdf_resp.raise_for_status()
-        extracted = []
-        with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
-            for idx, page in enumerate(pdf.pages):
-                txt = page.extract_text(layout=True)
-                if txt: extracted.append(f"[PÁGINA {idx+1}]\n{txt}")
-                time.sleep(0.05) 
-        final_content = "\n\n".join(extracted) or "Image-based PDF."
-        
-        conn = get_db_connection()
-        conn.execute("INSERT OR REPLACE INTO cache_tarifario (id, url_pdf, conteudo_txt, ultima_atualizacao) VALUES (1, ?, ?, ?)", (pdf_url, final_content, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        conn.commit(); conn.close()
-        return "Tariff sync complete."
-    except Exception as e: return f"Failed to sync tariff: {e}"
 
-def sincronizar_titulos_e_tarifario(): return f"{sincronizar_titulos_guimabus()}\n{sincronizar_tarifario_guimabus()}"
+        url_pdf = None
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            if ".pdf" in href.lower() and ("tarifa" in href.lower() or "tabela" in href.lower()):
+                url_pdf = href
+                break
+        if not url_pdf:
+            for link in soup.find_all('a', href=True):
+                if ".pdf" in link['href'].lower():
+                    url_pdf = link['href']
+                    break
 
+        if not url_pdf:
+            return "Não foi encontrado nenhum PDF de tarifário na página."
+
+        pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
+        pdf_response.raise_for_status()
+
+        texto_extraido = []
+        with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
+            for idx, pagina in enumerate(pdf.pages):
+                texto_pag = pagina.extract_text(layout=True)
+                if texto_pag:
+                    texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
+
+        conteudo_final = "\n\n".join(texto_extraido)
+        if not conteudo_final.strip():
+            conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
+
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT OR REPLACE INTO cache_tarifario (id, url_pdf, conteudo_txt, ultima_atualizacao)
+            VALUES (1, ?, ?, ?)
+        """, (url_pdf, conteudo_final, timestamp_atual))
+        conn.commit()
+        conn.close()
+
+        return f"Sincronização do tarifário concluída (fonte: {url_pdf})."
+
+    except Exception as e:
+        return f"Falha ao sincronizar tarifário: {e}"
+
+def sincronizar_titulos_e_tarifario():
+    resultado_titulos = sincronizar_titulos_guimabus()
+    resultado_tarifario = sincronizar_tarifario_guimabus()
+    return f"{resultado_titulos}\n{resultado_tarifario}"
+
+# --- ÍNDICE PARAGEM <-> LINHA (para sugerir transbordos) ---
 def _extrair_paragens_de_texto(texto: str):
     paragens = set()
     padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
-    for line in texto.split("\n"):
-        line = line.strip()
-        if not line or "|" in line or line.startswith("[PAGE") or line.startswith("[P"): continue
-        m = padrao.match(line)
-        if m and len(m.group("nome").strip(" -\t")) >= 3: paragens.add(m.group("nome").strip(" -\t"))
+    for linha_texto in texto.split("\n"):
+        linha_texto = linha_texto.strip()
+        if not linha_texto or "|" in linha_texto or linha_texto.startswith("[PÁGINA") or linha_texto.startswith("[P"):
+            continue
+        m = padrao.match(linha_texto)
+        if m:
+            nome = m.group("nome").strip(" -\t")
+            if len(nome) >= 3:
+                paragens.add(nome)
     return paragens
 
 def construir_indice_paragens():
     try:
-        conn = get_db_connection()
-        cached_lines = conn.execute("SELECT linha, conteudo_txt FROM cache_horarios").fetchall()
-        conn.execute("DELETE FROM cache_paragens_linha")
-        count = 0
-        for line_id, content in cached_lines:
-            if not content: continue
-            for stop in _extrair_paragens_de_texto(content):
-                conn.execute("INSERT OR IGNORE INTO cache_paragens_linha (linha, paragem) VALUES (?, ?)", (line_id, stop))
-                count += 1
-        conn.commit(); conn.close()
-        return f"Stop index rebuilt: {count} associations."
-    except Exception as e: return f"Failed to build index: {e}"
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT linha, conteudo_txt FROM cache_horarios")
+        linhas_cache = cursor.fetchall()
+
+        cursor.execute("DELETE FROM cache_paragens_linha")
+        total_paragens = 0
+        for linha_id, conteudo_txt in linhas_cache:
+            if not conteudo_txt:
+                continue
+            paragens = _extrair_paragens_de_texto(conteudo_txt)
+            for paragem in paragens:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO cache_paragens_linha (linha, paragem) VALUES (?, ?)",
+                    (linha_id, paragem)
+                )
+                total_paragens += 1
+        conn.commit()
+        conn.close()
+        return f"Índice de paragens reconstruído: {total_paragens} associações linha-paragem."
+    except Exception as e:
+        return f"Falha ao construir índice de paragens: {e}"
+
+def _normalizar_nome_paragem(texto: str):
+    t = texto.lower().strip()
+    t = re.sub(r'\bsão\b', 's.', t)
+    t = re.sub(r'\bsanta\b', 'sta.', t)
+    t = re.sub(r'\bsanto\b', 'sto.', t)
+    t = t.replace('.', '')
+    t = unicodedata.normalize('NFKD', t)
+    t = ''.join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
 
 def _procurar_linhas_por_titulo(termo_norm: str):
     try:
-        conn = get_db_connection()
-        all_titles = conn.execute("SELECT linha, titulo FROM cache_titulo_linha").fetchall()
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT linha, titulo FROM cache_titulo_linha")
+        todos_titulos = cursor.fetchall()
         conn.close()
-    except Exception: return set(), []
-    
-    found_lines, found_titles = set(), []
-    for line_id, title in all_titles:
-        if title and re.search(r'\b' + re.escape(termo_norm) + r'\b', _normalizar_nome_paragem(title)):
-            found_lines.add(line_id); found_titles.append(f"Linha {line_id}: {title}")
-    return found_lines, found_titles
+    except Exception as e:
+        return set(), []
+
+    linhas_encontradas = set()
+    titulos_encontrados = []
+    for linha_id, titulo in todos_titulos:
+        if not titulo:
+            continue
+        titulo_norm = _normalizar_nome_paragem(titulo)
+        if re.search(r'\b' + re.escape(termo_norm) + r'\b', titulo_norm):
+            linhas_encontradas.add(linha_id)
+            titulos_encontrados.append(f"Linha {linha_id}: {titulo}")
+    return linhas_encontradas, titulos_encontrados
 
 def enriquecer_paragens_com_freguesia(progresso_callback=None):
     try:
-        conn = get_db_connection()
-        all_stops = [row[0] for row in conn.execute("SELECT DISTINCT paragem FROM cache_paragens_linha").fetchall()]
-        already_done = {row[0] for row in conn.execute("SELECT paragem FROM cache_paragem_freguesia").fetchall()}
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT paragem FROM cache_paragens_linha")
+        todas_paragens = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT paragem FROM cache_paragem_freguesia")
+        ja_feitas = {row[0] for row in cursor.fetchall()}
         conn.close()
-    except Exception: return "Error preparing enrichment."
+    except Exception as e:
+        return f"Erro ao preparar o enriquecimento: {e}"
 
-    pending = [p for p in all_stops if p not in already_done]
-    if not pending: return "All stops enriched."
+    paragens_a_fazer = [p for p in todas_paragens if p not in ja_feitas]
+    if not paragens_a_fazer:
+        return "Todas as paragens já têm freguesia associada — nada a fazer."
 
-    conn = get_db_connection()
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    for idx, stop in enumerate(pending):
+    headers = {'User-Agent': 'SuperSecretarioIA-Guimaraes/1.0'}
+    conn = sqlite3.connect("agente_memoria.db")
+    cursor = conn.cursor()
+    timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sucesso, falha = 0, 0
+
+    for idx, paragem in enumerate(paragens_a_fazer):
         try:
-            resp = requests.get("https://nominatim.openstreetmap.org/search", params={"q": f"{stop}, Guimarães, Portugal", "format": "json", "addressdetails": 1, "countrycodes": "pt", "limit": 1}, headers={'User-Agent': 'SuperSecretaryAI'}, timeout=10)
+            resp = requests.get("https://nominatim.openstreetmap.org/search", params={"q": f"{paragem}, Guimarães, Portugal", "format": "json", "addressdetails": 1, "countrycodes": "pt", "limit": 1}, headers=headers, timeout=10)
             resp.raise_for_status()
-            res = resp.json()
-            parish = res[0].get("address", {}).get("suburb") or res[0].get("address", {}).get("city_district") if res else None
-            conn.execute("INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao) VALUES (?, ?, ?, ?)", (stop, parish, "nominatim" if parish else "no_result", ts))
-            if progress_callback: progress_callback(idx + 1, len(pending), stop)
-        except Exception: pass
+            resultados = resp.json()
+            freguesia = None
+            if resultados:
+                endereco = resultados[0].get("address", {})
+                freguesia = (endereco.get("suburb") or endereco.get("city_district") or endereco.get("village") or endereco.get("town") or endereco.get("municipality"))
+
+            if freguesia:
+                cursor.execute("INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao) VALUES (?, ?, ?, ?)", (paragem, freguesia, "nominatim", timestamp_atual))
+                sucesso += 1
+            else:
+                cursor.execute("INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao) VALUES (?, ?, ?, ?)", (paragem, None, "sem_resultado", timestamp_atual))
+                falha += 1
+
+            if progresso_callback: progresso_callback(idx + 1, len(paragens_a_fazer), paragem)
+
+        except Exception:
+            falha += 1
         time.sleep(1.1)
-    conn.commit(); conn.close()
-    return "Enrichment completed."
+
+    conn.commit()
+    conn.close()
+    return f"Enriquecimento de freguesias concluído: {sucesso} associadas, {falha} falhas."
 
 def obter_freguesia_de_paragem(nome_paragem: str):
     try:
-        conn = get_db_connection()
-        all_data = conn.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL").fetchall()
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL")
+        todas = cursor.fetchall()
         conn.close()
-    except Exception: return None
+    except Exception:
+        return None
 
-    norm_name = _normalizar_nome_paragem(nome_paragem)
-    for stop, parish in all_data:
-        stop_norm = _normalizar_nome_paragem(stop)
-        if re.search(r'\b' + re.escape(norm_name) + r'\b', stop_norm) or re.search(r'\b' + re.escape(stop_norm) + r'\b', norm_name): return parish
+    nome_norm = _normalizar_nome_paragem(nome_paragem)
+    for paragem, freguesia in todas:
+        paragem_norm = _normalizar_nome_paragem(paragem)
+        if re.search(r'\b' + re.escape(nome_norm) + r'\b', paragem_norm) or re.search(r'\b' + re.escape(paragem_norm) + r'\b', nome_norm):
+            return freguesia
     return None
 
 def procurar_paragens_por_freguesia(nome_freguesia: str):
     try:
-        conn = get_db_connection()
-        all_data = conn.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL").fetchall()
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL")
+        todas = cursor.fetchall()
         conn.close()
-    except Exception: return []
-    norm_parish = _normalizar_nome_paragem(nome_freguesia)
-    return [stop for stop, parish in all_data if re.search(r'\b' + re.escape(norm_parish) + r'\b', _normalizar_nome_paragem(parish))]
+    except Exception:
+        return []
+
+    freguesia_norm = _normalizar_nome_paragem(nome_freguesia)
+    return [paragem for paragem, freguesia in todas if re.search(r'\b' + re.escape(freguesia_norm) + r'\b', _normalizar_nome_paragem(freguesia))]
 
 def planear_viagem_com_transbordo(origem: str, destino: str):
-    if not origem or not destino: return "You must provide an origin stop and a destination stop."
-    norm_orig, norm_dest = _normalizar_nome_paragem(origem), _normalizar_nome_paragem(destino)
-    
+    if not origem or not destino: return "É necessário indicar a paragem de origem e a paragem de destino."
+    origem_norm, destino_norm = _normalizar_nome_paragem(origem), _normalizar_nome_paragem(destino)
+
     try:
-        conn = get_db_connection()
-        all_data = conn.execute("SELECT linha, paragem FROM cache_paragens_linha").fetchall()
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT linha, paragem FROM cache_paragens_linha")
+        todas = cursor.fetchall()
         conn.close()
-    except Exception: return "Error querying stop index."
-    
-    if not all_data: return "Index not built."
+    except Exception as e:
+        return f"Erro ao consultar o índice de paragens: {e}"
 
-    orig_lines, dest_lines, line_stops_map = set(), set(), {}
-    found_orig, found_dest = set(), set()
-    for l_id, s in all_data:
-        line_stops_map.setdefault(l_id, set()).add(s)
-        s_norm = _normalizar_nome_paragem(s)
-        if re.search(r'\b' + re.escape(norm_orig) + r'\b', s_norm): orig_lines.add(l_id); found_orig.add(s)
-        if re.search(r'\b' + re.escape(norm_dest) + r'\b', s_norm): dest_lines.add(l_id); found_dest.add(s)
+    if not todas: return "O índice de paragens ainda não foi construído."
 
-    warn_o_title = warn_d_title = False
-    o_titles, d_titles = [], []
-    if not orig_lines: orig_lines, o_titles = _search_lines_by_title(norm_orig); warn_o_title = bool(orig_lines)
-    if not dest_lines: dest_lines, d_titles = _search_lines_by_title(norm_dest); warn_d_title = bool(dest_lines)
+    linhas_origem, linhas_destino = set(), set()
+    paragens_origem_encontradas, paragens_destino_encontradas = set(), set()
+    mapa_linha_paragens = {}
 
-    if not orig_lines: return f"Could not find '{origem}'."
-    if not dest_lines: return f"Could not find '{destino}'."
+    for linha_id, paragem in todas:
+        mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
+        paragem_norm = _normalizar_nome_paragem(paragem)
+        if re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm):
+            linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem)
+        if re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm):
+            linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem)
 
-    warn_msg = ("\n⚠️ Title used for Origin." if warn_o_title else "") + ("\n⚠️ Title used for Dest." if warn_d_title else "")
+    aviso_o, aviso_d = False, False
+    if not linhas_origem: linhas_origem, titulos_o = _procurar_linhas_por_titulo(origem_norm); aviso_o = bool(linhas_origem)
+    if not linhas_destino: linhas_destino, titulos_d = _procurar_linhas_por_titulo(destino_norm); aviso_d = bool(linhas_destino)
 
-    if orig_lines & dest_lines:
-        return f"DIRECT line(s) between '{origem}' and '{destino}':\n" + "\n".join(f"- Line {l}" for l in (orig_lines & dest_lines)) + warn_msg
+    aviso_o_freg, aviso_d_freg = None, None
+    if not linhas_origem:
+        paragens_da_freguesia = procurar_paragens_por_freguesia(origem)
+        if paragens_da_freguesia:
+            for paragem_freg in paragens_da_freguesia:
+                for linha_id, paragem_indice in todas:
+                    if _normalizar_nome_paragem(paragem_freg) == _normalizar_nome_paragem(paragem_indice):
+                        linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem_indice)
+            if linhas_origem: aviso_o_freg = paragens_da_freguesia
 
-    o_stops = set.union(*(line_stops_map.get(l, set()) for l in orig_lines))
-    d_stops = set.union(*(line_stops_map.get(l, set()) for l in dest_lines))
-    transfers = (o_stops & d_stops) - found_orig - found_dest
+    if not linhas_destino:
+        paragens_da_freguesia = procurar_paragens_por_freguesia(destino)
+        if paragens_da_freguesia:
+            for paragem_freg in paragens_da_freguesia:
+                for linha_id, paragem_indice in todas:
+                    if _normalizar_nome_paragem(paragem_freg) == _normalizar_nome_paragem(paragem_indice):
+                        linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem_indice)
+            if linhas_destino: aviso_d_freg = paragens_da_freguesia
 
-    if not transfers: return "No transfer found."
-    summary = f"No direct line. Suggested transfers:\n\n"
-    for t in sorted(transfers):
-        l_to = [l for l in orig_lines if t in line_stops_map.get(l, set())]
-        l_from = [l for l in dest_lines if t in line_stops_map.get(l, set())]
-        summary += f"- Via **{t}**: lines {'/'.join(l_to)} -> '{t}' -> lines {'/'.join(l_from)}.\n"
-    return summary + warn_msg
+    if not linhas_origem: return f"Não encontrei origem '{origem}'."
+    if not linhas_destino: return f"Não encontrei destino '{destino}'."
+
+    aviso_precisao = ""
+    if aviso_o: aviso_precisao += f"\n⚠️ Nota: '{origem}' encontrada pelo TÍTULO da linha."
+    if aviso_d: aviso_precisao += f"\n⚠️ Nota: '{destino}' encontrada pelo TÍTULO da linha."
+    if aviso_o_freg: aviso_precisao += f"\n📍 '{origem}' é freguesia."
+    if aviso_d_freg: aviso_precisao += f"\n📍 '{destino}' é freguesia."
+
+    linhas_diretas = linhas_origem & linhas_destino
+    if linhas_diretas:
+        resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}':\n"
+        for l in linhas_diretas: resumo += f"- Linha {l}\n"
+        return resumo + aviso_precisao
+
+    stops_o, stops_d = set(), set()
+    for l in linhas_origem: stops_o |= mapa_linha_paragens.get(l, set())
+    for l in linhas_destino: stops_d |= mapa_linha_paragens.get(l, set())
+
+    transbordos = (stops_o & stops_d) - paragens_origem_encontradas - paragens_destino_encontradas
+    if not transbordos: return f"Não encontrei transbordo óbvio entre '{origem}' e '{destino}'."
+
+    resumo = f"Não há linha direta. Sugestão de transbordo:\n\n"
+    for t in sorted(transbordos):
+        l_to = [l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())]
+        l_from = [l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())]
+        resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
+
+    return resumo + aviso_precisao
 
 def consultar_freguesia_paragem_tool(nome: str):
-    if not nome: return "Name required."
-    parish = obter_freguesia_de_paragem(nome)
-    if parish: return f"Stop '{nome}' is in {parish}."
-    stops = procurar_paragens_por_freguesia(nome)
-    if stops: return f"Stops in '{nome}': {', '.join(stops)}."
-    return f"No info for '{nome}'."
+    if not nome: return "É necessário indicar o nome."
+    freguesia = obter_freguesia_de_paragem(nome)
+    if freguesia: return f"A paragem '{nome}' fica na freguesia de {freguesia}."
+    paragens = procurar_paragens_por_freguesia(nome)
+    if paragens: return f"Paragens em '{nome}': {', '.join(paragens)}."
+    return f"Não tenho informação para '{nome}'."
 
 def obter_tipologias_cache():
     try:
-        conn = get_db_connection()
-        rows = conn.execute("SELECT tipologia, descricao, preco, custo_cartao, prazo, documentos_json FROM cache_titulos ORDER BY tipologia").fetchall()
-        last_updated = conn.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos").fetchone()[0]
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT tipologia, descricao, preco, custo_cartao, prazo, documentos_json FROM cache_titulos ORDER BY tipologia")
+        linhas = cursor.fetchall()
+        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos")
+        ultima_atualizacao = cursor.fetchone()[0]
         conn.close()
-        if not rows: return TIPOLOGIAS_PASSE_FALLBACK, None
-        
-        result = {}
-        for type_name, desc, price, card_cost, deadline, docs_json in rows:
+
+        if not linhas: return TIPOLOGIAS_PASSE_FALLBACK, None
+
+        resultado = {}
+        for tip, desc, preco, cartao, prazo, docs_json in linhas:
             try: docs = json.loads(docs_json)
-            except Exception: docs = [docs_json]
-            result[type_name] = {"descricao": desc, "preco": price, "custo_cartao": card_cost, "prazo": deadline, "documentos": docs}
-        return result, last_updated
-    except Exception: return TIPOLOGIAS_PASSE_FALLBACK, None
+            except: docs = [docs_json]
+            resultado[tip] = {"descricao": desc, "preco": preco, "custo_cartao": cartao, "prazo": prazo, "documentos": docs}
+        return resultado, ultima_atualizacao
+    except Exception:
+        return TIPOLOGIAS_PASSE_FALLBACK, None
 
 def consultar_tarifario_cache():
     try:
-        conn = get_db_connection()
-        res = conn.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_tarifario WHERE id = 1").fetchone()
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_tarifario WHERE id = 1")
+        res = cursor.fetchone()
         conn.close()
-        return f"Tariff (updated {res[1]}):\n\n{res[0]}" if res else "Not synchronized."
-    except Exception as e: return str(e)
+        if res: return f"Tabela tarifária ({res[1]}):\n\n{res[0]}"
+        return "Tarifário não sincronizado."
+    except Exception as e: return f"Erro cache tarifário: {e}"
 
 def consultar_tipologias_cache_tool():
-    types, up = obter_tipologias_cache()
-    if not types: return "No types."
-    return f"Types ({up}):\n\n" + "\n".join(f"- **{n}**: {i['descricao']} Preço: {i['preco']}" for n, i in types.items())
+    tipologias, upd = obter_tipologias_cache()
+    if not tipologias: return "Sem tipologias em cache."
+    resumo = f"Tipologias ({upd}):\n\n"
+    for n, i in tipologias.items():
+        resumo += f"- **{n}**: {i['descricao']} Preço: {i['preco']}. Prazo: {i['prazo']}.\n"
+    return resumo
 
 def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
-    current_types, _ = obter_tipologias_cache()
-    info = current_types.get(tipologia, {"documentos": ["unspecified document"]})
-    partes = [
-        f"Review uploaded documents for a '{tipologia}' ticket.\nRequired: {', '.join(info['documentos'])}.\n"
-        "State for EACH: 1. Type 2. Matches required? 3. Legible? Mention missing ones."
-    ]
-    for n, f in ficheiros_carregados.items():
-        if f is None: continue
-        partes.extend([f"\n--- Document: '{n}' ---", {"mime_type": f.type or "application/octet-stream", "data": f.getvalue()}])
-    if len(partes) == 1: return "No documents uploaded."
-    try:
-        return genai.GenerativeModel("gemini-3.5-flash").generate_content(partes, request_options={"timeout": 40}).text
-    except Exception as e: return f"Error: {e}"
+    tipologias_atuais, _ = obter_tipologias_cache()
+    info = tipologias_atuais.get(tipologia, {"documentos": ["não especificado"]})
+    partes = [f"Rever docs para '{tipologia}'. Exigido: {', '.join(info['documentos'])}.\nPara cada doc: tipo, corresponde?, legível?"]
 
-def recomendar_tipologias_passe(respostas: dict, available_types: dict):
-    c = []
-    def _h(p): return next((n for n in available_types if p.lower() in n.lower()), None)
-    if respostas.get("antigo_combatente") and _h("Antigo Combatente"): c.append(_h("Antigo Combatente"))
-    if respostas.get("incapacidade_60") and _h("Mobilidade Condicionada"): c.append(_h("Mobilidade Condicionada"))
-    if respostas.get("idade", 0) >= 65 and respostas.get("residente_gmr") and _h("65+"): c.append(_h("65+"))
+    nomes = []
+    for nome, fich in ficheiros_carregados.items():
+        if fich is None: continue
+        nomes.append(nome)
+        partes.extend([f"\n--- Documento: '{nome}' ---", {"mime_type": fich.type or "application/octet-stream", "data": fich.getvalue()}])
+
+    if not nomes: return "Nenhum documento carregado."
+    try: return genai.GenerativeModel("gemini-3.5-flash").generate_content(partes, request_options={"timeout": 40}).text
+    except Exception as e: return f"Erro ao verificar: {e}"
+
+def recomendar_tipologias_passe(respostas: dict, tipologias_disponiveis: dict):
+    cand = []
+    def _tem(n): return next((k for k in tipologias_disponiveis if n.lower() in k.lower()), None)
+
+    if respostas.get("antigo_combatente") and _tem("Antigo Combatente"): cand.append(_tem("Antigo Combatente"))
+    if respostas.get("incapacidade_60") and _tem("Mobilidade Condicionada"): cand.append(_tem("Mobilidade Condicionada"))
+    if respostas.get("idade", 0) >= 65 and respostas.get("residente_gmr") and _tem("65+"): cand.append(_tem("65+"))
+    if respostas.get("reforma_antecipada") and 60 <= respostas.get("idade", 0) < 65 and _tem("Reformado"): cand.append(_tem("Reformado"))
     if respostas.get("estudante"):
         if respostas.get("nivel_estudo") == "superior":
-            c.append(_h("Universitário Residente") if respostas.get("residente_gmr") else _h("Universitário Não Residente"))
-        elif respostas.get("nivel_estudo") == "ate_18": c.append(_h("18+TP"))
-        elif respostas.get("nivel_estudo") == "ate_23": c.append(_h("23+TP"))
-    
-    c = [x for x in c if x]
-    if not c:
-        if respostas.get("residente_gmr") and _h("CIM AVE 50% + 10% CMG"): c.append(_h("CIM AVE 50% + 10% CMG"))
-        elif _h("Mensal") and not _h("CIM"): c.append(next(n for n in available_types if n.strip().lower() == "mensal"))
-    return list(dict.fromkeys(c))
+            cand.append(_tem("Universitário Residente") if respostas.get("residente_gmr") else _tem("Universitário Não Residente"))
+        elif respostas.get("nivel_estudo") == "ate_18" and _tem("18+TP"): cand.append(_tem("18+TP"))
+        elif respostas.get("nivel_estudo") == "ate_23" and _tem("23+TP"): cand.append(_tem("23+TP"))
+    if respostas.get("usa_passe_cp") and _tem("Mensal CP"): cand.append(_tem("Mensal CP"))
+
+    if not cand:
+        if respostas.get("residente_gmr") and _tem("CIM AVE 50% + 10% CMG"): cand.append(_tem("CIM AVE 50% + 10% CMG"))
+        elif respostas.get("residente_gmr") and _tem("CIM AVE 50%"): cand.append(_tem("CIM AVE 50%"))
+        elif _tem("Mensal") and not _tem("CIM"):
+            cand.append(next(n for n in tipologias_disponiveis if n.strip().lower() == "mensal"))
+
+    return list(dict.fromkeys([c for c in cand if c]))
 
 def renderizar_pedido_passe(ui):
     st.subheader(ui["ticket_title"])
@@ -1201,43 +1666,43 @@ def renderizar_pedido_passe(ui):
 
     with st.expander(ui["ticket_wizard"], expanded=False):
         col1, col2 = st.columns(2)
-        age = col1.number_input(ui["ticket_age"], min_value=0, max_value=120, value=25, step=1, key="wizard_idade")
-        gmr_resident = col2.checkbox(ui["ticket_resident"], key="wizard_residente")
+        idade = col1.number_input(ui["ticket_age"], min_value=0, max_value=120, value=25, step=1, key="wizard_idade")
+        residente_gmr = col2.checkbox(ui["ticket_resident"], key="wizard_residente")
 
-        student = st.checkbox(ui["ticket_student"], key="wizard_estudante")
-        study_level = None
-        if student:
+        estudante = st.checkbox(ui["ticket_student"], key="wizard_estudante")
+        nivel_estudo = None
+        if estudante:
             level_map = {"ate_18": ui["ticket_level_opt1"], "ate_23": ui["ticket_level_opt2"], "superior": ui["ticket_level_opt3"]}
-            study_level = st.radio(ui["ticket_level"], options=list(level_map.keys()), format_func=lambda x: level_map[x], key="wizard_nivel")
+            nivel_estudo = st.radio(ui["ticket_level"], options=list(level_map.keys()), format_func=lambda x: level_map[x], key="wizard_nivel")
 
         col3, col4 = st.columns(2)
-        disability_60 = col3.checkbox(ui["ticket_disability"], key="wizard_incapacidade")
-        veteran = col4.checkbox(ui["ticket_veteran"], key="wizard_combatente")
+        incapacidade_60 = col3.checkbox(ui["ticket_disability"], key="wizard_incapacidade")
+        antigo_combatente = col4.checkbox(ui["ticket_veteran"], key="wizard_combatente")
 
         col5, col6 = st.columns(2)
-        early_retirement = col5.checkbox(ui["ticket_retirement"], key="wizard_reforma")
-        uses_cp_pass = col6.checkbox(ui["ticket_cp"], key="wizard_cp")
+        reforma_antecipada = col5.checkbox(ui["ticket_retirement"], key="wizard_reforma")
+        usa_passe_cp = col6.checkbox(ui["ticket_cp"], key="wizard_cp")
 
         if st.button(ui["ticket_recommend_btn"], key="wizard_recomendar"):
-            ans = {"idade": age, "residente_gmr": gmr_resident, "estudante": student, "nivel_estudo": study_level, "incapacidade_60": disability_60, "antigo_combatente": veteran, "reforma_antecipada": early_retirement, "usa_passe_cp": uses_cp_pass}
+            ans = {"idade": idade, "residente_gmr": residente_gmr, "estudante": estudante, "nivel_estudo": nivel_estudo, "incapacidade_60": incapacidade_60, "antigo_combatente": antigo_combatente, "reforma_antecipada": reforma_antecipada, "usa_passe_cp": usa_passe_cp}
             rec = recomendar_tipologias_passe(ans, TICKET_TYPES)
             if rec: st.success(f"{ui['ticket_suitable']} **{' / '.join(rec)}**")
             else: st.warning(ui["ticket_default"])
 
-    chosen_type = st.selectbox(ui["ticket_choose"], list(TICKET_TYPES.keys()))
-    info = TICKET_TYPES[chosen_type]
+    tipologia_escolhida = st.selectbox(ui["ticket_choose"], list(TICKET_TYPES.keys()))
+    info = TICKET_TYPES[tipologia_escolhida]
 
     st.markdown(f"{ui['ticket_desc']} {info['descricao']}\n{ui['ticket_price']} {info['preco']} | {ui['ticket_card']} {info['custo_cartao']}\n{ui['ticket_deadline']} {info.get('prazo', '')}")
     st.markdown(ui["ticket_docs_req"])
     ficheiros = {}
     for i, doc_name in enumerate(info["documentos"]):
-        ficheiros[doc_name] = st.file_uploader(f"📄 {doc_name}", type=["pdf", "png", "jpg", "jpeg"], key=f"upload_pass_{chosen_type}_{i}")
+        ficheiros[doc_name] = st.file_uploader(f"📄 {doc_name}", type=["pdf", "png", "jpg", "jpeg"], key=f"upload_pass_{tipologia_escolhida}_{i}")
 
     if st.button(ui["ticket_verify_btn"], use_container_width=True):
         if not any(f is not None for f in ficheiros.values()): st.warning(ui["ticket_upload_warn"])
         else:
             with st.spinner(ui["ticket_analyzing"]):
-                st.markdown(verificar_documentos_passe(chosen_type, ficheiros))
+                st.markdown(verificar_documentos_passe(tipologia_escolhida, ficheiros))
 
 def renderizar_jogo(ui):
     json_scores = json.dumps(obter_top_10())
@@ -1393,6 +1858,7 @@ def renderizar_jogo(ui):
     """
     return components.html(html_jogo, height=650)
 
+# --- INICIALIZAÇÃO DE ESTADOS ---
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": ui["initial_msg"]}]
 
@@ -1402,6 +1868,7 @@ if len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
 
+# --- SIDEBAR DE ELITE ---
 with st.sidebar:
     st.header(ui["sidebar_panel"])
     if st.button(ui["clear_history"], use_container_width=True):
@@ -1411,8 +1878,8 @@ with st.sidebar:
     st.divider()
 
     st.subheader(ui["entertainment"])
-    btn_game_text = ui["close_game"] if st.session_state.jogo_ativo else ui["open_game"]
-    if st.button(btn_game_text, use_container_width=True):
+    texto_botao_jogo = ui["close_game"] if st.session_state.jogo_ativo else ui["open_game"]
+    if st.button(texto_botao_jogo, use_container_width=True):
         st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
     st.divider()
@@ -1420,8 +1887,8 @@ with st.sidebar:
     st.subheader(ui["transport_tickets"])
     if "passe_ativo" not in st.session_state:
         st.session_state.passe_ativo = False
-    btn_ticket_text = ui["close_ticket"] if st.session_state.passe_ativo else ui["request_ticket"]
-    if st.button(btn_ticket_text, use_container_width=True):
+    texto_botao_passe = ui["close_ticket"] if st.session_state.passe_ativo else ui["request_ticket"]
+    if st.button(texto_botao_passe, use_container_width=True):
         st.session_state.passe_ativo = not st.session_state.passe_ativo
         st.rerun()
     st.divider()
@@ -1488,7 +1955,7 @@ with st.sidebar:
 
         with st.sidebar.expander(ui["global_history"]):
             if os.path.exists("agente_memoria.db"):
-                conn = get_db_connection()
+                conn = sqlite3.connect("agente_memoria.db")
                 for r in reversed(conn.execute("SELECT timestamp, session_id, role, content FROM historico_global ORDER BY id DESC LIMIT 30").fetchall()):
                     hora_min = r[0].split(" ")[1] if " " in r[0] else r[0]
                     st.markdown(f"**{'🟢' if r[2]=='user' else '🤖'} [{hora_min}] {ui['visitor'] if r[2]=='user' else ui['agent']} ({r[1]}):** {r[3]}")
@@ -1508,19 +1975,9 @@ if avisos_hoje:
 for message in st.session_state.messages:
     avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
     with st.chat_message(message["role"], avatar=avatar_tipo):
-        if message["role"] == "assistant" and "```html" in message["content"].lower():
-            blocos = re.split(r'```[hH][tT][mM][lL]', message["content"])
-            st.markdown(blocos[0], unsafe_allow_html=True)
-            for bloco in blocos[1:]:
-                if "```" in bloco:
-                    codigo_html, resto_texto = bloco.split("```", 1)
-                    components.html(codigo_html.strip(), height=450, scrolling=True)
-                    st.markdown(resto_texto, unsafe_allow_html=True)
-                else:
-                    components.html(bloco.strip(), height=450, scrolling=True)
-        else:
-            st.markdown(message["content"])
+        st.markdown(message["content"])
 
+# --- EXECUÇÃO BLOQUEANTE E RESILIENTE DE ATUALIZAÇÕES INICIAIS ---
 is_updating = verificar_necessidade_sync(limite_dias=7)
 
 if is_updating:
@@ -1540,10 +1997,12 @@ if is_updating:
             
         if tasks.get("geo"):
             importar_pois_guimaraes()
+            importar_json_local()
             
     st.session_state.is_updating = False
-    st.rerun()
+    st.rerun() # Refresh força a libertação do input box abaixo.
 
+# Input só é renderizado de facto depois da função de bloqueio estar livre
 prompt_texto = st.chat_input(ui["chat_input"])
 audio_file = st.audio_input(ui["speak"])
 
@@ -1592,16 +2051,6 @@ if prompt:
                     "MANDATORY: Whenever asked about schedules or lines, you MUST present the actual departure/arrival times by reading the cache from the `query_line_schedule_cache` tool. NEVER just send the link without showing the times in your text. At the very end of your response, you MUST include the link: 'Check the official schedule here: [LINE LINK]'."
                 )
 
-                VISUAL_CARD_INSTRUCTION = (
-                    "NOVA REGRA DE UX (CARTÃO VISUAL): Se o utilizador pedir uma viagem com transbordo ou horários de mais que uma linha, apresenta a resposta normalmente mas, no final, PERGUNTA OBRIGATORIAMENTE: 'Queres que eu gere um cartão visual com o resumo desta viagem?'. "
-                    "SE (e apenas se) o utilizador já tiver respondido 'sim' a essa pergunta, deves gerar OBRIGATORIAMENTE um bloco de código HTML contendo um cartão de embarque moderno, com CSS integrado elegante, cores da Guimabus (verde #2ecc71 e cinza escuro), cantos arredondados e ícones (usa emojis), detalhando a origem, transbordo, destino e as respetivas horas. "
-                    "Envolve o código HTML OBRIGATORIAMENTE num bloco de código markdown (```html ... ```) para que o sistema o possa renderizar graficamente como uma imagem iterativa."
-                    if st.session_state.language == "PT" else 
-                    "NEW UX RULE (VISUAL CARD): If the user asks for a trip with a transfer or schedules for more than one line, present the response normally but, at the end, YOU MUST ASK: 'Do you want me to generate a visual card summarizing this trip?'. "
-                    "IF (and only if) the user has answered 'yes' to that question, YOU MUST generate an HTML code block containing a modern boarding pass card, with elegant integrated CSS, Guimabus colors (green #2ecc71 and dark gray), rounded corners and icons (use emojis), detailing the origin, transfer, destination, and respective times. "
-                    "You MUST wrap the HTML code in a markdown code block (```html ... ```) so the system can render it graphically."
-                )
-
                 PROMPT_EXECUTIVO = f"""Tu és o Assistente Executivo de Elite do Celso Ferreira.
                 És um Agente focado em automação, suporte e infraestrutura IT.
 
@@ -1616,20 +2065,14 @@ if prompt:
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
-                - consultar_base_geografica_tool: pesquisa na base de dados geográfica (JSON e SQLite) por qualquer local, Ponto de Interesse (POI), rua ou paragem, retornando as coordenadas e tipo.
-                - find_closest_stop: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse.
+                - encontrar_paragem_mais_proxima_tool: calcula matematicamente e devolve a paragem de autocarro mais próxima de um determinado local de interesse ou empresa.
 
                 MANDATORY PLANNING LOGIC:
-                1. If the location IS NOT A STOP (e.g., cafe, factory), use the "find_closest_stop" tool FIRST.
-                2. Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
-                3. {SCHEDULE_INSTRUCTION}
-                4. {VISUAL_CARD_INSTRUCTION}
+                1. Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
+                2. {SCHEDULE_INSTRUCTION}
 
-                TOOL CALLING EXECUTION RULE - CRITICAL:
-                NEVER describe the steps you will take to search. NEVER try to calculate routes mentally or guess stops without the tools giving you that information. CALL THE TOOLS silently. Only write the final text after having the tools' response.
-
-                ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
-                NEVER invent, estimate, or "fill in" data that the tools did not provide. ALWAYS use the information in "[CURRENT SYSTEM DATE AND TIME]". If the tool does not tell you how to go from X to Y, apologize and state clearly and honestly that you do not have that connection available in the database."""
+                REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
+                NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
@@ -1663,7 +2106,8 @@ if prompt:
                 contexto_data = f"[DATA E HORA ATUAL DO SISTEMA: {agora.strftime('%Y-%m-%d %H:%M')}.]"
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
-                agent_tools = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, gerar_mapa_linha_html, find_closest_stop, consultar_base_geografica_tool]
+                
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima_tool]
                 
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
@@ -1671,7 +2115,7 @@ if prompt:
 
                 for nome_modelo in candidatos_modelo:
                     try:
-                        model = genai.GenerativeModel(model_name=nome_modelo, system_instruction=prompt_sistema_ativo, tools=agent_tools)
+                        model = genai.GenerativeModel(model_name=nome_modelo, system_instruction=prompt_sistema_ativo, tools=ferramentas_agente)
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
                         break
@@ -1687,19 +2131,7 @@ if prompt:
                     st.stop()
 
                 full_response = response.text
-                
-                if "```html" in full_response.lower():
-                    blocos = re.split(r'```[hH][tT][mM][lL]', full_response)
-                    st.markdown(blocos[0], unsafe_allow_html=True)
-                    for bloco in blocos[1:]:
-                        if "```" in bloco:
-                            codigo_html, resto_texto = bloco.split("```", 1)
-                            components.html(codigo_html.strip(), height=450, scrolling=True)
-                            st.markdown(resto_texto, unsafe_allow_html=True)
-                        else:
-                            components.html(bloco.strip(), height=450, scrolling=True)
-                else:
-                    st.markdown(full_response)
+                st.markdown(full_response)
                 
                 guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
                 st.download_button(ui["download_txt"], full_response, "resposta.txt")
