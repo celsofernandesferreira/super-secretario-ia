@@ -10,6 +10,7 @@ import json
 import re
 import io
 import time
+import threading
 import pdfplumber
 import unicodedata
 from zoneinfo import ZoneInfo
@@ -29,6 +30,10 @@ logging.basicConfig(
 def inicializar_bd():
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
+    # Modo WAL: permite leituras normais da app enquanto a sincronização em segundo plano
+    # (numa thread separada) está a escrever, em vez de bloquear tudo à espera.
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA busy_timeout=5000;")
     # Tabela de histórico global
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS historico_global (
@@ -703,28 +708,53 @@ def obter_contagem_indice_paragens():
         logging.error(f"Erro ao contar índice de paragens: {e}")
         return 0
 
+def _sync_horarios_em_background():
+    """Corre numa thread separada — NUNCA chamar st.* aqui dentro (não é seguro fora
+    da thread principal do Streamlit); só regista tudo em log."""
+    try:
+        resultado = sincronizar_todos_horarios_guimabus()
+        logging.info(f"[Segundo plano] Sincronização de horários: {resultado}")
+        resultado_indice = construir_indice_paragens()
+        logging.info(f"[Segundo plano] {resultado_indice}")
+    except Exception as e:
+        logging.error(f"[Segundo plano] Falha na sincronização de horários: {e}")
+
+def _construir_indice_em_background():
+    try:
+        resultado_indice = construir_indice_paragens()
+        logging.info(f"[Segundo plano] {resultado_indice}")
+    except Exception as e:
+        logging.error(f"[Segundo plano] Falha ao construir índice de paragens: {e}")
+
+def _sync_titulos_tarifario_em_background():
+    try:
+        resultado = sincronizar_titulos_e_tarifario()
+        logging.info(f"[Segundo plano] Sincronização de títulos/tarifário: {resultado}")
+    except Exception as e:
+        logging.error(f"[Segundo plano] Falha na sincronização de títulos/tarifário: {e}")
+
 def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
+    """Dispara as sincronizações necessárias em threads de fundo, em vez de bloquear o
+    carregamento da página com um spinner. A pessoa vê a app imediatamente; os dados
+    ficam prontos silenciosamente em segundo plano (normalmente 1-2 minutos para os
+    horários). Se fizeres uma pergunta mesmo nesses primeiros minutos, pode ainda não
+    ter os dados mais recentes — mas a app nunca fica parada à espera."""
     if st.session_state.get("sync_automatico_tentado_nesta_sessao"):
         return
     st.session_state.sync_automatico_tentado_nesta_sessao = True
 
     idade_horarios = obter_idade_cache_horarios_dias()
     if idade_horarios is None or idade_horarios >= limite_dias:
-        with st.spinner("🔄 A atualizar horários da Guimabus pela primeira vez há dias — só demora uma vez, aguarda um pouco..."):
-            resultado = sincronizar_todos_horarios_guimabus()
-            logging.info(f"Sincronização automática de horários executada: {resultado}")
-            resultado_indice = construir_indice_paragens()
-            logging.info(resultado_indice)
+        threading.Thread(target=_sync_horarios_em_background, daemon=True).start()
+        logging.info("Sincronização de horários iniciada em segundo plano (não bloqueia a app).")
     elif obter_contagem_indice_paragens() == 0:
-        with st.spinner("🗺️ A construir o índice de paragens pela primeira vez..."):
-            resultado_indice = construir_indice_paragens()
-            logging.info(f"Índice de paragens construído (cache de horários já estava fresca): {resultado_indice}")
+        threading.Thread(target=_construir_indice_em_background, daemon=True).start()
+        logging.info("Construção do índice de paragens iniciada em segundo plano.")
 
     idade_titulos = obter_idade_cache_titulos_dias()
     if idade_titulos is None or idade_titulos >= limite_dias:
-        with st.spinner("🔄 A atualizar tipologias de passe e tarifário — só demora uma vez, aguarda um pouco..."):
-            resultado = sincronizar_titulos_e_tarifario()
-            logging.info(f"Sincronização automática de títulos/tarifário executada: {resultado}")
+        threading.Thread(target=_sync_titulos_tarifario_em_background, daemon=True).start()
+        logging.info("Sincronização de títulos/tarifário iniciada em segundo plano.")
 
 # --- SCRAPING DINÂMICO: TIPOLOGIAS DE PASSE E TARIFÁRIO ---
 TIPOLOGIAS_PASSE_FALLBACK = {
