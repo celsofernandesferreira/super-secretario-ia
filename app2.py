@@ -10,35 +10,218 @@ import json
 import re
 import io
 import time
-import threading
 import pdfplumber
 import unicodedata
 import folium
-import math
+import email.utils
 from zoneinfo import ZoneInfo
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
-# 1. LOGGING CONFIGURATION (Technical Audit)
+# --- LANGUAGE DICTIONARY ---
+UI_TEXT = {
+    "PT": {
+        "title": "💼 O Teu Super Secretário de Produtividade",
+        "toast_score": "💾 Recorde de {name} ({score} pas.) guardado com sucesso!",
+        "sidebar_panel": "⚙️ Painel do Agente",
+        "clear_history": "🗑️ Limpar O Meu Histórico",
+        "entertainment": "🕹️ Entretenimento",
+        "close_game": "Fechar Jogo X",
+        "open_game": "Abrir Mini-Game 👾",
+        "transport_tickets": "🎫 Títulos de Transporte",
+        "close_ticket": "Fechar Pedido de Passe X",
+        "request_ticket": "Pedir Passe 🎫",
+        "developer": "👨‍💻 Desenvolvedor",
+        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n📞 Contacto: **917 486 683**",
+        "status": "Estado: **Online**\nModelo Nativo: `Gemini-3.5-Flash`",
+        "admin_area": "🔒 Área de Administrador",
+        "login_admin": "Entrar como administrador",
+        "admin_pass": "Password de administrador",
+        "login_btn": "Entrar",
+        "wrong_pass": "Password incorreta.",
+        "admin_active": "Sessão de administrador activa.",
+        "web_auto": "🕷️ Automação Web",
+        "sync_all": "🔄 Sincronizar Todos os Horários (Scraping)",
+        "rebuild_index": "🗺️ Reconstruir Índice de Paragens",
+        "discover_parish": "📍 Descobrir Freguesia de Cada Paragem",
+        "sync_tickets": "🔄 Sincronizar Títulos e Tarifário",
+        "logout_admin": "Sair da área de administrador",
+        "telemetry_db": "📊 Telemetria e BD",
+        "export_db": "📥 Exportar DB SQLite (.db)",
+        "view_logs": "👁️ Ver Logs do Sistema",
+        "global_history": "🗄️ Histórico Permanente Global (BD)",
+        "chat_input": "Como posso ajudar hoje?",
+        "speak": "Falar",
+        "download_txt": "📥 Descarregar Resposta (.txt)",
+        "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.\n2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.\n3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.\n\nComo posso ajudar hoje?",
+        "game_title": "🚌 Guimabus Arcade: Cabine de Condução 🚌",
+        "game_play": "Play ▶",
+        "game_pause": "Pause ⏸",
+        "game_reset": "Reset 🔄",
+        "game_save": "Gravar 💾",
+        "game_name": "Teu Nome",
+        "game_pax": "Passageiros",
+        "game_top10": "🏆 TOP 10 MOTORISTAS",
+        "game_gameover": "FIM DA LINHA",
+        "game_transported": "Transportaste",
+        "game_type_name": "Digita o teu nome no painel abaixo.",
+        "game_alert": "Por favor introduz o teu nome!",
+        "ad_disclaimer": "⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.",
+        "ad_notice": "Aviso",
+        "ticket_title": "🎫 Pedido de Passe — Guimabus",
+        "ticket_warning": "⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão.**",
+        "ticket_updated": "📅 Dados atualizados em:",
+        "ticket_wizard": "🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas",
+        "ticket_age": "A tua idade",
+        "ticket_resident": "Resides no concelho de Guimarães?",
+        "ticket_student": "És estudante?",
+        "ticket_level": "Que nível de ensino?",
+        "ticket_level_opt1": "Até 18 anos",
+        "ticket_level_opt2": "Até 23 anos",
+        "ticket_level_opt3": "Ensino Superior",
+        "ticket_disability": "Grau de incapacidade ≥ 60%?",
+        "ticket_veteran": "Antigo combatente ou viúvo(a)?",
+        "ticket_retirement": "Reforma antecipada (60-65 anos)?",
+        "ticket_cp": "Já tens passe CP?",
+        "ticket_recommend_btn": "🔍 Recomendar tipologia",
+        "ticket_suitable": "A(s) tipologia(s) mais indicada(s):",
+        "ticket_default": "O passe **Mensal** normal é provavelmente a opção aplicável.",
+        "ticket_choose": "Escolhe a tipologia:",
+        "ticket_desc": "**Descrição:**",
+        "ticket_price": "**Preço:**",
+        "ticket_card": "**Custo do cartão:**",
+        "ticket_deadline": "**Prazo / Recarregamento:**",
+        "ticket_docs_req": "**Documentos necessários para esta tipologia:**",
+        "ticket_verify_btn": "🔍 Verificar documentos carregados",
+        "ticket_upload_warn": "Carrega pelo menos um documento.",
+        "ticket_analyzing": "A analisar os documentos (em memória)...",
+        "processing_audio": "A processar e a transcrever o teu áudio...",
+        "processing_agent": "Agente a processar contexto e ferramentas...",
+        "api_limit": "🚫 Limite diário gratuito da API do Gemini esgotado. Tenta novamente mais tarde.",
+        "model_error": "🚫 Não foi possível obter resposta de nenhum modelo disponível neste momento.",
+        "visitor": "Visitante",
+        "agent": "Agente",
+        "robot_reading": "O robô está a ler os dados. Por favor aguarda...",
+        "rebuild_index_spinner": "A reconstruir o índice a partir da cache já existente...",
+        "ask_osm": "A perguntar ao OpenStreetMap onde fica cada paragem...",
+        "robot_reading_tickets": "O robô está a ler titulos/ e tarifarios/...",
+        "audio_error": "Erro ao processar o ficheiro de voz:",
+        "updating_system": "**SISTEMA EM ATUALIZAÇÃO:** A descarregar novos horários e pacotes de dados. O agente está temporariamente bloqueado para evitar falhas. Por favor, aguarda (pode demorar 1-2 minutos)..."
+    },
+    "EN": {
+        "title": "💼 Your Super Productivity Secretary",
+        "toast_score": "💾 Score for {name} ({score} pax) saved successfully!",
+        "sidebar_panel": "⚙️ Agent Panel",
+        "clear_history": "🗑️ Clear My History",
+        "entertainment": "🕹️ Entertainment",
+        "close_game": "Close Game X",
+        "open_game": "Open Mini-Game 👾",
+        "transport_tickets": "🎫 Transport Tickets",
+        "close_ticket": "Close Ticket Request X",
+        "request_ticket": "Request Ticket 🎫",
+        "developer": "👨‍💻 Developer",
+        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n📞 Contact: **917 486 683**",
+        "status": "Status: **Online**\nNative Model: `Gemini-3.5-Flash`",
+        "admin_area": "🔒 Administrator Area",
+        "login_admin": "Login as Administrator",
+        "admin_pass": "Admin Password",
+        "login_btn": "Login",
+        "wrong_pass": "Incorrect password.",
+        "admin_active": "Admin session active.",
+        "web_auto": "🕷️ Web Automation",
+        "sync_all": "🔄 Sync All Schedules (Scraping)",
+        "rebuild_index": "🗺️ Rebuild Stop Index",
+        "discover_parish": "📍 Discover Parish for Each Stop",
+        "sync_tickets": "🔄 Sync Tickets and Tariff",
+        "logout_admin": "Logout of Administrator Area",
+        "telemetry_db": "📊 Telemetry and DB",
+        "export_db": "📥 Export SQLite DB (.db)",
+        "view_logs": "👁️ View System Logs",
+        "global_history": "🗄️ Global Permanent History (DB)",
+        "chat_input": "How can I help you today?",
+        "speak": "Speak",
+        "download_txt": "📥 Download Response (.txt)",
+        "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Executive Mode:** Guimabus fleet monitoring and Knowledge Base consultation.\n2. **Tech Recruiter Mode:** Tell me *'I want to train for an interview'* to simulate technical tests in English.\n3. **Tech Helpdesk Mode:** Send me an IT problem or failure and I will show you how Celso would solve the situation.\n\nHow can I help you today?",
+        "game_title": "🚌 Guimabus Arcade: Driving Cabin 🚌",
+        "game_play": "Play ▶",
+        "game_pause": "Pause ⏸",
+        "game_reset": "Reset 🔄",
+        "game_save": "Save 💾",
+        "game_name": "Your Name",
+        "game_pax": "Passengers",
+        "game_top10": "🏆 TOP 10 DRIVERS",
+        "game_gameover": "END OF THE LINE",
+        "game_transported": "You transported",
+        "game_type_name": "Type your name below.",
+        "game_alert": "Please enter your name!",
+        "ad_disclaimer": "⚠️ Important Notice: This is a support and preliminary verification tool. It is not an official Guimabus submission channel.",
+        "ad_notice": "Notice",
+        "ticket_title": "🎫 Guimabus Ticket Request",
+        "ticket_warning": "⚠️ **Important warning:** this form is a support and preliminary verification tool. **It is not an official submission channel.**",
+        "ticket_updated": "📅 Data updated on:",
+        "ticket_wizard": "🧭 Don't know which type fits you? Answer these questions",
+        "ticket_age": "Your age",
+        "ticket_resident": "Do you reside in the Guimarães municipality?",
+        "ticket_student": "Are you a student?",
+        "ticket_level": "Education level?",
+        "ticket_level_opt1": "Up to 18 years",
+        "ticket_level_opt2": "Up to 23 years",
+        "ticket_level_opt3": "Higher Education",
+        "ticket_disability": "Disability degree ≥ 60%?",
+        "ticket_veteran": "War veteran or widow(er)?",
+        "ticket_retirement": "Early retirement (60-65 years)?",
+        "ticket_cp": "Already have a CP train pass?",
+        "ticket_recommend_btn": "🔍 Recommend ticket type",
+        "ticket_suitable": "Most suitable type(s):",
+        "ticket_default": "The standard **Mensal** pass is likely your best option.",
+        "ticket_choose": "Choose the ticket type:",
+        "ticket_desc": "**Description:**",
+        "ticket_price": "**Price:**",
+        "ticket_card": "**Card Cost:**",
+        "ticket_deadline": "**Deadline / Recharge:**",
+        "ticket_docs_req": "**Required documents for this type:**",
+        "ticket_verify_btn": "🔍 Verify uploaded documents",
+        "ticket_upload_warn": "Upload at least one document.",
+        "ticket_analyzing": "Analyzing documents (in memory)...",
+        "processing_audio": "Processing and transcribing your audio...",
+        "processing_agent": "Agent processing context and tools...",
+        "api_limit": "🚫 Gemini API daily free limit reached. Please try again later.",
+        "model_error": "🚫 Could not get a response from any available models right now.",
+        "visitor": "Visitor",
+        "agent": "Agent",
+        "robot_reading": "The robot is reading the data. Please wait...",
+        "rebuild_index_spinner": "Rebuilding index from existing cache...",
+        "ask_osm": "Querying OpenStreetMap for each stop's parish...",
+        "robot_reading_tickets": "The robot is reading tickets/ and tariff/...",
+        "audio_error": "Error processing voice file:",
+        "updating_system": "**SYSTEM UPDATING:** Downloading new schedules and data packages. The agent is temporarily locked to avoid failures. Please wait (may take 1-2 minutes)..."
+    }
+}
+
+# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
 logging.basicConfig(
-    filename="agent_audit.log",
+    filename="auditoria_agente.log",
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     encoding="utf-8"
 )
 
-# 2. DATABASE CONFIGURATION (Persistent SQLite)
-def initialize_db():
-    conn = sqlite3.connect("agent_memory.db")
+# 2. CONFIGURAÇÃO DA BASE DE DADOS (SQLite Persistente com High Scores e Cache de Horários)
+def get_db_connection():
+    conn = sqlite3.connect("agente_memoria.db", timeout=15.0) 
     cursor = conn.cursor()
-    # WAL Mode for better concurrency
     cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA busy_timeout=5000;")
+    return conn
+
+def inicializar_bd():
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
-    # Global history table
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS global_history (
+        CREATE TABLE IF NOT EXISTS historico_global (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
             session_id TEXT,
@@ -46,204 +229,224 @@ def initialize_db():
             content TEXT
         )
     """)
-    # High Scores System
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS high_scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
-            name TEXT,
-            score INTEGER
+            nome TEXT,
+            pontor INTEGER
         )
     """)
-    # Local Schedules Cache
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS schedule_cache (
-            line TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS cache_horarios (
+            linha TEXT PRIMARY KEY,
             url TEXT,
-            content_txt TEXT,
+            conteudo_txt TEXT,
             last_updated TEXT
         )
     """)
-    # Ticket Types Cache (scraped from guimabus.pt)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ticket_cache (
-            ticket_type TEXT PRIMARY KEY,
-            description TEXT,
-            price TEXT,
-            card_cost TEXT,
-            deadline TEXT,
-            documents_json TEXT,
-            last_updated TEXT
+        CREATE TABLE IF NOT EXISTS cache_titulos (
+            tipologia TEXT PRIMARY KEY,
+            descricao TEXT,
+            preco TEXT,
+            custo_cartao TEXT,
+            prazo TEXT,
+            documentos_json TEXT,
+            ultima_atualizacao TEXT
         )
     """)
-    # Tariff Cache (scraped from guimabus.pt)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tariff_cache (
+        CREATE TABLE IF NOT EXISTS cache_tarifario (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             url_pdf TEXT,
-            content_txt TEXT,
-            last_updated TEXT
+            conteudo_txt TEXT,
+            ultima_atualizacao TEXT
         )
     """)
-    # Stop <-> Line Index
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stop_line_cache (
-            line TEXT,
-            stop TEXT,
-            PRIMARY KEY (line, stop)
+        CREATE TABLE IF NOT EXISTS cache_paragens_linha (
+            linha TEXT,
+            paragem TEXT,
+            PRIMARY KEY (linha, paragem)
         )
     """)
-    # Line Title Cache
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS line_title_cache (
-            line TEXT PRIMARY KEY,
-            title TEXT,
-            last_updated TEXT
+        CREATE TABLE IF NOT EXISTS cache_titulo_linha (
+            linha TEXT PRIMARY KEY,
+            titulo TEXT,
+            ultima_atualizacao TEXT
         )
     """)
-    # Stop Parish Cache (Nominatim Geocoding)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stop_parish_cache (
-            stop TEXT PRIMARY KEY,
-            parish TEXT,
-            source TEXT,
-            last_updated TEXT
+        CREATE TABLE IF NOT EXISTS cache_paragem_freguesia (
+            paragem TEXT PRIMARY KEY,
+            freguesia TEXT,
+            fonte TEXT,
+            ultima_atualizacao TEXT
         )
     """)
-    # Unified Geographic Nodes
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS geographic_nodes (
+        CREATE TABLE IF NOT EXISTS nos_geograficos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT, 
-            name TEXT,
-            parish TEXT,
+            tipo TEXT, 
+            nome TEXT,
+            freguesia TEXT,
             latitude REAL,
             longitude REAL,
-            associated_lines TEXT, 
-            last_updated TEXT
+            linhas_associadas TEXT, 
+            ultima_atualizacao TEXT
         )
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_node_names ON geographic_nodes(name);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
 
     conn.commit()
     conn.close()
 
-def save_message_db(session_id, role, content):
+def guardar_mensagem_bd(session_id, role, content):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
-            "INSERT INTO global_history (timestamp, session_id, role, content) VALUES (?, ?, ?, ?)",
+            "INSERT INTO historico_global (timestamp, session_id, role, content) VALUES (?, ?, ?, ?)",
             (timestamp, session_id, role, content)
         )
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Error saving to Database: {e}")
+        logging.error(f"Erro ao gravar na Base de Dados: {e}")
 
-def get_top_10_scores():
+def obter_top_10():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT name, score FROM high_scores ORDER BY score DESC, id ASC LIMIT 10")
-        results = cursor.fetchall()
+        cursor.execute("SELECT nome, pontor FROM high_scores ORDER BY pontor DESC, id ASC LIMIT 10")
+        resultados = cursor.fetchall()
         conn.close()
-        return results
+        return resultados
     except Exception as e:
-        logging.error(f"Error reading High Scores: {e}")
+        logging.error(f"Erro ao ler High Scores: {e}")
         return []
 
-def save_score_db(name, score):
+def guardar_score_bd(nome, pontor):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         cursor.execute(
-            "INSERT INTO high_scores (timestamp, name, score) VALUES (?, ?, ?)",
-            (timestamp, name, score)
+            "INSERT INTO high_scores (timestamp, nome, pontor) VALUES (?, ?, ?)",
+            (timestamp, nome, pontor)
         )
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Error saving High Score: {e}")
+        logging.error(f"Erro ao gravar High Score: {e}")
 
-initialize_db()
+inicializar_bd()
 
-# 3. Page Configuration
-st.set_page_config(page_title="Super Secretary AI", page_icon="💼", layout="wide")
-st.title("💼 Your Super Productivity Secretary")
+# 3. Configuração da página 
+st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 
-# Unique Session Identifier
+# Inicialização do Dicionário e Toggle
+if "language" not in st.session_state:
+    st.session_state.language = "PT"
+ui = UI_TEXT[st.session_state.language]
+
+col1, col2, col3 = st.columns([12, 1, 1])
+with col1:
+    st.title(ui["title"])
+with col2:
+    if st.button("🇵🇹 PT", use_container_width=True):
+        st.session_state.language = "PT"
+        st.rerun()
+with col3:
+    if st.button("🇬🇧 EN", use_container_width=True):
+        st.session_state.language = "EN"
+        st.rerun()
+
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# URL Parameters for Arcade High Scores
+# --- CAPTURA DE RECORDES VIA URL ---
 query_params = st.query_params
-if "save_name" in query_params and "save_score" in query_params:
-    record_name = query_params["save_name"].upper()
-    record_score = int(query_params["save_score"])
+if "save_nome" in query_params and "save_pontos" in query_params:
+    nome_recorde = query_params["save_nome"].upper()
+    pontos_recorde = int(float(query_params["save_pontos"]))
     
-    save_score_db(record_name, record_score)
-    st.toast(f"💾 Score for {record_name} ({record_score} pax) saved successfully!")
+    guardar_score_bd(nome_recorde, pontos_recorde)
+    st.toast(ui["toast_score"].replace("{name}", nome_recorde).replace("{score}", str(pontos_recorde)))
     
     st.query_params.clear()
     st.rerun()
 
-# 4. Advanced CSS Injection
+# 4. Injeção de CSS Avançado
 st.markdown("""
     <style>
-        .stChatInputContainer {
-            position: relative;
-        }
-        .stChatInputContainer textarea {
-            padding-left: 55px !important;
-        }
+        .stChatInputContainer { position: relative; }
+        .stChatInputContainer textarea { padding-left: 55px !important; }
         div[data-testid="stAudioInput"] {
-            position: absolute;
-            left: 12px;
-            bottom: 8px;
-            z-index: 9999;
-            width: 38px !important;
-            height: 38px !important;
-            background: transparent !important;
+            position: absolute; left: 12px; bottom: 8px; z-index: 9999;
+            width: 38px !important; height: 38px !important; background: transparent !important;
         }
-        div[data-testid="stAudioInput"] > div {
-            background: transparent !important;
-            border: none !important;
-            padding: 0 !important;
-            box-shadow: none !important;
-        }
-        div[data-testid="stAudioInput"] label {
-            display: none !important;
-        }
+        div[data-testid="stAudioInput"] > div { background: transparent !important; border: none !important; padding: 0 !important; box-shadow: none !important; }
+        div[data-testid="stAudioInput"] label { display: none !important; }
     </style>
 """, unsafe_allow_html=True)
 
-# 5. Gemini API Initialization
+# 5. Inicialização da API do Gemini
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
-    st.error("Error: API Key missing in Streamlit Secrets.")
-    logging.error("Failed to initialize app: API Key missing.")
+    st.error("Erro: Chave API em falta nos Secrets do Streamlit.")
     st.stop()
+
+# --- NATIVE DATE EXTRACTOR ---
+def extrair_data_futura(texto):
+    PT_MONTHS = {
+        "janeiro": 1, "jan": 1, "fevereiro": 2, "fev": 2, "março": 3, "mar": 3,
+        "abril": 4, "abr": 4, "maio": 5, "mai": 5, "junho": 6, "jun": 6,
+        "julho": 7, "jul": 7, "agosto": 8, "ago": 8, "setembro": 9, "set": 9,
+        "outubro": 10, "out": 10, "novembro": 11, "nov": 11, "dezembro": 12, "dez": 12
+    }
+    
+    now = datetime.now()
+    current_year = now.year
+    found_dates = []
+
+    for m in re.finditer(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b', texto):
+        dia, mes = int(m.group(1)), int(m.group(2))
+        ano = int(m.group(3)) if m.group(3) else current_year
+        if ano < 100: ano += 2000
+        try: found_dates.append(datetime(ano, mes, dia))
+        except ValueError: pass
+
+    for m in re.finditer(r'\b(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(\d{4}))?\b', texto.lower()):
+        dia = int(m.group(1))
+        mes_str = m.group(2)
+        ano = int(m.group(3)) if m.group(3) else current_year
+        if mes_str in PT_MONTHS:
+            try: found_dates.append(datetime(ano, PT_MONTHS[mes_str], dia))
+            except ValueError: pass
+
+    if found_dates: return max(found_dates) 
+    return None
 
 # --- FACEBOOK RSS INTEGRATION ---
 @st.cache_data(ttl=3600)
-def get_facebook_warnings():
+def obter_avisos_facebook():
     rss_url = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     active_warnings = []
     
-    now = datetime.now(ZoneInfo("Europe/Lisbon"))
-    today_str = now.strftime("%d de %B de %Y") # PT format for the LLM context
+    agora_utc = datetime.now(timezone.utc)
+    agora_local = datetime.now()
 
     try:
         response = requests.get(rss_url, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
         items = soup.find_all("item")
-        posts = []
         
-        for i, item in enumerate(items[:10]):
+        for item in items[:15]: 
             title = item.find("title").text if item.find("title") else "Warning"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
@@ -251,51 +454,49 @@ def get_facebook_warnings():
             
             enclosure = item.find("enclosure")
             img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
-            
             if not img_url and desc:
                 img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match:
-                    img_url = img_match.group(1)
+                if img_match: img_url = img_match.group(1)
             
-            posts.append({
-                "id": i, 
-                "title": title, 
-                "text": clean_text, 
-                "image": img_url
-            })
+            texto_minusculas = clean_text.lower() + " " + title.lower()
+            
+            if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
+                continue
 
-        prompt = f"""
-        Today is {today_str}. Analyze the posts below.
-        1. Identify the expiration date of each warning.
-        2. If the expiration date has passed relative to {today_str}, consider the warning EXPIRED.
-        3. If the warning is about roadworks/traffic/strikes (obras/trânsito/greves), priority 5. Otherwise, priority 1.
-        4. Return ONLY a JSON array: [ {{"id": 0, "priority": 5}}, ... ] (only the ACTIVE ones).
-        Posts: {json.dumps(posts, ensure_ascii=False)}
-        """
-        
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        resp = model.generate_content(prompt)
-        match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
-        
-        if match:
-            result = json.loads("[" + match.group(1) + "]")
-            for r in result:
-                p = next((x for x in posts if x["id"] == r["id"]), None)
-                if p:
-                    active_warnings.append({
-                        "text": p["text"], 
-                        "image": p["image"], 
-                        "priority": r["priority"]
-                    })
-            active_warnings.sort(key=lambda x: x["priority"], reverse=True)
+            data_fim_texto = extrair_data_futura(texto_minusculas)
+            
+            if data_fim_texto:
+                if data_fim_texto < agora_local: continue
+                prioridade_calculada = 30 
+                
+            else:
+                pub_date_node = item.find("pubDate")
+                dias_passados = 0
+                if pub_date_node:
+                    try:
+                        data_post = email.utils.parsedate_to_datetime(pub_date_node.text)
+                        dias_passados = (agora_utc - data_post).days
+                    except Exception: pass
+                
+                if dias_passados > 7: continue
+                prioridade_calculada = 10 - dias_passados 
+                
+                palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
+                if any(kw in texto_minusculas for kw in palavras_criticas): prioridade_calculada += 20
+            
+            texto_final = clean_text if len(clean_text) > 5 else title
+            active_warnings.append({"text": texto_final, "image": img_url, "priority": prioridade_calculada})
+            
+        active_warnings.sort(key=lambda x: x["priority"], reverse=True)
+        return active_warnings[:4]
             
     except Exception as e:
-        logging.error(f"RSS Error: {e}")
+        logging.error(f"RSS Native Error: {e}")
+        
     return active_warnings
 
-def render_ad_footer(active_ads):
+def renderizar_rodape_anuncios(active_ads, ui):
     if not active_ads: return
-    
     js_data = json.dumps(active_ads)
     
     footer_html = f"""
@@ -306,33 +507,19 @@ def render_ad_footer(active_ads):
             border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
             display: flex; flex-direction: column; overflow: hidden;
         }}
-        .disclaimer {{
-            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
-            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
-        }}
-        .content-area {{ 
-            display: flex; align-items: center; flex: 1; padding: 0 20px; 
-        }}
+        .disclaimer {{ background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px; text-align: center; font-weight: bold; border-bottom: 1px solid #444; }}
+        .content-area {{ display: flex; align-items: center; flex: 1; padding: 0 20px; }}
         .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
         #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
         .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
-        #ticker-text {{ 
-            position: absolute; white-space: nowrap; font-size: 20px; 
-            font-weight: bold; top: 35px; left: 50%;
-        }}
+        #ticker-text {{ position: absolute; white-space: nowrap; font-size: 20px; font-weight: bold; top: 35px; left: 50%; }}
     </style>
     
     <div class="footer-wrapper">
-        <div class="disclaimer">
-            ⚠️ Important Notice: This is a support and preliminary verification tool. It is not an official Guimabus submission channel.
-        </div>
+        <div class="disclaimer">{ui['ad_disclaimer']}</div>
         <div class="content-area">
-            <div class="img-box">
-                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
-            </div>
-            <div class="text-container">
-                <div id="ticker-text"></div>
-            </div>
+            <div class="img-box"><img id="ticker-img" src="" onclick="window.open(this.src, '_blank');"></div>
+            <div class="text-container"><div id="ticker-text"></div></div>
         </div>
     </div>
 
@@ -345,33 +532,21 @@ def render_ad_footer(active_ads):
 
         async function runTicker() {{
             const a = ads[index];
-            
-            txt.innerText = "🚨 " + (a.text || a.title || "Notice");
+            txt.innerText = "🚨 " + (a.text || a.title || "{ui['ad_notice']}");
             
             if (a.image && a.image.trim() !== "") {{
-                img.src = a.image;
-                img.style.display = "block";
-                img.style.visibility = "visible";
-            }} else {{
-                img.style.display = "none";
-            }}
+                img.src = a.image; img.style.display = "block"; img.style.visibility = "visible";
+            }} else {{ img.style.display = "none"; }}
             
-            txt.style.animation = 'none';
-            txt.offsetHeight;
-            txt.style.animation = 'scroll-left 25s linear infinite';
+            txt.style.animation = 'none'; txt.offsetHeight; txt.style.animation = 'scroll-left 25s linear infinite';
             
             let pos = container.offsetWidth / 2;
             txt.style.left = pos + "px";
             
             function animate() {{
-                pos -= 2; 
-                txt.style.left = pos + "px";
-                if (pos < -txt.offsetWidth) {{
-                    index = (index + 1) % ads.length;
-                    setTimeout(runTicker, 2000); 
-                }} else {{
-                    requestAnimationFrame(animate);
-                }}
+                pos -= 2; txt.style.left = pos + "px";
+                if (pos < -txt.offsetWidth) {{ index = (index + 1) % ads.length; setTimeout(runTicker, 2000); }} 
+                else {{ requestAnimationFrame(animate); }}
             }}
             animate();
         }}
@@ -381,188 +556,158 @@ def render_ad_footer(active_ads):
     components.html(footer_html, height=170)
 
 # --- GEOGRAPHIC FUNCTIONS ---
+def _normalizar_nome_paragem(texto: str):
+    t = re.sub(r'\bsão\b', 's.', texto.lower().strip())
+    t = re.sub(r'\bsanta\b', 'sta.', t)
+    t = re.sub(r'\bsanto\b', 'sto.', t).replace('.', '')
+    t = unicodedata.normalize('NFKD', t)
+    return re.sub(r'\s+', ' ', ''.join(c for c in t if not unicodedata.combining(c))).strip()
+
 def normalize_search_name(text):
     if not text: return ""
     t = text.lower().strip()
     t = unicodedata.normalize('NFKD', t)
     t = ''.join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r'[^a-z0-9]', '_', t)
-    t = re.sub(r'_+', '_', t).strip('_')
-    return t
+    return re.sub(r'_+', '_', re.sub(r'[^a-z0-9]', '_', t)).strip('_')
 
 @st.cache_data
 def load_static_map():
     try:
-        with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logging.error(f"Error loading geo_guimaraes.json: {e}")
-        return {}
+        with open("geo_guimaraes.json", "r", encoding="utf-8") as f: return json.load(f)
+    except Exception: return {}
 
 LOCAL_MAP = load_static_map()
 
 def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0 
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
+    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c * 1000 
+    return 6371.0 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)) * 1000 
 
 def find_closest_stop(location_name: str):
-    """Finds the closest bus stop to any cafe, street, or factory."""
-    if not LOCAL_MAP:
-        return "Static map is not loaded. Check the geo_guimaraes.json file."
-
+    if not LOCAL_MAP: return "Static map is not loaded. Check the geo_guimaraes.json file."
     search_key = normalize_search_name(location_name)
-    found_location = None
+    found_location = next((data for key, data in LOCAL_MAP.items() if search_key in key or key in search_key), None)
+    if not found_location: return f"Could not locate '{location_name}' in the static map."
 
-    for key, data in LOCAL_MAP.items():
-        if search_key in key or key in search_key:
-            found_location = data
-            break
-
-    if not found_location:
-        return f"Could not locate '{location_name}' in the static map of Guimarães."
-
-    lat_origin = found_location["lat"]
-    lon_origin = found_location["lon"]
-
-    closest_stop = None
-    shortest_distance = float('inf')
+    lat_origin, lon_origin = found_location["lat"], found_location["lon"]
+    closest_stop, shortest_dist = None, float('inf')
 
     for key, data in LOCAL_MAP.items():
         if data.get("type") in ["bus_stop", "public_transport"]:
             dist = calculate_distance(lat_origin, lon_origin, data["lat"], data["lon"])
-            if dist < shortest_distance:
-                shortest_distance = dist
-                closest_stop = data["nome_real"] # Assuming JSON keeps the PT keys
+            if dist < shortest_dist: shortest_dist, closest_stop = dist, data["nome_real"]
 
-    if closest_stop:
-        return f"The location '{found_location['nome_real']}' is {int(shortest_distance)} meters away from the '{closest_stop}' bus stop."
-    else:
-        return "Location found, but no bus stops in the vicinity."
+    if closest_stop: return f"The location '{found_location['nome_real']}' is {int(shortest_dist)} meters away from the '{closest_stop}' bus stop."
+    return "Location found, but no bus stops in the vicinity."
 
 def generate_google_maps_link(location_name: str):
-    """Searches the static JSON and generates a Maps link"""
-    if not LOCAL_MAP:
-        return "Static map not properly loaded."
-
-    search_key = normalize_search_name(location_name)
+    nome_norm = _normalizar_nome_paragem(location_name)
     
-    for map_key, local_data in LOCAL_MAP.items():
-        if search_key in map_key or map_key in search_key:
-            real_name = local_data["nome_real"]
-            lat = local_data["lat"]
-            lon = local_data["lon"]
-            maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            return f"📍 Found exact location for '{real_name}'. Open in Google Maps here: {maps_link}"
-            
-    return f"Could not find '{location_name}' in Guimarães static map."
-
-def generate_line_map_html(line_id):
-    """Generates a Folium map by cross-referencing SQLite cache with Static JSON"""
-    os.makedirs("maps", exist_ok=True)
-    
-    conn = sqlite3.connect("agent_memory.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT stop FROM stop_line_cache WHERE line = ? OR line = ?", (line_id, str(line_id).zfill(3)))
-    line_stops = [row[0] for row in cursor.fetchall()]
+    cursor.execute("""
+        SELECT nome, latitude, longitude FROM nos_geograficos 
+        WHERE _normalizar_nome_paragem(nome) LIKE ? LIMIT 1
+    """, (f"%{nome_norm}%",))
+    resultado = cursor.fetchone()
     conn.close()
     
-    if not line_stops:
-        return "No cached stops for this line."
+    if resultado:
+        nome_real, lat, lon = resultado
+        link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir diretamente no Google Maps aqui: {link_maps}"
     
-    route_coordinates = []
-    stops_with_coords = []
+    return f"Não consegui encontrar coordenadas GPS em cache para '{location_name}'."
+
+def consultar_base_geografica_tool(termo_pesquisa: str):
+    """Procura na base de dados geográfica (JSON e SQLite) por locais, POIs, ruas ou paragens, devolvendo coordenadas e freguesia."""
+    if not termo_pesquisa: return "É necessário indicar um termo de pesquisa."
+    termo_norm = _normalizar_nome_paragem(termo_pesquisa)
+    resultados = []
     
+    if LOCAL_MAP:
+        for chave, dados in LOCAL_MAP.items():
+            if termo_norm in chave or chave in termo_norm:
+                resultados.append(f"[JSON] {dados.get('nome_real', chave)} (Tipo: {dados.get('tipo', 'poi')}) - Lat: {dados['lat']}, Lon: {dados['lon']}")
+    try:
+        conn = get_db_connection()
+        db_data = conn.execute("SELECT tipo, nome, freguesia, latitude, longitude FROM nos_geograficos").fetchall()
+        conn.close()
+        for r in db_data:
+            nome_bd_norm = _normalizar_nome_paragem(r[1]) if r[1] else ""
+            if termo_norm in nome_bd_norm or nome_bd_norm in termo_norm:
+                freg = f" (Freguesia: {r[2]})" if r[2] else ""
+                resultados.append(f"[SQLite] {r[1]}{freg} (Tipo: {r[0]}) - Lat: {r[3]}, Lon: {r[4]}")
+    except Exception as e:
+        pass
+    
+    if resultados:
+        return f"Encontrei {len(resultados)} locais para '{termo_pesquisa}':\n" + "\n".join(resultados[:20])
+    return f"Não encontrei '{termo_pesquisa}' no JSON nem na base de dados local."
+
+def generate_line_map_html(linha_id):
+    os.makedirs("maps", exist_ok=True)
+    conn = get_db_connection()
+    line_stops = [row[0] for row in conn.execute("SELECT stop FROM stop_line_cache WHERE line = ? OR line = ?", (linha_id, str(linha_id).zfill(3))).fetchall()]
+    conn.close()
+    
+    if not line_stops: return "No cached stops for this line."
+    
+    route_coordinates, stops_with_coords = [], []
     for stop in line_stops:
         search_key = normalize_search_name(stop)
         for k, v in LOCAL_MAP.items():
             if search_key in k or k in search_key:
                 route_coordinates.append([v["lat"], v["lon"]])
-                stops_with_coords.append({
-                    "name": stop,
-                    "lat": v["lat"],
-                    "lon": v["lon"]
-                })
+                stops_with_coords.append({"name": stop, "lat": v["lat"], "lon": v["lon"]})
                 break
     
-    if not stops_with_coords:
-        return "Not enough geographic data to map this line."
+    if not stops_with_coords: return "Not enough geographic data to map this line."
         
     map_obj = folium.Map(location=[stops_with_coords[0]["lat"], stops_with_coords[0]["lon"]], zoom_start=13, tiles="OpenStreetMap")
-    
     for p in stops_with_coords:
-        popup_text = f"<b>Stop:</b> {p['name']}<br><b>Line:</b> {line_id}"
-        folium.Marker(
-            location=[p["lat"], p["lon"]],
-            popup=folium.Popup(popup_text, max_width=300),
-            icon=folium.Icon(color="green", icon="bus", prefix="fa")
-        ).add_to(map_obj)
+        folium.Marker(location=[p["lat"], p["lon"]], popup=folium.Popup(f"<b>Stop:</b> {p['name']}<br><b>Line:</b> {linha_id}", max_width=300), icon=folium.Icon(color="green", icon="bus", prefix="fa")).add_to(map_obj)
         
-    if len(route_coordinates) > 1:
-        folium.PolyLine(route_coordinates, color="blue", weight=3, opacity=0.7).add_to(map_obj)
+    if len(route_coordinates) > 1: folium.PolyLine(route_coordinates, color="blue", weight=3, opacity=0.7).add_to(map_obj)
         
-    file_path = f"maps/line_{line_id}.html"
+    file_path = f"maps/linha_{linha_id}.html"
     map_obj.save(file_path)
     return file_path
 
 # --- CONTEXT TOOLS ---
-def _extract_vehicle_list(data):
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
+def _extrair_lista_veiculos(dados):
+    if isinstance(dados, list): return dados
+    if isinstance(dados, dict):
         for key in ("vehicles", "data", "results", "items", "veiculos"):
-            val = data.get(key)
-            if isinstance(val, list):
-                return val
+            if isinstance(data.get(key), list): return data.get(key)
         for val in data.values():
-            if isinstance(val, list):
-                return val
+            if isinstance(val, list): return val
     return []
 
-def _first_value(dictionary, keys, default=None):
-    for key in keys:
-        if isinstance(dictionary, dict) and key in dictionary and dictionary[key] is not None:
-            return dictionary[key]
+def _primeiro_valor(dicionario, chaves, default=None):
+    for chave in chaves:
+        if isinstance(dicionario, dict) and chave in dicionario and dicionario[chave] is not None:
+            return dicionario[chave]
     return default
 
-KNOWN_STOPS_DICTIONARY = {
-    "vaca negra": "1103",
-    "central": "1001",
-    "hospital": "1045",
-    "universidade": "1022",
-    "estacao": "1005"
-}
+DICIONARIO_PARAGENS_CONHECIDAS = {"vaca negra": "1103", "central": "1001", "hospital": "1045", "universidade": "1022", "estacao": "1005"}
 
 @st.cache_data(ttl=60)
-def get_guimabus_data(route_id: str = None):
+def obter_dados_guimabus(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
-    url = "https://gmr.elevensystems.pt/api/locations"
     params = {"passengerInfo": "true"}
-    if route_id:
-        params["routeId"] = route_id
-
+    if route_id: params["routeId"] = route_id
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=8)
+        response = requests.get("https://gmr.elevensystems.pt/api/locations", headers=headers, params=params, timeout=8)
         response.raise_for_status()
+        try: data = response.json()
+        except ValueError: return "Unable to read Guimabus data."
+        vehicles = _extrair_lista_veiculos(data)
+        if not vehicles: return f"There are currently no buses in circulation."
 
-        try:
-            data = response.json()
-        except ValueError:
-            return "Unable to read Guimabus data (unexpected response format)."
-
-        vehicles = _extract_vehicle_list(data)
-        if not vehicles:
-            line_txt = f" on line {route_id}" if route_id else ""
-            return f"There are currently no buses{line_txt} in circulation."
-
-        total_delay = 0
-        delayed_count = 0
-        summary = "Real-time fleet data (Guimabus):\n"
+        total_delay, delayed_count, summary = 0, 0, "Real-time fleet data (Guimabus):\n"
         for bus in vehicles:
-            bus_id = _first_value(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
+            bus_id = _primeiro_valor(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
             line = _first_value(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
             status = _first_value(bus, ["busStatus", "status", "state"], "N/A")
             delay = _first_value(bus, ["delay", "delayMinutes", "delay_min"], None)
@@ -575,1525 +720,990 @@ def get_guimabus_data(route_id: str = None):
                 total_delay += delay
                 delayed_count += 1
 
-        if delayed_count > 0:
-            avg_delay = total_delay / delayed_count
-            summary += f"\n--- Statistic: Average fleet delay: {avg_delay:.1f} minutes. ---"
+        if delayed_count > 0: summary += f"\n--- Statistic: Average fleet delay: {total_delay / delayed_count:.1f} minutes. ---"
         return summary
-    except Exception as e:
-        return f"Tracking connection error: {e}"
+    except Exception as e: return f"Tracking connection error: {e}"
 
 @st.cache_data(ttl=30)
-def get_stop_schedules(stop_id: str):
-    if not stop_id:
-        return "Stop ID is required."
-    
+def obter_horarios_paragem(stop_id: str):
+    if not stop_id: return "Stop ID is required."
     source_text = str(stop_id).strip().lower()
-    numeric_id = None
-    
-    for name_p, id_p in KNOWN_STOPS_DICTIONARY.items():
-        if name_p in source_text:
-            numeric_id = id_p
-            break
+    numeric_id = next((id_p for name_p, id_p in DICIONARIO_PARAGENS_CONHECIDAS.items() if name_p in source_text), None)
             
     if numeric_id or source_text.isdigit():
         target_id = numeric_id if numeric_id else source_text
-        headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
-        url = f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes"
-        params = {"shape": "true", "passengerInfo": "true"}
-
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=5)
+            response = requests.get(f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes", headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}, params={"shape": "true", "passengerInfo": "true"}, timeout=5)
             response.raise_for_status()
-            data = response.json()
-            routes = _extract_vehicle_list(data)
+            routes = _extrair_lista_veiculos(response.json())
             if routes:
                 summary = f"Real-time forecasts for stop {target_id}:\n"
                 for route in routes:
                     line = _first_value(route, ["line", "lineName", "route", "routeShortName", "routeId"], "N/A")
                     dest = _first_value(route, ["destination", "headsign", "direction"], None)
                     eta = _first_value(route, ["eta", "etaMinutes", "waitTime", "waitingTime", "arrivalTime", "nextArrival"], None)
-                    dest_txt = f" → {dest}" if dest else ""
-                    eta_txt = f"{eta} min" if eta is not None else "no forecast"
-                    summary += f"- Line {line}{dest_txt}: {eta_txt}\n"
+                    summary += f"- Line {line}{f' → {dest}' if dest else ''}: {f'{eta} min' if eta is not None else 'no forecast'}\n"
                 return summary
-        except Exception:
-            pass
+        except Exception: pass
 
     try:
         search_terms = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', source_text).split()
-        if not search_terms:
-            search_terms = [source_text]
-
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        
-        conditions = " AND ".join(["content_txt LIKE ?" for _ in search_terms])
-        values = [f"%{term}%" for term in search_terms]
-        
-        query_sql = f"SELECT line, content_txt FROM schedule_cache WHERE {conditions}"
-        cursor.execute(query_sql, values)
-        found_lines = cursor.fetchall()
+        if not search_terms: search_terms = [source_text]
+        conn = get_db_connection()
+        query_sql = f"SELECT linha, conteudo_txt FROM cache_horarios WHERE {' AND '.join(['conteudo_txt LIKE ?' for _ in search_terms])}"
+        found_lines = conn.execute(query_sql, [f"%{term}%" for term in search_terms]).fetchall()
         conn.close()
         
         if found_lines:
-            search_result = f"Scanned local schedule cache and successfully identified lines referencing '{stop_id}':\n"
+            search_result = f"Scanned local schedule cache and identified lines referencing '{stop_id}':\n"
             for row in found_lines:
-                num_line = row[0]
-                full_text = row[1]
-                
-                text_lines = full_text.split("\n")
-                relevant_snippet = []
-                for l in text_lines:
-                    if any(term in l.lower() for term in search_terms) or "página" in l.lower() or "tabela" in l.lower():
-                        relevant_snippet.append(l)
-                
-                line_context = "\n".join(relevant_snippet[:25])
-                search_result += f"\n--- AUTOMATIC MAPPING DETECTED: LINE {num_line} ---\n{line_context}\n"
-            
+                relevant_snippet = [l for l in row[1].split("\n") if any(term in l.lower() for term in search_terms) or "página" in l.lower() or "tabela" in l.lower()]
+                search_result += f"\n--- AUTOMATIC MAPPING DETECTED: LINE {row[0]} ---\n{chr(10).join(relevant_snippet[:25])}\n"
             return search_result
-            
-    except Exception as e_db:
-        logging.error(f"Error in advanced text scan in DB: {e_db}")
+    except Exception: pass
+    return f"Could not fetch information for location '{stop_id}'."
 
-    return f"Could not fetch real-time information or find cached records for location '{stop_id}'."
-
-def sync_all_guimabus_schedules():
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    main_url = "https://guimabus.pt/horarios-linhas/"
-    
+def sincronizar_todos_horarios_guimabus():
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        response = requests.get(main_url, headers=headers, timeout=12)
+        response = requests.get("https://guimabus.pt/horarios-linhas/", headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        pdf_links = {}
-        line_titles = {}
+        pdf_links, line_titles = {}, {}
         for link in soup.find_all('a', href=True):
-            href = link['href']
-            if ".pdf" in href and "horario" in href.lower():
-                match = re.search(r'linha-([a-z0-9]+)', href.lower())
-                if match:
-                    line_id = match.group(1).upper()
-                    if line_id not in pdf_links:
-                        pdf_links[line_id] = href
-                        link_text = link.get_text(strip=True)
-                        if link_text:
-                            line_titles[line_id] = link_text
+            if ".pdf" in link['href'] and "horario" in link['href'].lower():
+                match = re.search(r'linha-([a-z0-9]+)', link['href'].lower())
+                if match and match.group(1).upper() not in pdf_links:
+                    pdf_links[match.group(1).upper()] = link['href']
+                    if link.get_text(strip=True): line_titles[match.group(1).upper()] = link.get_text(strip=True)
         
-        if not pdf_links:
-            return "No schedule PDF files found on the main page."
+        if not pdf_links: return "No schedule PDF files found on the main page."
         
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        
+        conn = get_db_connection()
         processed_lines = []
-        failed_lines = []
         current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
         for line_id, pdf_url in pdf_links.items():
-            success = False
-            last_error = None
             for attempt in range(2):
                 try:
                     pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
-                    if pdf_resp.status_code != 200:
-                        last_error = f"HTTP {pdf_resp.status_code}"
-                        time.sleep(1)
-                        continue
-
+                    if pdf_resp.status_code != 200: time.sleep(1); continue
                     extracted_text = []
                     with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
                         for idx, page in enumerate(pdf.pages):
                             page_text = page.extract_text(layout=True)
-                            if page_text:
-                                extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
+                            if page_text: extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
+                            time.sleep(0.05) 
+                    final_content = "\n\n".join(extracted_text) or "PDF is image-based or copy-protected."
 
-                    final_content = "\n\n".join(extracted_text)
-                    if not final_content.strip():
-                        final_content = "PDF is image-based or copy-protected."
-
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO schedule_cache (line, url, content_txt, last_updated)
-                        VALUES (?, ?, ?, ?)
-                    """, (line_id, pdf_url, final_content, current_timestamp))
-
+                    conn.execute("INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, last_updated) VALUES (?, ?, ?, ?)", (line_id, pdf_url, final_content, current_timestamp))
                     if line_id in line_titles:
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO line_title_cache (line, title, last_updated)
-                            VALUES (?, ?, ?)
-                        """, (line_id, line_titles[line_id], current_timestamp))
-
+                        conn.execute("INSERT OR REPLACE INTO cache_titulo_linha (linha, titulo, ultima_atualizacao) VALUES (?, ?, ?)", (line_id, line_titles[line_id], current_timestamp))
                     processed_lines.append(line_id)
-                    success = True
                     break
-                except Exception as e:
-                    last_error = str(e)
-                    time.sleep(1)
-                    continue
+                except Exception: time.sleep(1); continue
+            time.sleep(0.2)
+        conn.commit(); conn.close()
+        return f"Sync completed: {len(processed_lines)}/{len(pdf_links)} PDFs downloaded!"
+    except Exception as e: return f"Scraping failed: {e}"
 
-            if not success:
-                failed_lines.append(line_id)
-                logging.error(f"Failed to process Line {line_id} PDF after 2 attempts: {last_error}")
-
-            time.sleep(0.4)
-
-        conn.commit()
-        conn.close()
-        
-        success_msg = f"Sync completed: {len(processed_lines)}/{len(pdf_links)} PDFs downloaded and parsed!"
-        if failed_lines:
-            success_msg += f" Failed: {', '.join(failed_lines)}."
-        logging.info(success_msg)
-        return success_msg
-        
-    except Exception as e:
-        error_msg = f"PDF automation scraping failed: {e}"
-        logging.error(error_msg)
-        return error_msg
-
-def query_line_schedule_cache(line_id: str):
+def consultar_cache_horario_linha(line_id: str):
     try:
         user_input = str(line_id).strip().upper()
-        if not user_input:
-            return "Line number is required."
-
+        if not user_input: return "Line number is required."
         candidates = [user_input]
         if user_input.isdigit():
             no_zeros = user_input.lstrip('0') or '0'
-            if no_zeros not in candidates:
-                candidates.append(no_zeros)
+            if no_zeros not in candidates: candidates.append(no_zeros)
             three_digits = user_input.zfill(3)
-            if three_digits not in candidates:
-                candidates.append(three_digits)
+            if three_digits not in candidates: candidates.append(three_digits)
 
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        result = None
-        for candidate in candidates:
-            cursor.execute("SELECT content_txt, url, last_updated FROM schedule_cache WHERE line = ?", (candidate,))
-            result = cursor.fetchone()
-            if result:
-                break
+        conn = get_db_connection()
+        result = next((conn.execute("SELECT conteudo_txt, url, last_updated FROM cache_horarios WHERE linha = ?", (c,)).fetchone() for c in candidates if conn.execute("SELECT conteudo_txt, url, last_updated FROM cache_horarios WHERE linha = ?", (c,)).fetchone()), None)
         conn.close()
         
-        if result:
-            content_txt, pdf_url, last_updated = result
-            link_txt = f"\n\n🔗 Official Link: {pdf_url}" if pdf_url else ""
-            return f"Cached Schedules for Line {line_id} (Updated on {last_updated}):\n\n{content_txt}{link_txt}"
-        return f"No cached schedules for line {line_id}. Ask the admin to run a General Sync."
-    except Exception as e:
-        return f"SQLite cache read error: {e}"
+        if result: return f"Cached Schedules for Line {line_id} (Updated on {result[2]}):\n\n{result[0]}{f'{chr(10)}{chr(10)}🔗 Official Link: {result[1]}' if result[1] else ''}"
+        return f"No cached schedules for line {line_id}."
+    except Exception as e: return f"SQLite read error: {e}"
 
-def get_knowledge_base_content():
-    context = ""
-    files = glob.glob("knowledge/*.md")
-    for file in files:
-        with open(file, "r", encoding="utf-8") as f:
-            context += f"\n--- CONTENT FROM {os.path.basename(file)} ---\n{f.read()}"
-    return context if context else "No extra documentation found in the Knowledge Base."
+def len_knowledge_base():
+    return "".join(f"\n--- CONTENT FROM {os.path.basename(file)} ---\n{open(file, 'r', encoding='utf-8').read()}" for file in glob.glob("knowledge/*.md")) or "No extra documentation found."
 
-def get_schedule_cache_age_days():
+def obter_idade_cache_horarios_dias():
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(last_updated) FROM schedule_cache")
-        result = cursor.fetchone()
+        conn = get_db_connection()
+        res = conn.execute("SELECT MAX(ultima_atualizacao) FROM cache_horarios").fetchone()
         conn.close()
-        if not result or not result[0]:
-            return None
-        last_date = datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S")
-        return (datetime.now() - last_date).days
-    except Exception as e:
-        logging.error(f"Error checking schedule cache age: {e}")
-        return None
+        return (datetime.now() - datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")).days if res and res[0] else None
+    except Exception: return None
 
-def get_ticket_cache_age_days():
+def obter_idade_cache_titulos_dias():
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(last_updated) FROM ticket_cache")
-        result = cursor.fetchone()
+        conn = get_db_connection()
+        res = conn.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos").fetchone()
         conn.close()
-        if not result or not result[0]:
-            return None
-        last_date = datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S")
-        return (datetime.now() - last_date).days
-    except Exception as e:
-        logging.error(f"Error checking ticket cache age: {e}")
-        return None
+        return (datetime.now() - datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")).days if res and res[0] else None
+    except Exception: return None
 
-def get_stop_index_count():
+def obter_contagem_indice_paragens():
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM stop_line_cache")
-        result = cursor.fetchone()
+        conn = get_db_connection()
+        res = conn.execute("SELECT COUNT(*) FROM cache_paragens_linha").fetchone()
         conn.close()
-        return result[0] if result else 0
-    except Exception as e:
-        logging.error(f"Error counting stop index: {e}")
-        return 0
+        return res[0] if res else 0
+    except Exception: return 0
 
-# --- BACKGROUND JOBS ---
-def _sync_schedules_background():
-    try:
-        result = sync_all_guimabus_schedules()
-        logging.info(f"[Background] Schedule sync: {result}")
-        idx_result = build_stop_index()
-        logging.info(f"[Background] {idx_result}")
-    except Exception as e:
-        logging.error(f"[Background] Schedule sync failed: {e}")
+# --- SISTEMA BLOQUEANTE DE SINCRONIZAÇÃO NO ARRANQUE ---
+def verificar_necessidade_sync(limite_dias: int = 7):
+    if st.session_state.get("sync_checked"): return False
 
-def _build_index_background():
-    try:
-        idx_result = build_stop_index()
-        logging.info(f"[Background] {idx_result}")
-    except Exception as e:
-        logging.error(f"[Background] Stop index build failed: {e}")
+    idade_horarios = obter_idade_cache_horarios_dias()
+    idade_titulos = obter_idade_cache_titulos_dias()
+    idx_count = obter_contagem_indice_paragens()
 
-def _sync_tickets_tariff_background():
-    try:
-        result = sync_tickets_and_tariff()
-        logging.info(f"[Background] Tickets/Tariff sync: {result}")
-    except Exception as e:
-        logging.error(f"[Background] Tickets/Tariff sync failed: {e}")
-
-def auto_sync_if_needed(day_limit: int = 7):
-    if st.session_state.get("auto_sync_attempted_this_session"):
-        return
-    st.session_state.auto_sync_attempted_this_session = True
-
-    schedule_age = get_schedule_cache_age_days()
-    if schedule_age is None or schedule_age >= day_limit:
-        threading.Thread(target=_sync_schedules_background, daemon=True).start()
-        logging.info("Schedule sync started in background.")
-    elif get_stop_index_count() == 0:
-        threading.Thread(target=_build_index_background, daemon=True).start()
-        logging.info("Stop index build started in background.")
-
-    ticket_age = get_ticket_cache_age_days()
-    if ticket_age is None or ticket_age >= day_limit:
-        threading.Thread(target=_sync_tickets_tariff_background, daemon=True).start()
-        logging.info("Tickets/Tariff sync started in background.")
-
-FALLBACK_TICKET_TYPES = {
-    "Mensal": {
-        "description": "Valid for the month and Origin/Destination acquired. Unlimited trips.",
-        "price": "Consult tariff table",
-        "card_cost": "5€",
-        "deadline": "Can only be issued or recharged until the 18th of each month.",
-        "documents": ["ID Card / Identification Document"],
-    },
-}
-
-def sync_guimabus_tickets():
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    url = "https://guimabus.pt/titulos/"
+    needs_sch = idade_horarios is None or idade_horarios >= limite_dias
+    needs_idx = idx_count == 0
+    needs_tkt = idade_titulos is None or idade_titulos >= limite_dias
+    needs_geo = False
 
     try:
-        response = requests.get(url, headers=headers, timeout=12)
+        conn = get_db_connection()
+        count_geo = conn.execute("SELECT COUNT(*) FROM nos_geograficos WHERE tipo LIKE 'poi_%'").fetchone()[0]
+        needs_geo = (count_geo == 0)
+        conn.close()
+    except Exception:
+        pass
+
+    if needs_sch or needs_idx or needs_tkt or needs_geo:
+        st.session_state.is_updating = True
+        st.session_state.update_tasks = {"sch": needs_sch, "idx": needs_idx, "tkt": needs_tkt, "geo": needs_geo}
+    else:
+        st.session_state.is_updating = False
+
+    st.session_state.sync_checked = True
+    return st.session_state.is_updating
+
+# --- SCRAPING DINÂMICO: TIPOLOGIAS DE PASSE E TARIFÁRIO ---
+TIPOLOGIAS_PASSE_FALLBACK = {"Mensal": {"descricao": "Valid for the month. Unlimited trips.", "preco": "Consult tariff", "custo_cartao": "5€", "prazo": "18th", "documentos": ["ID Card"]}}
+
+def sincronizar_titulos_guimabus():
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        response = requests.get("https://guimabus.pt/titulos/", headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-
-        for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']):
-            tag.decompose()
-
+        for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']): tag.decompose()
         full_text = soup.get_text(separator="\n")
-        text_lines = [l.strip() for l in full_text.split("\n")]
-        text_lines = [l for l in text_lines if l]
-        normalized_text = "\n".join(text_lines)
+        normalized_text = "\n".join([l.strip() for l in full_text.split("\n") if l.strip()])
+        blocos = re.split(r'\nPASSE[.\s]*\n', "\n" + normalized_text)[1:]
+        if not blocos: return "No ticket types found."
 
-        blocks = re.split(r'\nPASSE\n', "\n" + normalized_text)
-        blocks = [b for b in blocks[1:]]
-
-        if not blocks:
-            return "Could not identify any ticket types on the page."
-
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
-        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        processed_types = []
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        for block in blocks:
-            block_lines = block.split("\n")
-            if not block_lines:
-                continue
-            type_name = block_lines[0].strip()
-            if not type_name:
-                continue
+        for block in blocos:
+            lines = block.split("\n")
+            if not lines or not lines[0].strip(): continue
+            type_name = lines[0].strip()
+            
+            price, card_cost, deadline = "Consult tariff table", "Not specified", "Deadline not specified on website."
+            docs_list, description_lines = [], []
+            parsing_mode = "desc"
+            
+            for line in lines[1:]:
+                line_lower = line.lower()
+                line_stripped = line.strip()
+                
+                if not line_stripped: continue
+                    
+                if "só podem ser" in line_lower or "até ao dia" in line_lower or ("carregamento" in line_lower and "mês" in line_lower):
+                    deadline = line_stripped
+                    parsing_mode = "deadline"
+                    continue
+                    
+                if "preço:" in line_lower:
+                    val = re.split(r'preço:', line, flags=re.IGNORECASE)[1].strip()
+                    if val: price = val
+                    parsing_mode = "price"
+                    continue
+                    
+                if line_lower == "gratuito":
+                    price = "Gratuito"
+                    parsing_mode = "price"
+                    continue
+                    
+                if "custo do cartão:" in line_lower:
+                    val = re.split(r'custo do cartão:', line, flags=re.IGNORECASE)[1].strip()
+                    if val: card_cost = val
+                    parsing_mode = "card"
+                    continue
+                    
+                if "documentos necessários:" in line_lower:
+                    parsing_mode = "docs"
+                    val = re.split(r'documentos necessários:', line, flags=re.IGNORECASE)[1].strip()
+                    if val: docs_list.append(val)
+                    continue
+                    
+                if parsing_mode == "desc": description_lines.append(line_stripped)
+                elif parsing_mode == "docs": docs_list.append(line_stripped)
+                elif parsing_mode == "deadline": deadline += " " + line_stripped
+                elif parsing_mode == "price" and price in ["Consult tariff table", ""]:
+                    price = line_stripped
+                    parsing_mode = "done" 
+                elif parsing_mode == "card" and card_cost in ["Not specified", ""]:
+                    card_cost = line_stripped
+                    parsing_mode = "done"
 
-            rest_of_text = "\n".join(block_lines[1:])
+            description = " ".join(description_lines)
+            if not docs_list: docs_list = ["ID Card / Identification Document"]
 
-            # Kept Portuguese Regex Strings to match website content successfully
-            match_deadline = re.search(r'(Só podem ser emitidos.*?\.)', rest_of_text, re.IGNORECASE)
-            deadline = match_deadline.group(1).strip() if match_deadline else "Deadline not specified."
-
-            match_price = re.search(r'Preço:\s*(.+)', rest_of_text)
-            if match_price:
-                price = match_price.group(1).strip()
-            elif re.search(r'\bGRATUITO\b', rest_of_text, re.IGNORECASE):
-                price = "Gratuito"
-            else:
-                match_discount = re.search(r'(\d{1,3}%\s*de desconto[^\n.]*\.)', rest_of_text, re.IGNORECASE)
-                price = match_discount.group(1).strip() if match_discount else "Consult tariff table"
-
-            match_card = re.search(r'Custo do cartão:\s*([\d,]+€)', rest_of_text)
-            card_cost = match_card.group(1).strip() if match_card else "Not specified"
-
-            match_desc = re.match(r'(.*?)(?:Preço:|GRATUITO|Gratuito|\*\*Documentos necessários)', rest_of_text, re.DOTALL)
-            description = match_desc.group(1).strip().replace("\n", " ") if match_desc else ""
-
-            match_docs = re.search(r'\*\*Documentos necessários:\*\*(.*?)(?:Só podem ser emitidos|$)', rest_of_text, re.DOTALL)
-            docs_list = []
-            if match_docs:
-                candidates = [d.strip() for d in match_docs.group(1).split("\n") if d.strip()]
-                for d in candidates:
-                    if re.match(r'^(Custo do cartão|Preço)', d, re.IGNORECASE):
-                        continue
-                    docs_list.append(d)
-            if not docs_list:
-                docs_list = ["ID Card / Identification Document"]
-
-            cursor.execute("""
-                INSERT OR REPLACE INTO ticket_cache (ticket_type, description, price, card_cost, deadline, documents_json, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (type_name, description, price, card_cost, deadline, json.dumps(docs_list, ensure_ascii=False), current_timestamp))
-            processed_types.append(type_name)
-
+            cursor.execute("INSERT OR REPLACE INTO cache_titulos (tipologia, descricao, preco, custo_cartao, prazo, documentos_json, ultima_atualizacao) VALUES (?, ?, ?, ?, ?, ?, ?)", (type_name, description, price, card_cost, deadline, json.dumps(docs_list, ensure_ascii=False), ts))
+            
         conn.commit()
         conn.close()
+        return "Ticket sync complete."
+    except Exception as e: return f"Failed to sync ticket types: {e}"
 
-        msg = f"Ticket type sync complete: {len(processed_types)} types."
-        logging.info(msg)
-        return msg
-
-    except Exception as e:
-        error_msg = f"Failed to sync ticket types: {e}"
-        logging.error(error_msg)
-        return error_msg
-
-def sync_guimabus_tariff():
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    page_url = "https://guimabus.pt/tarifarios/"
-
+def sincronizar_tarifario_guimabus():
     try:
-        response = requests.get(page_url, headers=headers, timeout=12)
+        response = requests.get("https://guimabus.pt/tarifarios/", headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-
-        pdf_url = None
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            if ".pdf" in href.lower() and ("tarifa" in href.lower() or "tabela" in href.lower()):
-                pdf_url = href
-                break
-        if not pdf_url:
-            for link in soup.find_all('a', href=True):
-                if ".pdf" in link['href'].lower():
-                    pdf_url = link['href']
-                    break
-
-        if not pdf_url:
-            return "No tariff PDF found on the page."
-
-        pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
+        pdf_url = next((link['href'] for link in soup.find_all('a', href=True) if ".pdf" in link['href'].lower()), None)
+        if not pdf_url: return "No tariff PDF found."
+        
+        pdf_resp = requests.get(pdf_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
         pdf_resp.raise_for_status()
-
-        extracted_text = []
+        extracted = []
         with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
             for idx, page in enumerate(pdf.pages):
-                page_text = page.extract_text(layout=True)
-                if page_text:
-                    extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
+                txt = page.extract_text(layout=True)
+                if txt: extracted.append(f"[PÁGINA {idx+1}]\n{txt}")
+                time.sleep(0.05) 
+        final_content = "\n\n".join(extracted) or "Image-based PDF."
+        
+        conn = get_db_connection()
+        conn.execute("INSERT OR REPLACE INTO cache_tarifario (id, url_pdf, conteudo_txt, ultima_atualizacao) VALUES (1, ?, ?, ?)", (pdf_url, final_content, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit(); conn.close()
+        return "Tariff sync complete."
+    except Exception as e: return f"Failed to sync tariff: {e}"
 
-        final_content = "\n\n".join(extracted_text)
-        if not final_content.strip():
-            final_content = "Image-based PDF format."
+def sincronizar_titulos_e_tarifario(): return f"{sincronizar_titulos_guimabus()}\n{sincronizar_tarifario_guimabus()}"
 
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-            INSERT OR REPLACE INTO tariff_cache (id, url_pdf, content_txt, last_updated)
-            VALUES (1, ?, ?, ?)
-        """, (pdf_url, final_content, current_timestamp))
-        conn.commit()
-        conn.close()
+def _extrair_paragens_de_texto(texto: str):
+    paragens = set()
+    padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
+    for line in texto.split("\n"):
+        line = line.strip()
+        if not line or "|" in line or line.startswith("[PAGE") or line.startswith("[P"): continue
+        m = padrao.match(line)
+        if m and len(m.group("nome").strip(" -\t")) >= 3: paragens.add(m.group("nome").strip(" -\t"))
+    return paragens
 
-        msg = f"Tariff sync complete (source: {pdf_url})."
-        logging.info(msg)
-        return msg
-
-    except Exception as e:
-        error_msg = f"Failed to sync tariff: {e}"
-        logging.error(error_msg)
-        return error_msg
-
-def sync_tickets_and_tariff():
-    ticket_result = sync_guimabus_tickets()
-    tariff_result = sync_guimabus_tariff()
-    return f"{ticket_result}\n{tariff_result}"
-
-def _extract_stops_from_text(text: str):
-    stops = set()
-    pattern = re.compile(r'^(?P<name>.+?)\s+(?P<schedules>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
-    for text_line in text.split("\n"):
-        text_line = text_line.strip()
-        if not text_line or "|" in text_line or text_line.startswith("[PAGE") or text_line.startswith("[P"):
-            continue
-        m = pattern.match(text_line)
-        if m:
-            name = m.group("name").strip(" -\t")
-            if len(name) >= 3:
-                stops.add(name)
-    return stops
-
-def build_stop_index():
+def construir_indice_paragens():
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT line, content_txt FROM schedule_cache")
-        cached_lines = cursor.fetchall()
+        conn = get_db_connection()
+        cached_lines = conn.execute("SELECT linha, conteudo_txt FROM cache_horarios").fetchall()
+        conn.execute("DELETE FROM cache_paragens_linha")
+        count = 0
+        for line_id, content in cached_lines:
+            if not content: continue
+            for stop in _extrair_paragens_de_texto(content):
+                conn.execute("INSERT OR IGNORE INTO cache_paragens_linha (linha, paragem) VALUES (?, ?)", (line_id, stop))
+                count += 1
+        conn.commit(); conn.close()
+        return f"Stop index rebuilt: {count} associations."
+    except Exception as e: return f"Failed to build index: {e}"
 
-        cursor.execute("DELETE FROM stop_line_cache")
-        total_stops = 0
-        for line_id, content_txt in cached_lines:
-            if not content_txt:
-                continue
-            stops = _extract_stops_from_text(content_txt)
-            for stop in stops:
-                cursor.execute(
-                    "INSERT OR IGNORE INTO stop_line_cache (line, stop) VALUES (?, ?)",
-                    (line_id, stop)
-                )
-                total_stops += 1
-        conn.commit()
-        conn.close()
-        msg = f"Stop index rebuilt: {total_stops} line-stop associations."
-        logging.info(msg)
-        return msg
-    except Exception as e:
-        error_msg = f"Failed to build stop index: {e}"
-        logging.error(error_msg)
-        return error_msg
-
-def _normalize_stop_name(text: str):
-    t = text.lower().strip()
-    t = re.sub(r'\bsão\b', 's.', t)
-    t = re.sub(r'\bsanta\b', 'sta.', t)
-    t = re.sub(r'\bsanto\b', 'sto.', t)
-    t = t.replace('.', '')
-    t = unicodedata.normalize('NFKD', t)
-    t = ''.join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r'\s+', ' ', t).strip()
-    return t
-
-def _search_lines_by_title(norm_term: str):
+def _procurar_linhas_por_titulo(termo_norm: str):
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT line, title FROM line_title_cache")
-        all_titles = cursor.fetchall()
+        conn = get_db_connection()
+        all_titles = conn.execute("SELECT linha, titulo FROM cache_titulo_linha").fetchall()
         conn.close()
-    except Exception as e:
-        logging.error(f"Error querying line titles: {e}")
-        return set(), []
-
-    found_lines = set()
-    found_titles = []
+    except Exception: return set(), []
+    
+    found_lines, found_titles = set(), []
     for line_id, title in all_titles:
-        if not title:
-            continue
-        title_norm = _normalize_stop_name(title)
-        if re.search(r'\b' + re.escape(norm_term) + r'\b', title_norm):
-            found_lines.add(line_id)
-            found_titles.append(f"Line {line_id}: {title}")
+        if title and re.search(r'\b' + re.escape(termo_norm) + r'\b', _normalizar_nome_paragem(title)):
+            found_lines.add(line_id); found_titles.append(f"Linha {line_id}: {title}")
     return found_lines, found_titles
 
-def enrich_stops_with_parish(progress_callback=None):
+def enriquecer_paragens_com_freguesia(progresso_callback=None):
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT stop FROM stop_line_cache")
-        all_stops = [row[0] for row in cursor.fetchall()]
-        cursor.execute("SELECT stop FROM stop_parish_cache")
-        already_done = {row[0] for row in cursor.fetchall()}
+        conn = get_db_connection()
+        all_stops = [row[0] for row in conn.execute("SELECT DISTINCT paragem FROM cache_paragens_linha").fetchall()]
+        already_done = {row[0] for row in conn.execute("SELECT paragem FROM cache_paragem_freguesia").fetchall()}
         conn.close()
-    except Exception as e:
-        return f"Error preparing enrichment: {e}"
+    except Exception: return "Error preparing enrichment."
 
-    pending_stops = [p for p in all_stops if p not in already_done]
-    if not pending_stops:
-        return "All stops are already associated with a parish — nothing to do."
+    pending = [p for p in all_stops if p not in already_done]
+    if not pending: return "All stops enriched."
 
-    headers = {
-        'User-Agent': 'SuperSecretaryAI-Guimaraes/1.0'
-    }
-
-    conn = sqlite3.connect("agent_memory.db")
-    cursor = conn.cursor()
-    current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    success_count = 0
-    fail_count = 0
-
-    for idx, stop in enumerate(pending_stops):
+    conn = get_db_connection()
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for idx, stop in enumerate(pending):
         try:
-            resp = requests.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={
-                    "q": f"{stop}, Guimarães, Portugal",
-                    "format": "json",
-                    "addressdetails": 1,
-                    "countrycodes": "pt",
-                    "limit": 1,
-                },
-                headers=headers,
-                timeout=10
-            )
+            resp = requests.get("https://nominatim.openstreetmap.org/search", params={"q": f"{stop}, Guimarães, Portugal", "format": "json", "addressdetails": 1, "countrycodes": "pt", "limit": 1}, headers={'User-Agent': 'SuperSecretaryAI'}, timeout=10)
             resp.raise_for_status()
-            results = resp.json()
-            parish = None
-            if results:
-                address = results[0].get("address", {})
-                parish = (address.get("suburb") or address.get("city_district")
-                             or address.get("village") or address.get("town")
-                             or address.get("municipality"))
-
-            if parish:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO stop_parish_cache (stop, parish, source, last_updated)
-                    VALUES (?, ?, ?, ?)
-                """, (stop, parish, "nominatim", current_timestamp))
-                success_count += 1
-            else:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO stop_parish_cache (stop, parish, source, last_updated)
-                    VALUES (?, ?, ?, ?)
-                """, (stop, None, "no_result", current_timestamp))
-                fail_count += 1
-
-            if progress_callback:
-                progress_callback(idx + 1, len(pending_stops), stop)
-
-        except Exception as e:
-            logging.warning(f"Failed to geocode '{stop}': {e}")
-            fail_count += 1
-
+            res = resp.json()
+            parish = res[0].get("address", {}).get("suburb") or res[0].get("address", {}).get("city_district") if res else None
+            conn.execute("INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao) VALUES (?, ?, ?, ?)", (stop, parish, "nominatim" if parish else "no_result", ts))
+            if progress_callback: progress_callback(idx + 1, len(pending), stop)
+        except Exception: pass
         time.sleep(1.1)
+    conn.commit(); conn.close()
+    return "Enrichment completed."
 
-    conn.commit()
-    conn.close()
-
-    msg = f"Parish enrichment completed: {success_count} associated, {fail_count} with no result."
-    logging.info(msg)
-    return msg
-
-def get_parish_from_stop(stop_name: str):
+def obter_freguesia_de_paragem(nome_paragem: str):
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT stop, parish FROM stop_parish_cache WHERE parish IS NOT NULL")
-        all_data = cursor.fetchall()
+        conn = get_db_connection()
+        all_data = conn.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL").fetchall()
         conn.close()
-    except Exception as e:
-        logging.error(f"Error querying stop parish: {e}")
-        return None
+    except Exception: return None
 
-    norm_name = _normalize_stop_name(stop_name)
+    norm_name = _normalizar_nome_paragem(nome_paragem)
     for stop, parish in all_data:
-        stop_norm = _normalize_stop_name(stop)
-        direct_match = re.search(r'\b' + re.escape(norm_name) + r'\b', stop_norm)
-        reverse_match = re.search(r'\b' + re.escape(stop_norm) + r'\b', norm_name)
-        if direct_match or reverse_match:
-            return parish
+        stop_norm = _normalizar_nome_paragem(stop)
+        if re.search(r'\b' + re.escape(norm_name) + r'\b', stop_norm) or re.search(r'\b' + re.escape(stop_norm) + r'\b', norm_name): return parish
     return None
 
-def find_stops_by_parish(parish_name: str):
+def procurar_paragens_por_freguesia(nome_freguesia: str):
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT stop, parish FROM stop_parish_cache WHERE parish IS NOT NULL")
-        all_data = cursor.fetchall()
+        conn = get_db_connection()
+        all_data = conn.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL").fetchall()
         conn.close()
-    except Exception as e:
-        logging.error(f"Error searching stops by parish: {e}")
-        return []
+    except Exception: return []
+    norm_parish = _normalizar_nome_paragem(nome_freguesia)
+    return [stop for stop, parish in all_data if re.search(r'\b' + re.escape(norm_parish) + r'\b', _normalizar_nome_paragem(parish))]
 
-    norm_parish = _normalize_stop_name(parish_name)
-    return [
-        stop for stop, parish in all_data 
-        if re.search(r'\b' + re.escape(norm_parish) + r'\b', _normalize_stop_name(parish))
-    ]
-
-def plan_trip_with_transfer(origin: str, destination: str):
-    if not origin or not destination:
-        return "You must provide an origin stop and a destination stop."
-
-    norm_origin = _normalize_stop_name(origin)
-    norm_dest = _normalize_stop_name(destination)
-
+def planear_viagem_com_transbordo(origem: str, destino: str):
+    if not origem or not destino: return "You must provide an origin stop and a destination stop."
+    norm_orig, norm_dest = _normalizar_nome_paragem(origem), _normalizar_nome_paragem(destino)
+    
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT line, stop FROM stop_line_cache")
-        all_data = cursor.fetchall()
+        conn = get_db_connection()
+        all_data = conn.execute("SELECT linha, paragem FROM cache_paragens_linha").fetchall()
         conn.close()
-    except Exception as e:
-        return f"Error querying stop index: {e}"
+    except Exception: return "Error querying stop index."
+    
+    if not all_data: return "Index not built."
 
-    if not all_data:
-        return "The stop index has not been built yet. Ask the admin to sync schedules."
+    orig_lines, dest_lines, line_stops_map = set(), set(), {}
+    found_orig, found_dest = set(), set()
+    for l_id, s in all_data:
+        line_stops_map.setdefault(l_id, set()).add(s)
+        s_norm = _normalizar_nome_paragem(s)
+        if re.search(r'\b' + re.escape(norm_orig) + r'\b', s_norm): orig_lines.add(l_id); found_orig.add(s)
+        if re.search(r'\b' + re.escape(norm_dest) + r'\b', s_norm): dest_lines.add(l_id); found_dest.add(s)
 
-    origin_lines = set()
-    found_origin_stops = set()
-    dest_lines = set()
-    found_dest_stops = set()
-    line_stops_map = {}
+    warn_o_title = warn_d_title = False
+    o_titles, d_titles = [], []
+    if not orig_lines: orig_lines, o_titles = _search_lines_by_title(norm_orig); warn_o_title = bool(orig_lines)
+    if not dest_lines: dest_lines, d_titles = _search_lines_by_title(norm_dest); warn_d_title = bool(dest_lines)
 
-    for line_id, stop in all_data:
-        line_stops_map.setdefault(line_id, set()).add(stop)
-        stop_norm = _normalize_stop_name(stop)
-        if re.search(r'\b' + re.escape(norm_origin) + r'\b', stop_norm):
-            origin_lines.add(line_id)
-            found_origin_stops.add(stop)
-        if re.search(r'\b' + re.escape(norm_dest) + r'\b', stop_norm):
-            dest_lines.add(line_id)
-            found_dest_stops.add(stop)
+    if not orig_lines: return f"Could not find '{origem}'."
+    if not dest_lines: return f"Could not find '{destino}'."
 
-    if not origin_lines:
-        origin_lines, origin_titles = _search_lines_by_title(norm_origin)
-        warn_origin_title = bool(origin_lines)
-    else:
-        warn_origin_title = False
+    warn_msg = ("\n⚠️ Title used for Origin." if warn_o_title else "") + ("\n⚠️ Title used for Dest." if warn_d_title else "")
+
+    if orig_lines & dest_lines:
+        return f"DIRECT line(s) between '{origem}' and '{destino}':\n" + "\n".join(f"- Line {l}" for l in (orig_lines & dest_lines)) + warn_msg
+
+    o_stops = set.union(*(line_stops_map.get(l, set()) for l in orig_lines))
+    d_stops = set.union(*(line_stops_map.get(l, set()) for l in dest_lines))
+    transfers = (o_stops & d_stops) - found_orig - found_dest
+
+    if not transfers: return "No transfer found."
+    summary = f"No direct line. Suggested transfers:\n\n"
+    for t in sorted(transfers):
+        l_to = [l for l in orig_lines if t in line_stops_map.get(l, set())]
+        l_from = [l for l in dest_lines if t in line_stops_map.get(l, set())]
+        summary += f"- Via **{t}**: lines {'/'.join(l_to)} -> '{t}' -> lines {'/'.join(l_from)}.\n"
+    return summary + warn_msg
+
+def consultar_freguesia_paragem_tool(nome: str):
+    if not nome: return "Name required."
+    parish = obter_freguesia_de_paragem(nome)
+    if parish: return f"Stop '{nome}' is in {parish}."
+    stops = procurar_paragens_por_freguesia(nome)
+    if stops: return f"Stops in '{nome}': {', '.join(stops)}."
+    return f"No info for '{nome}'."
+
+def obter_tipologias_cache():
+    try:
+        conn = get_db_connection()
+        rows = conn.execute("SELECT tipologia, descricao, preco, custo_cartao, prazo, documentos_json FROM cache_titulos ORDER BY tipologia").fetchall()
+        last_updated = conn.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos").fetchone()[0]
+        conn.close()
+        if not rows: return TIPOLOGIAS_PASSE_FALLBACK, None
         
-    if not dest_lines:
-        dest_lines, dest_titles = _search_lines_by_title(norm_dest)
-        warn_dest_title = bool(dest_lines)
-    else:
-        warn_dest_title = False
-
-    warn_origin_parish = None
-    warn_dest_parish = None
-    if not origin_lines:
-        parish_stops = find_stops_by_parish(origin)
-        if parish_stops:
-            for par_stop in parish_stops:
-                for line_id, idx_stop in all_data:
-                    if _normalize_stop_name(par_stop) == _normalize_stop_name(idx_stop):
-                        origin_lines.add(line_id)
-                        found_origin_stops.add(idx_stop)
-            if origin_lines:
-                warn_origin_parish = parish_stops
-                
-    if not dest_lines:
-        parish_stops = find_stops_by_parish(destination)
-        if parish_stops:
-            for par_stop in parish_stops:
-                for line_id, idx_stop in all_data:
-                    if _normalize_stop_name(par_stop) == _normalize_stop_name(idx_stop):
-                        dest_lines.add(line_id)
-                        found_dest_stops.add(idx_stop)
-            if dest_lines:
-                warn_dest_parish = parish_stops
-
-    if not origin_lines:
-        return f"Could not find any stop or parish matching '{origin}'."
-    if not dest_lines:
-        return f"Could not find any stop or parish matching '{destination}'."
-
-    precision_warning = ""
-    if warn_origin_title:
-        precision_warning += f"\n⚠️ Note: '{origin}' found via line TITLE (ex: {', '.join(origin_titles[:2])})."
-    if warn_dest_title:
-        precision_warning += f"\n⚠️ Note: '{destination}' found via line TITLE (ex: {', '.join(dest_titles[:2])})."
-    if warn_origin_parish:
-        precision_warning += f"\n📍 '{origin}' is a parish. Stops: {', '.join(warn_origin_parish[:4])}."
-    if warn_dest_parish:
-        precision_warning += f"\n📍 '{destination}' is a parish. Stops: {', '.join(warn_dest_parish[:4])}."
-
-    direct_lines = origin_lines & dest_lines
-    if direct_lines:
-        summary = f"Found DIRECT line(s) between '{origin}' and '{destination}' (no transfers):\n"
-        for line_id in direct_lines:
-            summary += f"- Line {line_id}\n"
-        summary += precision_warning
-        return summary
-
-    origin_line_stops = set()
-    for line_id in origin_lines:
-        origin_line_stops |= line_stops_map.get(line_id, set())
-        
-    dest_line_stops = set()
-    for line_id in dest_lines:
-        dest_line_stops |= line_stops_map.get(line_id, set())
-
-    candidate_transfers = origin_line_stops & dest_line_stops
-    candidate_transfers -= found_origin_stops
-    candidate_transfers -= found_dest_stops
-
-    if not candidate_transfers:
-        return f"No direct line or obvious transfer point found between '{origin}' and '{destination}'."
-
-    summary = f"No direct line between '{origin}' and '{destination}'. Suggested transfers:\n\n"
-    for transfer_stop in sorted(candidate_transfers):
-        lines_to_transfer = [l for l in origin_lines if transfer_stop in line_stops_map.get(l, set())]
-        lines_from_transfer = [l for l in dest_lines if transfer_stop in line_stops_map.get(l, set())]
-        summary += f"- Via **{transfer_stop}**: take line(s) {'/'.join(lines_to_transfer)} from '{origin}', get off at '{transfer_stop}', and take line(s) {'/'.join(lines_from_transfer)} to '{destination}'.\n"
-
-    summary += precision_warning
-    return summary
-
-def query_stop_parish_tool(name: str):
-    if not name:
-        return "You must provide a stop or parish name."
-
-    parish = get_parish_from_stop(name)
-    if parish:
-        return f"The stop '{name}' is located in the parish of {parish}."
-
-    stops = find_stops_by_parish(name)
-    if stops:
-        return f"Known stops in the parish of '{name}': {', '.join(stops)}."
-
-    return f"I have no parish information for '{name}' yet."
-
-def get_ticket_types_cache():
-    try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT ticket_type, description, price, card_cost, deadline, documents_json FROM ticket_cache ORDER BY ticket_type")
-        rows = cursor.fetchall()
-        conn.close()
-
-        if not rows:
-            return FALLBACK_TICKET_TYPES, None
-
         result = {}
         for type_name, desc, price, card_cost, deadline, docs_json in rows:
-            try:
-                documents = json.loads(docs_json)
-            except Exception:
-                documents = [docs_json]
-            result[type_name] = {
-                "description": desc,
-                "price": price,
-                "card_cost": card_cost,
-                "deadline": deadline,
-                "documents": documents,
-            }
-
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(last_updated) FROM ticket_cache")
-        last_updated = cursor.fetchone()[0]
-        conn.close()
-
+            try: docs = json.loads(docs_json)
+            except Exception: docs = [docs_json]
+            result[type_name] = {"descricao": desc, "preco": price, "custo_cartao": card_cost, "prazo": deadline, "documentos": docs}
         return result, last_updated
-    except Exception as e:
-        logging.error(f"Error reading ticket types cache: {e}")
-        return FALLBACK_TICKET_TYPES, None
+    except Exception: return TIPOLOGIAS_PASSE_FALLBACK, None
 
-def query_tariff_cache():
+def consultar_tarifario_cache():
     try:
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT content_txt, last_updated FROM tariff_cache WHERE id = 1")
-        result = cursor.fetchone()
+        conn = get_db_connection()
+        res = conn.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_tarifario WHERE id = 1").fetchone()
         conn.close()
-        if result:
-            return f"Tariff table (updated on {result[1]}):\n\n{result[0]}"
-        return "The tariff table has not been synchronized yet."
-    except Exception as e:
-        return f"Error reading tariff cache: {e}"
+        return f"Tariff (updated {res[1]}):\n\n{res[0]}" if res else "Not synchronized."
+    except Exception as e: return str(e)
 
-def query_ticket_types_cache_tool():
-    ticket_types, last_update = get_ticket_types_cache()
-    if not ticket_types:
-        return "No ticket types in cache."
-    age_warning = f" (data from {last_update})" if last_update else ""
-    summary = f"Available ticket types{age_warning}:\n\n"
-    for name, info in ticket_types.items():
-        docs_txt = "; ".join(info["documents"])
-        summary += f"- **{name}**: {info['description']} Price: {info['price']}. Card Cost: {info['card_cost']}. Deadline: {info['deadline']}. Documents: {docs_txt}.\n"
-    return summary
+def consultar_tipologias_cache_tool():
+    types, up = obter_tipologias_cache()
+    if not types: return "No types."
+    return f"Types ({up}):\n\n" + "\n".join(f"- **{n}**: {i['descricao']} Preço: {i['preco']}" for n, i in types.items())
 
-def verify_ticket_documents(ticket_type: str, uploaded_files: dict):
-    current_types, _ = get_ticket_types_cache()
-    info = current_types.get(ticket_type, {"documents": ["unspecified document"]})
-    parts = [
-        f"You are going to review uploaded documents for a user requesting a '{ticket_type}' ticket.\n"
-        f"Required documents for this type: {', '.join(info['documents'])}.\n\n"
-        "For EACH document uploaded below (in order), state:\n"
-        "1. What kind of document it appears to be.\n"
-        "2. If it seems to match one of the required documents.\n"
-        "3. If it is legible and complete.\n"
-        "Be direct and clear. Also mention if any required document is missing."
+def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
+    current_types, _ = obter_tipologias_cache()
+    info = current_types.get(tipologia, {"documentos": ["unspecified document"]})
+    partes = [
+        f"Review uploaded documents for a '{tipologia}' ticket.\nRequired: {', '.join(info['documentos'])}.\n"
+        "State for EACH: 1. Type 2. Matches required? 3. Legible? Mention missing ones."
     ]
-
-    doc_names = []
-    for doc_name, file_obj in uploaded_files.items():
-        if file_obj is None:
-            continue
-        doc_names.append(doc_name)
-        try:
-            data_bytes = file_obj.getvalue()
-            mime = file_obj.type or "application/octet-stream"
-            parts.append(f"\n--- Uploaded document for: '{doc_name}' ---")
-            parts.append({"mime_type": mime, "data": data_bytes})
-        except Exception as e:
-            logging.error(f"Error reading uploaded file '{doc_name}': {e}")
-
-    if not doc_names:
-        return "No documents have been uploaded yet."
-
+    for n, f in ficheiros_carregados.items():
+        if f is None: continue
+        partes.extend([f"\n--- Document: '{n}' ---", {"mime_type": f.type or "application/octet-stream", "data": f.getvalue()}])
+    if len(partes) == 1: return "No documents uploaded."
     try:
-        verification_model = genai.GenerativeModel("gemini-3.5-flash")
-        response = verification_model.generate_content(parts, request_options={"timeout": 40})
-        return response.text
-    except Exception as e:
-        return f"Could not verify the documents at this time: {e}"
+        return genai.GenerativeModel("gemini-3.5-flash").generate_content(partes, request_options={"timeout": 40}).text
+    except Exception as e: return f"Error: {e}"
 
-def recommend_ticket_types(answers: dict, available_types: dict):
-    age = answers.get("age")
-    student = answers.get("student")
-    study_level = answers.get("study_level")
-    gmr_resident = answers.get("gmr_resident")
-    disability_60 = answers.get("disability_60")
-    veteran = answers.get("veteran")
-    uses_cp_pass = answers.get("uses_cp_pass")
-    early_retirement = answers.get("early_retirement")
+def recomendar_tipologias_passe(respostas: dict, available_types: dict):
+    c = []
+    def _h(p): return next((n for n in available_types if p.lower() in n.lower()), None)
+    if respostas.get("antigo_combatente") and _h("Antigo Combatente"): c.append(_h("Antigo Combatente"))
+    if respostas.get("incapacidade_60") and _h("Mobilidade Condicionada"): c.append(_h("Mobilidade Condicionada"))
+    if respostas.get("idade", 0) >= 65 and respostas.get("residente_gmr") and _h("65+"): c.append(_h("65+"))
+    if respostas.get("estudante"):
+        if respostas.get("nivel_estudo") == "superior":
+            c.append(_h("Universitário Residente") if respostas.get("residente_gmr") else _h("Universitário Não Residente"))
+        elif respostas.get("nivel_estudo") == "ate_18": c.append(_h("18+TP"))
+        elif respostas.get("nivel_estudo") == "ate_23": c.append(_h("23+TP"))
+    
+    c = [x for x in c if x]
+    if not c:
+        if respostas.get("residente_gmr") and _h("CIM AVE 50% + 10% CMG"): c.append(_h("CIM AVE 50% + 10% CMG"))
+        elif _h("Mensal") and not _h("CIM"): c.append(next(n for n in available_types if n.strip().lower() == "mensal"))
+    return list(dict.fromkeys(c))
 
-    candidates = []
+def renderizar_pedido_passe(ui):
+    st.subheader(ui["ticket_title"])
+    st.info(ui["ticket_warning"])
 
-    def _has(partial_name):
-        for name in available_types:
-            if partial_name.lower() in name.lower():
-                return name
-        return None
+    TICKET_TYPES, last_update = obter_tipologias_cache()
+    if last_update: st.caption(f"{ui['ticket_updated']} {last_update}")
 
-    if veteran and _has("Antigo Combatente"): candidates.append(_has("Antigo Combatente"))
-    if disability_60 and _has("Mobilidade Condicionada"): candidates.append(_has("Mobilidade Condicionada"))
-    if age is not None and age >= 65 and gmr_resident and _has("65+"): candidates.append(_has("65+"))
-    if early_retirement and age is not None and 60 <= age < 65 and _has("Reformado"): candidates.append(_has("Reformado"))
-    if student:
-        if study_level == "superior":
-            if gmr_resident and _has("Universitário Residente"): candidates.append(_has("Universitário Residente"))
-            elif _has("Universitário Não Residente"): candidates.append(_has("Universitário Não Residente"))
-        elif study_level == "up_to_18" and _has("18+TP"): candidates.append(_has("18+TP"))
-        elif study_level == "up_to_23" and _has("23+TP"): candidates.append(_has("23+TP"))
-    if uses_cp_pass and _has("Mensal CP"): candidates.append(_has("Mensal CP"))
-
-    if not candidates:
-        if gmr_resident and _has("CIM AVE 50% + 10% CMG"): candidates.append(_has("CIM AVE 50% + 10% CMG"))
-        elif gmr_resident and _has("CIM AVE 50%"): candidates.append(_has("CIM AVE 50%"))
-        elif _has("Mensal") and not _has("CIM"):
-            for name in available_types:
-                if name.strip().lower() == "mensal":
-                    candidates.append(name)
-                    break
-
-    seen = set()
-    unique_candidates = []
-    for c in candidates:
-        if c and c not in seen:
-            seen.add(c)
-            unique_candidates.append(c)
-    return unique_candidates
-
-def render_ticket_request():
-    st.subheader("🎫 Guimabus Ticket Request")
-    st.info("⚠️ **Important warning:** this form is a support and preliminary verification tool. **It is not an official submission channel.**")
-
-    TICKET_TYPES, last_update = get_ticket_types_cache()
-    if last_update:
-        st.caption(f"📅 Ticket types data updated on: {last_update}")
-
-    with st.expander("🧭 Don't know which type fits you? Answer these questions", expanded=False):
+    with st.expander(ui["ticket_wizard"], expanded=False):
         col1, col2 = st.columns(2)
-        age = col1.number_input("Your age", min_value=0, max_value=120, value=25, step=1, key="wizard_age")
-        gmr_resident = col2.checkbox("Do you reside in the Guimarães municipality?", key="wizard_resident")
+        age = col1.number_input(ui["ticket_age"], min_value=0, max_value=120, value=25, step=1, key="wizard_idade")
+        gmr_resident = col2.checkbox(ui["ticket_resident"], key="wizard_residente")
 
-        student = st.checkbox("Are you a student?", key="wizard_student")
+        student = st.checkbox(ui["ticket_student"], key="wizard_estudante")
         study_level = None
         if student:
-            study_level = st.radio("Education level?", options=["up_to_18", "up_to_23", "superior"], key="wizard_level")
+            level_map = {"ate_18": ui["ticket_level_opt1"], "ate_23": ui["ticket_level_opt2"], "superior": ui["ticket_level_opt3"]}
+            study_level = st.radio(ui["ticket_level"], options=list(level_map.keys()), format_func=lambda x: level_map[x], key="wizard_nivel")
 
         col3, col4 = st.columns(2)
-        disability_60 = col3.checkbox("Disability degree ≥ 60%?", key="wizard_disability")
-        veteran = col4.checkbox("War veteran or widow(er)?", key="wizard_veteran")
+        disability_60 = col3.checkbox(ui["ticket_disability"], key="wizard_incapacidade")
+        veteran = col4.checkbox(ui["ticket_veteran"], key="wizard_combatente")
 
         col5, col6 = st.columns(2)
-        early_retirement = col5.checkbox("Early retirement (60-65 years)?", key="wizard_retirement")
-        uses_cp_pass = col6.checkbox("Already have a CP train pass?", key="wizard_cp")
+        early_retirement = col5.checkbox(ui["ticket_retirement"], key="wizard_reforma")
+        uses_cp_pass = col6.checkbox(ui["ticket_cp"], key="wizard_cp")
 
-        if st.button("🔍 Recommend ticket type", key="wizard_recommend"):
-            answers = {"age": age, "gmr_resident": gmr_resident, "student": student, "study_level": study_level, "disability_60": disability_60, "veteran": veteran, "early_retirement": early_retirement, "uses_cp_pass": uses_cp_pass}
-            recommended = recommend_ticket_types(answers, TICKET_TYPES)
-            if recommended: st.success(f"Most suitable type(s): **{' / '.join(recommended)}**")
-            else: st.warning("The standard **Mensal** pass is likely your best option.")
+        if st.button(ui["ticket_recommend_btn"], key="wizard_recomendar"):
+            ans = {"idade": age, "residente_gmr": gmr_resident, "estudante": student, "nivel_estudo": study_level, "incapacidade_60": disability_60, "antigo_combatente": veteran, "reforma_antecipada": early_retirement, "usa_passe_cp": uses_cp_pass}
+            rec = recomendar_tipologias_passe(ans, TICKET_TYPES)
+            if rec: st.success(f"{ui['ticket_suitable']} **{' / '.join(rec)}**")
+            else: st.warning(ui["ticket_default"])
 
-    chosen_type = st.selectbox("Choose the ticket type:", list(TICKET_TYPES.keys()))
+    chosen_type = st.selectbox(ui["ticket_choose"], list(TICKET_TYPES.keys()))
     info = TICKET_TYPES[chosen_type]
 
-    st.markdown(f"**Description:** {info['description']}\n**Price:** {info['price']} | **Card Cost:** {info['card_cost']}")
-    st.markdown("**Required documents for this type:**")
-    uploaded_files = {}
-    for i, doc_name in enumerate(info["documents"]):
-        uploaded_files[doc_name] = st.file_uploader(f"📄 {doc_name}", type=["pdf", "png", "jpg", "jpeg"], key=f"upload_pass_{chosen_type}_{i}")
+    st.markdown(f"{ui['ticket_desc']} {info['descricao']}\n{ui['ticket_price']} {info['preco']} | {ui['ticket_card']} {info['custo_cartao']}\n{ui['ticket_deadline']} {info.get('prazo', '')}")
+    st.markdown(ui["ticket_docs_req"])
+    ficheiros = {}
+    for i, doc_name in enumerate(info["documentos"]):
+        ficheiros[doc_name] = st.file_uploader(f"📄 {doc_name}", type=["pdf", "png", "jpg", "jpeg"], key=f"upload_pass_{chosen_type}_{i}")
 
-    if st.button("🔍 Verify uploaded documents", use_container_width=True):
-        if not any(f is not None for f in uploaded_files.values()): st.warning("Upload at least one document.")
+    if st.button(ui["ticket_verify_btn"], use_container_width=True):
+        if not any(f is not None for f in ficheiros.values()): st.warning(ui["ticket_upload_warn"])
         else:
-            with st.spinner("Analyzing documents (in memory)..."):
-                st.markdown(verify_ticket_documents(chosen_type, uploaded_files))
+            with st.spinner(ui["ticket_analyzing"]):
+                st.markdown(verificar_documentos_passe(chosen_type, ficheiros))
 
-def render_arcade_game():
-    top_scores = get_top_10_scores()
-    json_scores = json.dumps(top_scores)
-
-    html_game = """
+def renderizar_jogo(ui):
+    json_scores = json.dumps(obter_top_10())
+    html_jogo = f"""
     <div style="text-align:center; background-color:#111; padding:15px; border-radius:10px; font-family:sans-serif;">
-        <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Guimabus Arcade: Driving Cabin 🚌</h3>
-        
+        <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">{ui['game_title']}</h3>
         <canvas id="stage" width="650" height="360" style="border:2px solid #2ecc71; background-color:#000; display:block; margin:0 auto; touch-action:none;"></canvas>
-        
         <div style="margin-top: 10px;">
-            <button id="btnAction" onclick="toggleGame()" style="padding: 6px 15px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">Play ▶</button>
-            <input type="text" id="nameInput" placeholder="Your Name" maxlength="10" style="display:none; padding: 5px; border-radius:4px; border:1px solid #2ecc71; background:#222; color:white; width:120px; margin-left:10px; vertical-align:middle; text-transform:uppercase;">
-            <button id="btnSave" onclick="saveRecord()" style="display:none; padding: 6px 15px; background:#f1c40f; color:black; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-left:5px; vertical-align:middle;">Save 💾</button>
+            <button id="btnAction" onclick="toggleGame()" style="padding: 6px 15px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">{ui['game_play']}</button>
+            <input type="text" id="nomeInput" placeholder="{ui['game_name']}" maxlength="10" style="display:none; padding: 5px; border-radius:4px; border:1px solid #2ecc71; background:#222; color:white; width:120px; margin-left:10px; vertical-align:middle; text-transform:uppercase;">
+            <button id="btnGravar" onclick="gravarRecorde()" style="display:none; padding: 6px 15px; background:#f1c40f; color:black; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-left:5px; vertical-align:middle;">{ui['game_save']}</button>
         </div>
-
         <div style="margin-top: 15px; display: inline-block; width: 100%; text-align: center;">
             <div style="margin-bottom: 5px;">
-                <button data-dir="up" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▲</button>
+                <button data-dir="cima" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▲</button>
             </div>
             <div style="display: flex; justify-content: center; gap: 10px;">
-                <button data-dir="left" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">◀</button>
-                <button data-dir="down" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▼</button>
-                <button data-dir="right" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▶</button>
+                <button data-dir="esquerda" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">◀</button>
+                <button data-dir="baixo" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▼</button>
+                <button data-dir="direita" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▶</button>
             </div>
         </div>
-        
         <script>
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
             var btnAction = document.getElementById('btnAction');
-            var nameInput = document.getElementById('nameInput');
-            var btnSave = document.getElementById('btnSave');
+            var nomeInput = document.getElementById('nomeInput');
+            var btnGravar = document.getElementById('btnGravar');
             
             var tnt = 20;
             var gameWidth = 400;
             var cols = gameWidth / tnt, rows = canvas.height / tnt;
-            var snake, dx, dy, apple, score, speedMs;
-            var nextDir = null;
-            var gameInterval = null;
-            var gameStarted = false;
-            var gameOver = false;
-            
-            var leaderboard = JSON.parse('JSON_SCORES_PLACEHOLDER');
+            var snake, dx, dy, apple, score, velocidadeMs, proximaDirecao, gameInterval, gameStarted, gameOver;
+            var leaderboard = {json_scores};
 
-            function newApple() {
+            function novaMaca() {{
                 var pos;
-                do {
-                    pos = {
-                        x: Math.floor(Math.random() * cols) * tnt,
-                        y: Math.floor(Math.random() * rows) * tnt
-                    };
-                } while (snake.some(function(s) { return s.x === pos.x && s.y === pos.y; }));
+                do {{ pos = {{x: Math.floor(Math.random() * cols) * tnt, y: Math.floor(Math.random() * rows) * tnt}}; }} 
+                while (snake.some(function(s) {{ return s.x === pos.x && s.y === pos.y; }}));
                 return pos;
-            }
+            }}
 
-            function initialState() {
-                snake = [{x:160, y:160}, {x:140, y:160}, {x:120, y:160}];
-                dx = tnt; dy = 0;
-                nextDir = null;
-                score = 0;
-                speedMs = 180;
-                apple = newApple();
-                gameOver = false;
-                nameInput.style.display = 'none';
-                btnSave.style.display = 'none';
-            }
-            initialState();
+            function estadoInicial() {{
+                snake = [{{x:160, y:160}}, {{x:140, y:160}}, {{x:120, y:160}}];
+                dx = tnt; dy = 0; proximaDirecao = null; score = 0; velocidadeMs = 180;
+                apple = novaMaca(); gameOver = false;
+                nomeInput.style.display = 'none'; btnGravar.style.display = 'none';
+            }}
+            estadoInicial();
             
-            function drawScene() {
+            function drawScene() {{
                 ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-                ctx.lineWidth = 1;
-                for(var i=tnt; i<canvas.height; i+=tnt) {
-                    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(gameWidth, i); ctx.stroke();
-                }
-
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
-
                 ctx.fillStyle = '#3498db'; ctx.beginPath();
                 ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI); ctx.fill();
-                ctx.fillStyle = '#ffffff'; ctx.beginPath();
-                ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-12)/2, 0, 2 * Math.PI); ctx.fill();
                 
-                for(var i=0; i<snake.length; i++) {
-                    if (i === 0) {
-                        ctx.fillStyle = '#27ae60'; ctx.fillRect(snake[i].x, snake[i].y, tnt-1, tnt-1);
-                        ctx.fillStyle = '#f1c40f';
-                        if (dx > 0) { ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + tnt - 4, snake[i].y + tnt - 6, 3, 3); }
-                        else if (dx < 0) { ctx.fillRect(snake[i].x + 1, snake[i].y + 2, 3, 3); ctx.fillRect(snake[i].x + 1, snake[i].y + tnt - 6, 3, 3); }
-                        else if (dy < 0) { ctx.fillStyle = '#2ecc71'; ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-3, tnt-3); }
-                        else if (dy > 0) { ctx.fillRect(snake[i].x + 2, snake[i].y + tnt - 4, 3, 3); ctx.fillRect(snake[i].x + tnt - 6, snake[i].y + tnt - 4, 3, 3); }
-                    } else {
-                        ctx.fillStyle = '#2ecc71'; ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-3, tnt-3);
-                        ctx.fillStyle = '#2c3e50'; ctx.fillRect(snake[i].x + 4, snake[i].y + 4, tnt-9, tnt-9);
-                    }
-                }
-                
-                if(snake.length > 1) {
-                    var textPos = snake[1];
-                    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
-                    ctx.fillText('GMR', textPos.x + tnt/2, textPos.y + tnt/2 + 3);
-                }
+                for(var i=0; i<snake.length; i++) {{
+                    ctx.fillStyle = (i===0) ? '#27ae60' : '#2ecc71';
+                    ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-2, tnt-2);
+                }}
 
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
-                ctx.fillText('Passengers: ' + (score / 10), 15, 25);
-
+                ctx.fillText('{ui['game_pax']}: ' + (score / 10), 15, 25);
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
-                ctx.fillText('🏆 TOP 10 DRIVERS', gameWidth + 15, 30);
+                ctx.fillText('{ui['game_top10']}', gameWidth + 15, 30);
                 
                 ctx.font = '12px sans-serif';
-                for(var k=0; k<10; k++) {
+                for(var k=0; k<10; k++) {{
                     var yPos = 65 + (k * 26);
-                    ctx.fillStyle = (k === 0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
-                    
-                    var medal = (k===0)?"1st ":((k===1)?"2nd ":((k===2)?"3rd ":(k+1)+"th "));
-                    if (leaderboard[k]) {
-                        var item = leaderboard[k];
-                        ctx.fillText(medal + item[0], gameWidth + 15, yPos);
-                        ctx.textAlign = 'end';
-                        ctx.fillText(item[1] + ' pax', canvas.width - 15, yPos);
-                        ctx.textAlign = 'start';
-                    } else {
-                        ctx.fillStyle = '#444';
-                        ctx.fillText(medal + '------', gameWidth + 15, yPos);
-                    }
-                }
+                    ctx.fillStyle = (k===0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
+                    if (leaderboard[k]) {{
+                        ctx.fillText((k+1) + "º " + leaderboard[k][0], gameWidth + 15, yPos);
+                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' pas.', canvas.width - 15, yPos); ctx.textAlign = 'start';
+                    }} else {{ ctx.fillStyle = '#444'; ctx.fillText((k+1) + 'º ------', gameWidth + 15, yPos); }}
+                }}
                 
-                if (gameOver) {
+                if (gameOver) {{
                     ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                     ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
-                    ctx.fillText('END OF THE LINE', gameWidth/2, canvas.height/2 - 20);
+                    ctx.fillText('{ui['game_gameover']}', gameWidth/2, canvas.height/2 - 20);
                     ctx.fillStyle = '#ffffff'; ctx.font = '14px sans-serif';
-                    ctx.fillText('You transported ' + (score / 10) + ' passengers!', gameWidth/2, canvas.height/2 + 5);
-                    ctx.font = '11px sans-serif'; ctx.fillStyle = '#f1c40f';
-                    ctx.fillText('Type your name below.', gameWidth/2, canvas.height/2 + 30);
+                    ctx.fillText('{ui['game_transported']} ' + (score / 10) + '!', gameWidth/2, canvas.height/2 + 5);
+                    ctx.fillStyle = '#f1c40f'; ctx.fillText('{ui['game_type_name']}', gameWidth/2, canvas.height/2 + 30);
                     ctx.textAlign = 'start';
-                }
-            }
+                }}
+            }}
             
-            function gameLoop() {
+            function gameLoop() {{
                 if (gameOver) return;
-                if (nextDir) {
-                    if (nextDir.dx !== -dx || nextDir.dy !== -dy) {
-                        dx = nextDir.dx; dy = nextDir.dy;
-                    }
-                    nextDir = null;
-                }
-                var head = {x: snake[0].x + dx, y: snake[0].y + dy};
-                if (head.x < 0) head.x = gameWidth - tnt;
-                else if (head.x >= gameWidth) head.x = 0;
-                if (head.y < 0) head.y = canvas.height - tnt;
-                else if (head.y >= canvas.height) head.y = 0;
+                if (proximaDirecao) {{ if (proximaDirecao.dx !== -dx || proximaDirecao.dy !== -dy) {{ dx = proximaDirecao.dx; dy = proximaDirecao.dy; }} proximaDirecao = null; }}
+                var head = {{x: snake[0].x + dx, y: snake[0].y + dy}};
+                if (head.x < 0) head.x = gameWidth - tnt; else if (head.x >= gameWidth) head.x = 0;
+                if (head.y < 0) head.y = canvas.height - tnt; else if (head.y >= canvas.height) head.y = 0;
 
-                var willEat = (head.x === apple.x && head.y === apple.y);
-                var bodyToCheck = willEat ? snake : snake.slice(0, snake.length - 1);
-                for (var i = 0; i < bodyToCheck.length; i++) { 
-                    if (bodyToCheck[i].x === head.x && bodyToCheck[i].y === head.y) {
-                        triggerGameOver(); return;
-                    } 
-                }
+                var vaiComer = (head.x === apple.x && head.y === apple.y);
+                for (var i = 0; i < (vaiComer ? snake.length : snake.length-1); i++) {{ 
+                    if (snake[i].x === head.x && snake[i].y === head.y) {{ triggerGameOver(); return; }} 
+                }}
                 snake.unshift(head);
-                if (willEat) {
+                if (vaiComer) {{
                     score += 10;
-                    if (score % 50 === 0 && speedMs > 80) {
-                        speedMs -= 10;
-                        clearInterval(gameInterval); gameInterval = setInterval(gameLoop, speedMs);
-                    }
-                    apple = newApple();
-                } else { snake.pop(); }
+                    if (score % 50 === 0 && velocidadeMs > 80) {{ velocidadeMs -= 10; clearInterval(gameInterval); gameInterval = setInterval(gameLoop, velocidadeMs); }}
+                    apple = novaMaca();
+                }} else {{ snake.pop(); }}
                 drawScene();
-            }
+            }}
             
-            function toggleGame() {
-                if (gameOver) { resetGame(); return; }
-                if (!gameStarted) {
-                    gameStarted = true; btnAction.innerText = "Pause ⏸";
-                    gameInterval = setInterval(gameLoop, speedMs);
-                } else {
-                    gameStarted = false; btnAction.innerText = "Play ▶"; clearInterval(gameInterval);
-                }
-            }
-            function triggerGameOver() {
-                gameOver = true; gameStarted = false; clearInterval(gameInterval);
-                btnAction.innerText = "Reset 🔄";
-                if((score/10) > 0) {
-                    nameInput.style.display = 'inline-block';
-                    btnSave.style.display = 'inline-block';
-                    nameInput.focus();
-                }
+            function toggleGame() {{
+                if (gameOver) {{ resetGame(); return; }}
+                if (!gameStarted) {{ gameStarted = true; btnAction.innerText = "{ui['game_pause']}"; gameInterval = setInterval(gameLoop, velocidadeMs); }} 
+                else {{ gameStarted = false; btnAction.innerText = "{ui['game_play']}"; clearInterval(gameInterval); }}
+            }}
+            function triggerGameOver() {{
+                gameOver = true; gameStarted = false; clearInterval(gameInterval); btnAction.innerText = "{ui['game_reset']}";
+                if((score/10) > 0) {{ nomeInput.style.display = 'inline-block'; btnGravar.style.display = 'inline-block'; nomeInput.focus(); }}
                 drawScene();
-            }
-            function resetGame() { 
-                initialState(); gameOver = false; gameStarted = true;
-                btnAction.innerText = "Pause ⏸"; gameInterval = setInterval(gameLoop, speedMs);
-                drawScene();
-            }
-            function saveRecord() {
-                var name = nameInput.value.trim().toUpperCase();
-                if(!name) { alert('Please enter your name!'); return; }
-                btnSave.disabled = true;
-                btnSave.innerText = "💾...";
-                
-                var finalScore = (score / 10);
-                window.parent.location.search = "?save_name=" + encodeURIComponent(name) + "&save_score=" + finalScore;
-            }
-            function changeDir(dir) {
+            }}
+            function resetGame() {{ 
+                estadoInicial(); gameOver = false; gameStarted = true;
+                btnAction.innerText = "{ui['game_pause']}"; gameInterval = setInterval(gameLoop, velocidadeMs); drawScene();
+            }}
+            function gravarRecorde() {{
+                var nome = nomeInput.value.trim().toUpperCase();
+                if(!nome) {{ alert("{ui['game_alert']}"); return; }}
+                btnGravar.disabled = true; btnGravar.innerText = "💾...";
+                try {{
+                    var url = new URL(window.parent.location.href);
+                    url.searchParams.set("save_nome", nome);
+                    url.searchParams.set("save_pontos", (score / 10));
+                    window.parent.location.href = url.toString();
+                }} catch(e) {{
+                    alert("Erro de segurança ao tentar gravar o score.");
+                }}
+            }}
+            function mudarDirecao(dir) {{
                 if (!gameStarted || gameOver) return;
-                if(dir === 'left' && dx === 0) nextDir = {dx:-tnt, dy:0};
-                if(dir === 'up' && dy === 0) nextDir = {dx:0, dy:-tnt};
-                if(dir === 'right' && dx === 0) nextDir = {dx:tnt, dy:0};
-                if(dir === 'down' && dy === 0) nextDir = {dx:0, dy:tnt};
-            }
-            document.addEventListener('keydown', function(e) {
-                var map = {37:'left', 38:'up', 39:'right', 40:'down'};
-                if (map[e.keyCode]) { e.preventDefault(); changeDir(map[e.keyCode]); }
-            });
-            document.querySelectorAll('button[data-dir]').forEach(function(btn) {
-                btn.addEventListener('click', function() { changeDir(btn.getAttribute('data-dir')); });
-            });
+                if(dir === 'esquerda' && dx === 0) proximaDirecao = {{dx:-tnt, dy:0}};
+                if(dir === 'cima' && dy === 0) proximaDirecao = {{dx:0, dy:-tnt}};
+                if(dir === 'direita' && dx === 0) proximaDirecao = {{dx:tnt, dy:0}};
+                if(dir === 'baixo' && dy === 0) proximaDirecao = {{dx:0, dy:tnt}};
+            }}
+            document.addEventListener('keydown', function(e) {{
+                var map = {{37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'}};
+                if (map[e.keyCode]) {{ e.preventDefault(); mudarDirecao(map[e.keyCode]); }}
+            }});
+            document.querySelectorAll('button[data-dir]').forEach(function(btn) {{
+                btn.addEventListener('click', function() {{ mudarDirecao(btn.getAttribute('data-dir')); }});
+            }});
             drawScene();
         </script>
     </div>
-    """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
-    return components.html(html_game, height=650)
+    """
+    return components.html(html_jogo, height=650)
 
-# --- INITIAL MESSAGE ---
-INITIAL_MESSAGE = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. (I can also speak English if you prefer!)
-
-Estou pronto para te apoiar em três frentes:
-1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
-2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
-3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
-
-Como posso ajudar hoje? (How can I help you today?)"""
-
-# --- STATE INITIALIZATION ---
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": INITIAL_MESSAGE}]
-    logging.info(f"New user session started. Temp ID: {st.session_state.session_id}")
+    st.session_state.messages = [{"role": "assistant", "content": ui["initial_msg"]}]
 
-if "game_active" not in st.session_state:
-    st.session_state.game_active = False
+if len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] == "assistant":
+    st.session_state.messages[0]["content"] = ui["initial_msg"]
 
-auto_sync_if_needed(day_limit=7)
+if "jogo_ativo" not in st.session_state:
+    st.session_state.jogo_ativo = False
 
-# --- SIDEBAR (AGENT MANAGEMENT) ---
 with st.sidebar:
-    st.header("⚙️ Agent Panel")
-    if st.button("🗑️ Clear My History", use_container_width=True):
-        st.session_state.messages = [{"role": "assistant", "content": INITIAL_MESSAGE}]
-        st.session_state.game_active = False
+    st.header(ui["sidebar_panel"])
+    if st.button(ui["clear_history"], use_container_width=True):
+        st.session_state.messages = [{"role": "assistant", "content": ui["initial_msg"]}]
+        st.session_state.jogo_ativo = False
         st.rerun()
     st.divider()
 
-    st.subheader("🕹️ Entertainment")
-    btn_game_text = "Close Game X" if st.session_state.game_active else "Open Mini-Game 👾"
+    st.subheader(ui["entertainment"])
+    btn_game_text = ui["close_game"] if st.session_state.jogo_ativo else ui["open_game"]
     if st.button(btn_game_text, use_container_width=True):
-        st.session_state.game_active = not st.session_state.game_active
+        st.session_state.jogo_ativo = not st.session_state.jogo_ativo
         st.rerun()
     st.divider()
 
-    st.subheader("🎫 Transport Tickets")
-    if "ticket_active" not in st.session_state:
-        st.session_state.ticket_active = False
-    btn_ticket_text = "Close Ticket Request X" if st.session_state.ticket_active else "Request Ticket 🎫"
+    st.subheader(ui["transport_tickets"])
+    if "passe_ativo" not in st.session_state:
+        st.session_state.passe_ativo = False
+    btn_ticket_text = ui["close_ticket"] if st.session_state.passe_ativo else ui["request_ticket"]
     if st.button(btn_ticket_text, use_container_width=True):
-        st.session_state.ticket_active = not st.session_state.ticket_active
+        st.session_state.passe_ativo = not st.session_state.passe_ativo
         st.rerun()
     st.divider()
     
-    st.sidebar.subheader("👨‍💻 Developer")
-    st.sidebar.info("""**Celso Ferreira**
-*Looking for IT / Computer Science roles.*
-📞 Contact: **917 486 683**""")
+    st.sidebar.subheader(ui["developer"])
+    st.sidebar.info(ui["dev_desc"])
     st.sidebar.divider()
     
-    st.write("Status: **Online**")
-    st.write("Native Model: `Gemini-3.5-Flash`")
+    st.write(ui["status"])
     st.sidebar.divider()
     
-    st.sidebar.subheader("🔒 Administrator Area")
-    if "admin_authenticated" not in st.session_state:
-        st.session_state.admin_authenticated = False
+    st.sidebar.subheader(ui["admin_area"])
+    if "admin_autenticado" not in st.session_state:
+        st.session_state.admin_autenticado = False
 
-    if not st.session_state.admin_authenticated:
-        with st.sidebar.expander("Login as Administrator"):
-            password_input = st.text_input("Admin Password", type="password", key="admin_pwd")
-            if st.button("Login", key="admin_login_btn"):
+    if not st.session_state.admin_autenticado:
+        with st.sidebar.expander(ui["login_admin"]):
+            password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
+            if st.button(ui["login_btn"], key="admin_login_btn"):
                 if password_input and password_input == st.secrets.get("ADMIN_PASSWORD", None):
-                    st.session_state.admin_authenticated = True
-                    logging.info("Admin login successful.")
+                    st.session_state.admin_autenticado = True
                     st.rerun()
                 else:
-                    st.sidebar.error("Incorrect password.")
-                    logging.warning("Failed admin login attempt.")
+                    st.sidebar.error(ui["wrong_pass"])
     else:
-        st.sidebar.success("Admin session active.")
+        st.sidebar.success(ui["admin_active"])
         
-        st.sidebar.subheader("🕷️ Web Automation")
-        if st.sidebar.button("🔄 Sync All Schedules (Scraping)", use_container_width=True):
-            with st.spinner("The robot is reading the Guimabus website..."):
-                scraping_result = sync_all_guimabus_schedules()
-                index_result = build_stop_index()
-                st.sidebar.success(scraping_result)
-                st.sidebar.success(index_result)
+        st.sidebar.subheader(ui["web_auto"])
+        if st.sidebar.button(ui["sync_all"], use_container_width=True):
+            with st.spinner(ui["robot_reading"]):
+                st.sidebar.success(sincronizar_todos_horarios_guimabus())
+                st.sidebar.success(construir_indice_paragens())
 
-        if st.sidebar.button("🗺️ Rebuild Stop Index", use_container_width=True):
-            with st.spinner("Rebuilding index from existing cache..."):
-                st.sidebar.success(build_stop_index())
+        if st.sidebar.button(ui["rebuild_index"], use_container_width=True):
+            with st.spinner(ui["rebuild_index_spinner"]):
+                st.sidebar.success(construir_indice_paragens())
 
-        if st.sidebar.button("📍 Discover Parish for Each Stop", use_container_width=True):
-            st.sidebar.caption("Querying OpenStreetMap for each stop's parish...")
-            progress_bar = st.sidebar.progress(0.0)
-            progress_text = st.sidebar.empty()
+        if st.sidebar.button(ui["discover_parish"], use_container_width=True):
+            st.sidebar.caption(ui["ask_osm"])
+            barra_progresso = st.sidebar.progress(0.0)
+            texto_progresso = st.sidebar.empty()
+            def _atualizar_progresso(atual, total, paragem_atual):
+                barra_progresso.progress(atual / total)
+                texto_progresso.caption(f"{atual}/{total}: {paragem_atual}")
+            st.sidebar.success(enriquecer_paragens_com_freguesia(progresso_callback=_atualizar_progresso))
 
-            def _update_progress(current, total, current_stop):
-                progress_bar.progress(current / total)
-                progress_text.caption(f"{current}/{total}: {current_stop}")
-
-            enrichment_result = enrich_stops_with_parish(progress_callback=_update_progress)
-            st.sidebar.success(enrichment_result)
-
-        if st.sidebar.button("🔄 Sync Tickets and Tariff", use_container_width=True):
-            with st.spinner("The robot is reading tickets/ and tariff/..."):
-                tickets_result = sync_tickets_and_tariff()
-                st.sidebar.success(tickets_result)
+        if st.sidebar.button(ui["sync_tickets"], use_container_width=True):
+            with st.spinner(ui["robot_reading_tickets"]):
+                st.sidebar.success(sincronizar_titulos_e_tarifario())
                 
-        if st.sidebar.button("Logout of Administrator Area", key="admin_logout_btn"):
-            st.session_state.admin_authenticated = False
+        if st.sidebar.button(ui["logout_admin"], key="admin_logout_btn"):
+            st.session_state.admin_autenticado = False
             st.rerun()
 
-        st.sidebar.subheader("📊 Telemetry and DB")
-        if os.path.exists("agent_memory.db"):
-            with open("agent_memory.db", "rb") as f:
-                st.sidebar.download_button("📥 Export SQLite DB (.db)", f, "agent_memory.db", "application/octet-stream", use_container_width=True)
+        st.sidebar.subheader(ui["telemetry_db"])
+        if os.path.exists("agente_memoria.db"):
+            with open("agente_memoria.db", "rb") as f:
+                st.sidebar.download_button(ui["export_db"], f, "agente_memoria.db", "application/octet-stream", use_container_width=True)
 
-        with st.sidebar.expander("👁️ View System Logs"):
-            if os.path.exists("agent_audit.log"):
-                with open("agent_audit.log", "r", encoding="utf-8") as f:
-                    log_lines = f.readlines()[-10:]
-                    for line in log_lines: st.caption(line.strip())
+        with st.sidebar.expander(ui["view_logs"]):
+            if os.path.exists("auditoria_agente.log"):
+                with open("auditoria_agente.log", "r", encoding="utf-8") as f:
+                    for linha in f.readlines()[-10:]: st.caption(linha.strip())
 
-        with st.sidebar.expander("🗄️ Global Permanent History (DB)"):
-            if os.path.exists("agent_memory.db"):
-                conn = sqlite3.connect("agent_memory.db")
-                cursor = conn.cursor()
-                cursor.execute("SELECT timestamp, session_id, role, content FROM global_history ORDER BY id DESC LIMIT 30")
-                db_lines = cursor.fetchall()
-                conn.close()
-                for r in reversed(db_lines):
-                    hr_min = r[0].split(" ")[1] if " " in r[0] else r[0]
-                    session = r[1]
-                    if r[2] == "user":
-                        st.markdown(f"**🟢 [{hr_min}] Visitor ({session}):** {r[3]}")
-                    else:
-                        st.markdown(f"**🤖 [{hr_min}] Agent ({session}):** {r[3]}")
+        with st.sidebar.expander(ui["global_history"]):
+            if os.path.exists("agente_memoria.db"):
+                conn = get_db_connection()
+                for r in reversed(conn.execute("SELECT timestamp, session_id, role, content FROM historico_global ORDER BY id DESC LIMIT 30").fetchall()):
+                    hora_min = r[0].split(" ")[1] if " " in r[0] else r[0]
+                    st.markdown(f"**{'🟢' if r[2]=='user' else '🤖'} [{hora_min}] {ui['visitor'] if r[2]=='user' else ui['agent']} ({r[1]}):** {r[3]}")
                     st.divider()
+                conn.close()
 
-if st.session_state.game_active:
-    render_arcade_game()
+if st.session_state.jogo_ativo:
+    renderizar_jogo(ui)
 
-if st.session_state.get("ticket_active"):
-    render_ticket_request()
+if st.session_state.get("passe_ativo"):
+    renderizar_pedido_passe(ui)
 
-today_warnings = get_facebook_warnings()
-if today_warnings:
-    render_ad_footer(today_warnings)
+avisos_hoje = obter_avisos_facebook()
+if avisos_hoje:
+    renderizar_rodape_anuncios(avisos_hoje, ui)
 
 for message in st.session_state.messages:
-    avatar_type = "💼" if message["role"] == "assistant" else "👤"
-    with st.chat_message(message["role"], avatar=avatar_type):
-        st.markdown(message["content"])
+    avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
+    with st.chat_message(message["role"], avatar=avatar_tipo):
+        if message["role"] == "assistant" and "```html" in message["content"].lower():
+            blocos = re.split(r'```[hH][tT][mM][lL]', message["content"])
+            st.markdown(blocos[0], unsafe_allow_html=True)
+            for bloco in blocos[1:]:
+                if "```" in bloco:
+                    codigo_html, resto_texto = bloco.split("```", 1)
+                    components.html(codigo_html.strip(), height=450, scrolling=True)
+                    st.markdown(resto_texto, unsafe_allow_html=True)
+                else:
+                    components.html(bloco.strip(), height=450, scrolling=True)
+        else:
+            st.markdown(message["content"])
 
-prompt_text = st.chat_input("How can I help you today?")
-audio_file = st.audio_input("Speak")
+is_updating = verificar_necessidade_sync(limite_dias=7)
+
+if is_updating:
+    st.error(ui["updating_system"], icon="⏳")
+    
+    with st.spinner(ui["robot_reading"]):
+        tasks = st.session_state.update_tasks
+        
+        if tasks.get("sch"):
+            sincronizar_todos_horarios_guimabus()
+            construir_indice_paragens()
+        elif tasks.get("idx"):
+            construir_indice_paragens()
+        
+        if tasks.get("tkt"):
+            sincronizar_titulos_e_tarifario()
+            
+        if tasks.get("geo"):
+            importar_pois_guimaraes()
+            
+    st.session_state.is_updating = False
+    st.rerun()
+
+prompt_texto = st.chat_input(ui["chat_input"])
+audio_file = st.audio_input(ui["speak"])
 
 prompt = None
-input_type = "Text"
+tipo_input = "Texto"
 
-if "last_processed_audio_id" not in st.session_state:
-    st.session_state.last_processed_audio_id = None
+if "ultimo_audio_processado_id" not in st.session_state:
+    st.session_state.ultimo_audio_processado_id = None
 
-if prompt_text:
-    prompt = prompt_text
+if prompt_texto:
+    prompt = prompt_texto
 elif audio_file:
-    current_audio_id = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
+    audio_id_atual = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
 
-    if current_audio_id != st.session_state.last_processed_audio_id:
-        st.session_state.last_processed_audio_id = current_audio_id
-        input_type = "Audio"
-        with st.spinner("Processing and transcribing your audio..."):
+    if audio_id_atual != st.session_state.ultimo_audio_processado_id:
+        st.session_state.ultimo_audio_processado_id = audio_id_atual
+        tipo_input = "Áudio"
+        with st.spinner(ui["processing_audio"]):
             try:
                 audio_data = audio_file.read()
-                transcription_model = genai.GenerativeModel("gemini-3.5-flash")
-                audio_part = {"mime_type": "audio/wav", "data": audio_data}
-
-                transcription_response = transcription_model.generate_content([
-                    "Transcribe the provided audio strictly to text, maintaining correct punctuation and the original language. Do not add extra comments.",
-                    audio_part
+                model_transcrever = genai.GenerativeModel("gemini-3.5-flash")
+                response_transcricao = model_transcrever.generate_content([
+                    "Transcreve estritamente o áudio fornecido para texto, mantendo a pontuação correta e no idioma original. Não adiciones comentários extras.",
+                    {"mime_type": "audio/wav", "data": audio_data}
                 ])
-                prompt = transcription_response.text.strip()
-                logging.info(f"Voice transcription completed successfully: '{prompt}'")
+                prompt = response_transcricao.text.strip()
             except Exception as e:
-                st.error(f"Error processing voice file: {e}")
-                logging.error(f"Audio transcription failed: {e}")
+                st.error(f"{ui['audio_error']} {e}")
 
 if prompt:
-    logging.info(f"Input processed [{input_type}]: {prompt}")
-    save_message_db(st.session_state.session_id, "user", prompt)
-    
+    guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="💼"):
-        with st.spinner("Agent processing context and tools..."):
+        with st.spinner(ui["processing_agent"]):
             try:
-                base_context = get_knowledge_base_content()
+                contexto_base = len_knowledge_base()
                 
-                EXECUTIVE_PROMPT = """You are Celso Ferreira's Elite Executive Assistant.
-                You are an Agent focused on automation, IT support, and infrastructure.
+                LANGUAGE_INSTRUCTION = "CRUCIAL LANGUAGE RULE: You MUST respond entirely in European Portuguese (pt-PT)." if st.session_state.language == "PT" else "CRUCIAL LANGUAGE RULE: You MUST respond entirely in English."
 
-                CRUCIAL LANGUAGE RULE: You must respond concisely in European Portuguese (pt-PT) by default. HOWEVER, if the user asks you a question or communicates in English, you MUST switch and respond entirely in English.
+                SCHEDULE_INSTRUCTION = (
+                    "MANDATÓRIO: Sempre que te pedirem horários ou linhas, tens de apresentar OBRIGATORIAMENTE as horas de partida/chegada do horário pedido lendo a cache da ferramenta `consultar_cache_horario_linha`. NUNCA mandes apenas o link sem mostrares o horário no texto. No final da tua resposta, tens OBRIGATORIAMENTE de colocar o link: 'Consulta o horário oficial aqui: [LINK DA LINHA]'." 
+                    if st.session_state.language == "PT" else 
+                    "MANDATORY: Whenever asked about schedules or lines, you MUST present the actual departure/arrival times by reading the cache from the `query_line_schedule_cache` tool. NEVER just send the link without showing the times in your text. At the very end of your response, you MUST include the link: 'Check the official schedule here: [LINE LINK]'."
+                )
 
-                You have these tools related to the local Guimabus fleet:
-                - get_guimabus_data: real-time fleet status.
-                - get_stop_schedules: waiting time forecasts for a specific stop.
-                - query_line_schedule_cache: queries the local cache to read fixed schedules and tables.
-                - query_ticket_types_cache_tool: reads ticket types.
-                - query_tariff_cache: reads the complete tariff table.
-                - plan_trip_with_transfer: given an origin and destination stop, tells if there is a direct line or suggests a transfer.
-                - query_stop_parish_tool: tells which parish a stop is in.
-                - generate_google_maps_link: receives a location name (stop, cafe, hospital, street) and returns a direct Google Maps link.
-                - find_closest_stop: discovers the closest official bus stop to any cafe, factory, or point of interest.
+                VISUAL_CARD_INSTRUCTION = (
+                    "NOVA REGRA DE UX (CARTÃO VISUAL): Se o utilizador pedir uma viagem com transbordo ou horários de mais que uma linha, apresenta a resposta normalmente mas, no final, PERGUNTA OBRIGATORIAMENTE: 'Queres que eu gere um cartão visual com o resumo desta viagem?'. "
+                    "SE (e apenas se) o utilizador já tiver respondido 'sim' a essa pergunta, deves gerar OBRIGATORIAMENTE um bloco de código HTML contendo um cartão de embarque moderno, com CSS integrado elegante, cores da Guimabus (verde #2ecc71 e cinza escuro), cantos arredondados e ícones (usa emojis), detalhando a origem, transbordo, destino e as respetivas horas. "
+                    "Envolve o código HTML OBRIGATORIAMENTE num bloco de código markdown (```html ... ```) para que o sistema o possa renderizar graficamente como uma imagem iterativa."
+                    if st.session_state.language == "PT" else 
+                    "NEW UX RULE (VISUAL CARD): If the user asks for a trip with a transfer or schedules for more than one line, present the response normally but, at the end, YOU MUST ASK: 'Do you want me to generate a visual card summarizing this trip?'. "
+                    "IF (and only if) the user has answered 'yes' to that question, YOU MUST generate an HTML code block containing a modern boarding pass card, with elegant integrated CSS, Guimabus colors (green #2ecc71 and dark gray), rounded corners and icons (use emojis), detailing the origin, transfer, destination, and respective times. "
+                    "You MUST wrap the HTML code in a markdown code block (```html ... ```) so the system can render it graphically."
+                )
 
-                MANDATORY PLANNING LOGIC AND SCHEDULE PRESENTATION:
+                PROMPT_EXECUTIVO = f"""Tu és o Assistente Executivo de Elite do Celso Ferreira.
+                És um Agente focado em automação, suporte e infraestrutura IT.
+
+                {LANGUAGE_INSTRUCTION}
+
+                Tens estas ferramentas relacionadas com a frota local da Guimabus:
+                - obter_dados_guimabus: estado em tempo real da frota.
+                - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica.
+                - consultar_cache_horario_linha: consulta a cache local para ler os horários e tabelas fixas.
+                - consultar_tipologias_cache_tool: lê as tipologias de passe.
+                - consultar_tarifario_cache: lê a tabela tarifária completa.
+                - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
+                - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
+                - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
+                - consultar_base_geografica_tool: pesquisa na base de dados geográfica (JSON e SQLite) por qualquer local, Ponto de Interesse (POI), rua ou paragem, retornando as coordenadas e tipo.
+                - find_closest_stop: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse.
+
+                MANDATORY PLANNING LOGIC:
                 1. If the location IS NOT A STOP (e.g., cafe, factory), use the "find_closest_stop" tool FIRST.
-                2. Use "plan_trip_with_transfer" with the exact stop names.
-                3. MANDATORY: Whenever you indicate a route or line (direct or with transfer), YOU MUST call the "query_line_schedule_cache" tool for EACH line you suggested.
-                4. MANDATORY: In your reply to the user, you must present the relevant schedules for the trip and ALWAYS include the following phrase and hyperlink for EACH mentioned line (translated appropriately based on the language you are responding in): "Consulta o ficheiro oficial completo aqui: [LINE LINK]" / "Check the full official file here: [LINE LINK]". NEVER provide a route without showing the schedules and their respective links.
+                2. Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
+                3. {SCHEDULE_INSTRUCTION}
+                4. {VISUAL_CARD_INSTRUCTION}
 
                 TOOL CALLING EXECUTION RULE - CRITICAL:
                 NEVER describe the steps you will take to search. NEVER try to calculate routes mentally or guess stops without the tools giving you that information. CALL THE TOOLS silently. Only write the final text after having the tools' response.
 
-                Always use query_ticket_types_cache_tool and query_tariff_cache for ticket-related questions.
-
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
-                NEVER invent, estimate, or "fill in" data that the tools did not provide. ALWAYS use the information in "[CURRENT SYSTEM DATE AND TIME]". If the tool does not tell you how to go from X to Y, apologize and state clearly and honestly that you do not have that connection available in the database, instead of inventing fake routes."""
-
-                RECRUITER_PROMPT = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
+                NEVER invent, estimate, or "fill in" data that the tools did not provide. ALWAYS use the information in "[CURRENT SYSTEM DATE AND TIME]". If the tool does not tell you how to go from X to Y, apologize and state clearly and honestly that you do not have that connection available in the database."""
+                
+                PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
                 Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
                 
-                HELPDESK_TUTOR_PROMPT = """You are an IT Helpdesk and Support Technical Tutor.
-                Your goal is to act as an endless source of IT problem resolution.
-
-                CRUCIAL LANGUAGE RULE: Respond in European Portuguese (pt-PT) by default. However, if the user asks in English, you must respond entirely in English.
-
-                Regardless of the IT issue, you MUST start your answer with this standard phrase (translated to the language you are using): 
-                'O Celso faria desta maneira para resolver este problema de IT:' / 'Celso would solve this IT problem like this:'
-                Then, detail technical troubleshooting steps, PowerShell or Linux commands, and properly applied best practices."""
-
-                normalized_prompt = prompt.lower()
-                helpdesk_triggers = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+                PROMPT_HELPDESK_TUTOR = f"""Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
+                O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
                 
-                if "entrevista" in normalized_prompt or "interview" in normalized_prompt:
-                    active_system_prompt = RECRUITER_PROMPT
-                    logging.info("Router selected Persona: IT Technical Recruiter (EN)")
-                elif any(word in normalized_prompt for word in helpdesk_triggers):
-                    active_system_prompt = HELPDESK_TUTOR_PROMPT
-                    logging.info("Router selected Persona: Helpdesk Tutor / Celso Mode (Bilingual)")
+                {LANGUAGE_INSTRUCTION}
+
+                Independentemente do problema de suporte, deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
+                'O Celso faria desta maneira para resolver este problema de IT:' (if PT) ou 'Celso would solve this IT problem like this:' (if EN)."""
+
+                prompt_normalizado = prompt.lower()
+                gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+                
+                if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
+                    prompt_sistema_ativo = PROMPT_RECRUITER
+                elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
+                    prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
                 else:
-                    active_system_prompt = EXECUTIVE_PROMPT
-                    logging.info("Router selected Persona: Executive Assistant (Bilingual)")
+                    prompt_sistema_ativo = PROMPT_EXECUTIVO
 
-                api_history = []
+                historico_api = []
                 for msg in st.session_state.messages[:-1]:
-                    if msg["content"] != INITIAL_MESSAGE:
-                        api_role = "model" if msg["role"] == "assistant" else "user"
-                        api_history.append({"role": api_role, "parts": [msg["content"]]})
+                    if msg["content"] not in [ui["initial_msg"], UI_TEXT["PT"]["initial_msg"], UI_TEXT["EN"]["initial_msg"]]:
+                        role_api = "model" if msg["role"] == "assistant" else "user"
+                        historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
-                PT_WEEKDAYS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
-                PT_MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+                agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+                contexto_data = f"[DATA E HORA ATUAL DO SISTEMA: {agora.strftime('%Y-%m-%d %H:%M')}.]"
 
-                def _format_pt_date(dt):
-                    return f"{PT_WEEKDAYS[dt.weekday()]}, {dt.day} de {PT_MONTHS[dt.month - 1]} de {dt.year}"
-
-                now = datetime.now(ZoneInfo("Europe/Lisbon"))
-                tomorrow = now + timedelta(days=1)
-                date_context = (
-                    f"[CURRENT SYSTEM DATE AND TIME: "
-                    f"Today is {_format_pt_date(now)}, the time is {now.strftime('%H:%M')}. "
-                    f"Tomorrow will be {_format_pt_date(tomorrow)}.]"
-                )
-
-                enriched_prompt = f"{date_context}\n\n{base_context}\n\nUser Prompt: {prompt}"
+                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
+                agent_tools = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, gerar_mapa_linha_html, find_closest_stop, consultar_base_geografica_tool]
                 
-                agent_tools = [
-                    get_guimabus_data, get_stop_schedules, query_line_schedule_cache, 
-                    query_ticket_types_cache_tool, query_tariff_cache, 
-                    plan_trip_with_transfer, query_stop_parish_tool, 
-                    generate_google_maps_link, generate_line_map_html, find_closest_stop
-                ]
-                
-                TIMEOUT_SECONDS = 25
-                model_candidates = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
-
+                candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
-                last_model_error = None
-                for model_name in model_candidates:
+                ultimo_erro_modelo = None
+
+                for nome_modelo in candidatos_modelo:
                     try:
-                        model = genai.GenerativeModel(
-                            model_name=model_name,
-                            system_instruction=active_system_prompt,
-                            tools=agent_tools
-                        )
-                        chat = model.start_chat(history=api_history, enable_automatic_function_calling=True)
-                        response = chat.send_message(
-                            enriched_prompt,
-                            request_options={"timeout": TIMEOUT_SECONDS}
-                        )
-                        if model_name != model_candidates[0]:
-                            logging.warning(f"Main model failed; answer obtained with fallback '{model_name}'.")
-                            st.info(f"ℹ️ Main model unavailable — answer generated with '{model_name}'.")
+                        model = genai.GenerativeModel(model_name=nome_modelo, system_instruction=prompt_sistema_ativo, tools=agent_tools)
+                        chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
+                        response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
                         break
                     except Exception as e:
-                        last_model_error = e
+                        ultimo_erro_modelo = e
                         continue
 
                 if response is None:
-                    if last_model_error is not None and "429" in str(last_model_error):
-                        st.error("🚫 Gemini API daily free limit reached. Please try again later.")
+                    if ultimo_erro_modelo is not None and "429" in str(ultimo_erro_modelo):
+                        st.error(ui["api_limit"])
                     else:
-                        st.error("🚫 Could not get a response from any available models right now.")
+                        st.error(ui["model_error"])
                     st.stop()
 
                 full_response = response.text
-                st.markdown(full_response)
                 
-                logging.info(f"Response generated successfully ({len(full_response)} characters).")
-                save_message_db(st.session_state.session_id, "assistant", full_response)
+                if "```html" in full_response.lower():
+                    blocos = re.split(r'```[hH][tT][mM][lL]', full_response)
+                    st.markdown(blocos[0], unsafe_allow_html=True)
+                    for bloco in blocos[1:]:
+                        if "```" in bloco:
+                            codigo_html, resto_texto = bloco.split("```", 1)
+                            components.html(codigo_html.strip(), height=450, scrolling=True)
+                            st.markdown(resto_texto, unsafe_allow_html=True)
+                        else:
+                            components.html(bloco.strip(), height=450, scrolling=True)
+                else:
+                    st.markdown(full_response)
                 
-                st.download_button("📥 Download Response (.txt)", full_response, "response.txt")
+                guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
+                st.download_button(ui["download_txt"], full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 
             except Exception as e:
-                st.error(f"Error detected in agent pipeline: {e}")
-                logging.error(f"Critical failure in agent pipeline: {e}")
+                st.error(f"Erro detetado no pipeline do agente: {e}")
