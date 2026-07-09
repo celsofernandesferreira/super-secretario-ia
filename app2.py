@@ -195,14 +195,6 @@ if "save_nome" in query_params and "save_pontos" in query_params:
     st.rerun()
 
 # 4. Injeção de CSS Avançado
-/* Adiciona isto dentro da tua tag <style> no st.markdown da Secção 4 */
-.stApp > header {
-    background: transparent;
-}
-.stChatMessageContainer {
-    /* Garante que o scroll desce o suficiente para não ficar atrás do rodapé */
-    padding-bottom: 260px !important; 
-}
 st.markdown("""
     <style>
         .stChatInputContainer {
@@ -231,6 +223,14 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
+/* Adiciona isto dentro da tua tag <style> no st.markdown da Secção 4 */
+.stApp > header {
+    background: transparent;
+}
+.stChatMessageContainer {
+    /* Garante que o scroll desce o suficiente para não ficar atrás do rodapé */
+    padding-bottom: 260px !important; 
+}
 
 # 5. Inicialização da API do Gemini
 try:
