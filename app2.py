@@ -197,7 +197,7 @@ UI_TEXT = {
     }
 }
 
-# 1. LOGGING CONFIGURATION (Technical Audit)
+# 1. LOGGING CONFIGURATION
 logging.basicConfig(
     filename="agent_audit.log",
     level=logging.INFO,
@@ -206,10 +206,9 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-# 2. DATABASE CONFIGURATION (Persistent SQLite with Concurrency Safety)
+# 2. DATABASE CONFIGURATION
 def get_db_connection():
-    """Returns a highly concurrent SQLite connection."""
-    conn = sqlite3.connect("agent_memory.db", timeout=15.0) # 15s timeout to prevent locking errors
+    conn = sqlite3.connect("agent_memory.db", timeout=15.0) 
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")
     cursor.execute("PRAGMA synchronous=NORMAL;")
@@ -348,12 +347,10 @@ initialize_db()
 # 3. Page Configuration
 st.set_page_config(page_title="Super Secretary AI", page_icon="💼", layout="wide")
 
-# Init Language State First
 if "language" not in st.session_state:
     st.session_state.language = "PT"
 ui = UI_TEXT[st.session_state.language]
 
-# Header with Top-Right Language Flags
 col1, col2, col3 = st.columns([12, 1, 1])
 with col1:
     st.title(ui["title"])
@@ -366,11 +363,9 @@ with col3:
         st.session_state.language = "EN"
         st.rerun()
 
-# Unique Session Identifier
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# URL Parameters for Arcade High Scores (Improved Capture)
 query_params = st.query_params
 if "save_name" in query_params and "save_score" in query_params:
     record_name = query_params["save_name"].upper()
@@ -386,30 +381,14 @@ if "save_name" in query_params and "save_score" in query_params:
 # 4. Advanced CSS Injection
 st.markdown("""
     <style>
-        .stChatInputContainer {
-            position: relative;
-        }
-        .stChatInputContainer textarea {
-            padding-left: 55px !important;
-        }
+        .stChatInputContainer { position: relative; }
+        .stChatInputContainer textarea { padding-left: 55px !important; }
         div[data-testid="stAudioInput"] {
-            position: absolute;
-            left: 12px;
-            bottom: 8px;
-            z-index: 9999;
-            width: 38px !important;
-            height: 38px !important;
-            background: transparent !important;
+            position: absolute; left: 12px; bottom: 8px; z-index: 9999;
+            width: 38px !important; height: 38px !important; background: transparent !important;
         }
-        div[data-testid="stAudioInput"] > div {
-            background: transparent !important;
-            border: none !important;
-            padding: 0 !important;
-            box-shadow: none !important;
-        }
-        div[data-testid="stAudioInput"] label {
-            display: none !important;
-        }
+        div[data-testid="stAudioInput"] > div { background: transparent !important; border: none !important; padding: 0 !important; box-shadow: none !important; }
+        div[data-testid="stAudioInput"] label { display: none !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -425,7 +404,6 @@ except Exception:
 def get_facebook_warnings():
     rss_url = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     active_warnings = []
-    
     now = datetime.now(ZoneInfo("Europe/Lisbon"))
     today_str = now.strftime("%d de %B de %Y") 
 
@@ -443,18 +421,11 @@ def get_facebook_warnings():
             
             enclosure = item.find("enclosure")
             img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
-            
             if not img_url and desc:
                 img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match:
-                    img_url = img_match.group(1)
+                if img_match: img_url = img_match.group(1)
             
-            posts.append({
-                "id": i, 
-                "title": title, 
-                "text": clean_text, 
-                "image": img_url
-            })
+            posts.append({"id": i, "title": title, "text": clean_text, "image": img_url})
 
         prompt = f"""
         Today is {today_str}. Analyze the posts below.
@@ -474,11 +445,7 @@ def get_facebook_warnings():
             for r in result:
                 p = next((x for x in posts if x["id"] == r["id"]), None)
                 if p:
-                    active_warnings.append({
-                        "text": p["text"], 
-                        "image": p["image"], 
-                        "priority": r["priority"]
-                    })
+                    active_warnings.append({"text": p["text"], "image": p["image"], "priority": r["priority"]})
             active_warnings.sort(key=lambda x: x["priority"], reverse=True)
             
     except Exception as e:
@@ -497,31 +464,19 @@ def render_ad_footer(active_ads, ui):
             border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
             display: flex; flex-direction: column; overflow: hidden;
         }}
-        .disclaimer {{
-            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
-            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
-        }}
-        .content-area {{ 
-            display: flex; align-items: center; flex: 1; padding: 0 20px; 
-        }}
+        .disclaimer {{ background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px; text-align: center; font-weight: bold; border-bottom: 1px solid #444; }}
+        .content-area {{ display: flex; align-items: center; flex: 1; padding: 0 20px; }}
         .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
         #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
         .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
-        #ticker-text {{ 
-            position: absolute; white-space: nowrap; font-size: 20px; 
-            font-weight: bold; top: 35px; left: 50%;
-        }}
+        #ticker-text {{ position: absolute; white-space: nowrap; font-size: 20px; font-weight: bold; top: 35px; left: 50%; }}
     </style>
     
     <div class="footer-wrapper">
         <div class="disclaimer">{ui['ad_disclaimer']}</div>
         <div class="content-area">
-            <div class="img-box">
-                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
-            </div>
-            <div class="text-container">
-                <div id="ticker-text"></div>
-            </div>
+            <div class="img-box"><img id="ticker-img" src="" onclick="window.open(this.src, '_blank');"></div>
+            <div class="text-container"><div id="ticker-text"></div></div>
         </div>
     </div>
 
@@ -537,29 +492,18 @@ def render_ad_footer(active_ads, ui):
             txt.innerText = "🚨 " + (a.text || a.title || "{ui['ad_notice']}");
             
             if (a.image && a.image.trim() !== "") {{
-                img.src = a.image;
-                img.style.display = "block";
-                img.style.visibility = "visible";
-            }} else {{
-                img.style.display = "none";
-            }}
+                img.src = a.image; img.style.display = "block"; img.style.visibility = "visible";
+            }} else {{ img.style.display = "none"; }}
             
-            txt.style.animation = 'none';
-            txt.offsetHeight;
-            txt.style.animation = 'scroll-left 25s linear infinite';
+            txt.style.animation = 'none'; txt.offsetHeight; txt.style.animation = 'scroll-left 25s linear infinite';
             
             let pos = container.offsetWidth / 2;
             txt.style.left = pos + "px";
             
             function animate() {{
-                pos -= 2; 
-                txt.style.left = pos + "px";
-                if (pos < -txt.offsetWidth) {{
-                    index = (index + 1) % ads.length;
-                    setTimeout(runTicker, 2000); 
-                }} else {{
-                    requestAnimationFrame(animate);
-                }}
+                pos -= 2; txt.style.left = pos + "px";
+                if (pos < -txt.offsetWidth) {{ index = (index + 1) % ads.length; setTimeout(runTicker, 2000); }} 
+                else {{ requestAnimationFrame(animate); }}
             }}
             animate();
         }}
@@ -574,87 +518,55 @@ def normalize_search_name(text):
     t = text.lower().strip()
     t = unicodedata.normalize('NFKD', t)
     t = ''.join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r'[^a-z0-9]', '_', t)
-    t = re.sub(r'_+', '_', t).strip('_')
-    return t
+    return re.sub(r'_+', '_', re.sub(r'[^a-z0-9]', '_', t)).strip('_')
 
 @st.cache_data
 def load_static_map():
     try:
-        with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        return {}
+        with open("geo_guimaraes.json", "r", encoding="utf-8") as f: return json.load(f)
+    except Exception: return {}
 
 LOCAL_MAP = load_static_map()
 
 def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0 
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
+    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c * 1000 
+    return 6371.0 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)) * 1000 
 
 def find_closest_stop(location_name: str):
-    if not LOCAL_MAP:
-        return "Static map is not loaded. Check the geo_guimaraes.json file."
+    if not LOCAL_MAP: return "Static map is not loaded. Check the geo_guimaraes.json file."
     search_key = normalize_search_name(location_name)
-    found_location = None
+    found_location = next((data for key, data in LOCAL_MAP.items() if search_key in key or key in search_key), None)
+    if not found_location: return f"Could not locate '{location_name}' in the static map."
 
-    for key, data in LOCAL_MAP.items():
-        if search_key in key or key in search_key:
-            found_location = data
-            break
-
-    if not found_location:
-        return f"Could not locate '{location_name}' in the static map of Guimarães."
-
-    lat_origin = found_location["lat"]
-    lon_origin = found_location["lon"]
-
-    closest_stop = None
-    shortest_distance = float('inf')
+    lat_origin, lon_origin = found_location["lat"], found_location["lon"]
+    closest_stop, shortest_dist = None, float('inf')
 
     for key, data in LOCAL_MAP.items():
         if data.get("type") in ["bus_stop", "public_transport"]:
             dist = calculate_distance(lat_origin, lon_origin, data["lat"], data["lon"])
-            if dist < shortest_distance:
-                shortest_distance = dist
-                closest_stop = data["nome_real"]
+            if dist < shortest_dist: shortest_dist, closest_stop = dist, data["nome_real"]
 
-    if closest_stop:
-        return f"The location '{found_location['nome_real']}' is {int(shortest_distance)} meters away from the '{closest_stop}' bus stop."
-    else:
-        return "Location found, but no bus stops in the vicinity."
+    if closest_stop: return f"The location '{found_location['nome_real']}' is {int(shortest_dist)} meters away from the '{closest_stop}' bus stop."
+    return "Location found, but no bus stops in the vicinity."
 
 def generate_google_maps_link(location_name: str):
-    if not LOCAL_MAP:
-        return "Static map not properly loaded."
+    if not LOCAL_MAP: return "Static map not properly loaded."
     search_key = normalize_search_name(location_name)
-    
-    for map_key, local_data in LOCAL_MAP.items():
+    for map_key, data in LOCAL_MAP.items():
         if search_key in map_key or map_key in search_key:
-            real_name = local_data["nome_real"]
-            lat = local_data["lat"]
-            lon = local_data["lon"]
-            maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            return f"📍 Found exact location for '{real_name}'. Open in Google Maps here: {maps_link}"
-            
+            return f"📍 Found exact location for '{data['nome_real']}'. Open in Google Maps here: https://www.google.com/maps/search/?api=1&query={data['lat']},{data['lon']}"
     return f"Could not find '{location_name}' in Guimarães static map."
 
 def generate_line_map_html(line_id):
     os.makedirs("maps", exist_ok=True)
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT stop FROM stop_line_cache WHERE line = ? OR line = ?", (line_id, str(line_id).zfill(3)))
-    line_stops = [row[0] for row in cursor.fetchall()]
+    line_stops = [row[0] for row in conn.execute("SELECT stop FROM stop_line_cache WHERE line = ? OR line = ?", (line_id, str(line_id).zfill(3))).fetchall()]
     conn.close()
     
     if not line_stops: return "No cached stops for this line."
     
-    route_coordinates = []
-    stops_with_coords = []
+    route_coordinates, stops_with_coords = [], []
     for stop in line_stops:
         search_key = normalize_search_name(stop)
         for k, v in LOCAL_MAP.items():
@@ -667,15 +579,9 @@ def generate_line_map_html(line_id):
         
     map_obj = folium.Map(location=[stops_with_coords[0]["lat"], stops_with_coords[0]["lon"]], zoom_start=13, tiles="OpenStreetMap")
     for p in stops_with_coords:
-        popup_text = f"<b>Stop:</b> {p['name']}<br><b>Line:</b> {line_id}"
-        folium.Marker(
-            location=[p["lat"], p["lon"]],
-            popup=folium.Popup(popup_text, max_width=300),
-            icon=folium.Icon(color="green", icon="bus", prefix="fa")
-        ).add_to(map_obj)
+        folium.Marker(location=[p["lat"], p["lon"]], popup=folium.Popup(f"<b>Stop:</b> {p['name']}<br><b>Line:</b> {line_id}", max_width=300), icon=folium.Icon(color="green", icon="bus", prefix="fa")).add_to(map_obj)
         
-    if len(route_coordinates) > 1:
-        folium.PolyLine(route_coordinates, color="blue", weight=3, opacity=0.7).add_to(map_obj)
+    if len(route_coordinates) > 1: folium.PolyLine(route_coordinates, color="blue", weight=3, opacity=0.7).add_to(map_obj)
         
     file_path = f"maps/line_{line_id}.html"
     map_obj.save(file_path)
@@ -686,8 +592,7 @@ def _extract_vehicle_list(data):
     if isinstance(data, list): return data
     if isinstance(data, dict):
         for key in ("vehicles", "data", "results", "items", "veiculos"):
-            val = data.get(key)
-            if isinstance(val, list): return val
+            if isinstance(data.get(key), list): return data.get(key)
         for val in data.values():
             if isinstance(val, list): return val
     return []
@@ -703,20 +608,17 @@ KNOWN_STOPS_DICTIONARY = {"vaca negra": "1103", "central": "1001", "hospital": "
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
-    url = "https://gmr.elevensystems.pt/api/locations"
     params = {"passengerInfo": "true"}
     if route_id: params["routeId"] = route_id
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=8)
+        response = requests.get("https://gmr.elevensystems.pt/api/locations", headers=headers, params=params, timeout=8)
         response.raise_for_status()
         try: data = response.json()
         except ValueError: return "Unable to read Guimabus data."
         vehicles = _extract_vehicle_list(data)
         if not vehicles: return f"There are currently no buses in circulation."
 
-        total_delay = 0
-        delayed_count = 0
-        summary = "Real-time fleet data (Guimabus):\n"
+        total_delay, delayed_count, summary = 0, 0, "Real-time fleet data (Guimabus):\n"
         for bus in vehicles:
             bus_id = _first_value(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
             line = _first_value(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
@@ -731,42 +633,29 @@ def get_guimabus_data(route_id: str = None):
                 total_delay += delay
                 delayed_count += 1
 
-        if delayed_count > 0:
-            avg_delay = total_delay / delayed_count
-            summary += f"\n--- Statistic: Average fleet delay: {avg_delay:.1f} minutes. ---"
+        if delayed_count > 0: summary += f"\n--- Statistic: Average fleet delay: {total_delay / delayed_count:.1f} minutes. ---"
         return summary
-    except Exception as e:
-        return f"Tracking connection error: {e}"
+    except Exception as e: return f"Tracking connection error: {e}"
 
 @st.cache_data(ttl=30)
 def get_stop_schedules(stop_id: str):
     if not stop_id: return "Stop ID is required."
     source_text = str(stop_id).strip().lower()
-    numeric_id = None
-    for name_p, id_p in KNOWN_STOPS_DICTIONARY.items():
-        if name_p in source_text:
-            numeric_id = id_p
-            break
+    numeric_id = next((id_p for name_p, id_p in KNOWN_STOPS_DICTIONARY.items() if name_p in source_text), None)
             
     if numeric_id or source_text.isdigit():
         target_id = numeric_id if numeric_id else source_text
-        headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
-        url = f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes"
-        params = {"shape": "true", "passengerInfo": "true"}
         try:
-            response = requests.get(url, headers=headers, params=params, timeout=5)
+            response = requests.get(f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes", headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}, params={"shape": "true", "passengerInfo": "true"}, timeout=5)
             response.raise_for_status()
-            data = response.json()
-            routes = _extract_vehicle_list(data)
+            routes = _extract_vehicle_list(response.json())
             if routes:
                 summary = f"Real-time forecasts for stop {target_id}:\n"
                 for route in routes:
                     line = _first_value(route, ["line", "lineName", "route", "routeShortName", "routeId"], "N/A")
                     dest = _first_value(route, ["destination", "headsign", "direction"], None)
                     eta = _first_value(route, ["eta", "etaMinutes", "waitTime", "waitingTime", "arrivalTime", "nextArrival"], None)
-                    dest_txt = f" → {dest}" if dest else ""
-                    eta_txt = f"{eta} min" if eta is not None else "no forecast"
-                    summary += f"- Line {line}{dest_txt}: {eta_txt}\n"
+                    summary += f"- Line {line}{f' → {dest}' if dest else ''}: {f'{eta} min' if eta is not None else 'no forecast'}\n"
                 return summary
         except Exception: pass
 
@@ -774,87 +663,62 @@ def get_stop_schedules(stop_id: str):
         search_terms = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', source_text).split()
         if not search_terms: search_terms = [source_text]
         conn = get_db_connection()
-        cursor = conn.cursor()
-        conditions = " AND ".join(["content_txt LIKE ?" for _ in search_terms])
-        values = [f"%{term}%" for term in search_terms]
-        query_sql = f"SELECT line, content_txt FROM schedule_cache WHERE {conditions}"
-        cursor.execute(query_sql, values)
-        found_lines = cursor.fetchall()
+        query_sql = f"SELECT line, content_txt FROM schedule_cache WHERE {' AND '.join(['content_txt LIKE ?' for _ in search_terms])}"
+        found_lines = conn.execute(query_sql, [f"%{term}%" for term in search_terms]).fetchall()
         conn.close()
         
         if found_lines:
             search_result = f"Scanned local schedule cache and identified lines referencing '{stop_id}':\n"
             for row in found_lines:
-                num_line = row[0]
-                text_lines = row[1].split("\n")
-                relevant_snippet = []
-                for l in text_lines:
-                    if any(term in l.lower() for term in search_terms) or "página" in l.lower() or "tabela" in l.lower():
-                        relevant_snippet.append(l)
-                line_context = "\n".join(relevant_snippet[:25])
-                search_result += f"\n--- AUTOMATIC MAPPING DETECTED: LINE {num_line} ---\n{line_context}\n"
+                relevant_snippet = [l for l in row[1].split("\n") if any(term in l.lower() for term in search_terms) or "página" in l.lower() or "tabela" in l.lower()]
+                search_result += f"\n--- AUTOMATIC MAPPING DETECTED: LINE {row[0]} ---\n{chr(10).join(relevant_snippet[:25])}\n"
             return search_result
-    except Exception as e_db:
-        pass
+    except Exception: pass
     return f"Could not fetch information for location '{stop_id}'."
 
 def sync_all_guimabus_schedules():
     headers = {'User-Agent': 'Mozilla/5.0'}
-    main_url = "https://guimabus.pt/horarios-linhas/"
     try:
-        response = requests.get(main_url, headers=headers, timeout=12)
+        response = requests.get("https://guimabus.pt/horarios-linhas/", headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        pdf_links = {}
-        line_titles = {}
+        pdf_links, line_titles = {}, {}
         for link in soup.find_all('a', href=True):
-            href = link['href']
-            if ".pdf" in href and "horario" in href.lower():
-                match = re.search(r'linha-([a-z0-9]+)', href.lower())
-                if match:
-                    line_id = match.group(1).upper()
-                    if line_id not in pdf_links:
-                        pdf_links[line_id] = href
-                        link_text = link.get_text(strip=True)
-                        if link_text: line_titles[line_id] = link_text
+            if ".pdf" in link['href'] and "horario" in link['href'].lower():
+                match = re.search(r'linha-([a-z0-9]+)', link['href'].lower())
+                if match and match.group(1).upper() not in pdf_links:
+                    pdf_links[match.group(1).upper()] = link['href']
+                    if link.get_text(strip=True): line_titles[match.group(1).upper()] = link.get_text(strip=True)
         
         if not pdf_links: return "No schedule PDF files found on the main page."
         
         conn = get_db_connection()
-        cursor = conn.cursor()
-        
         processed_lines = []
         current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for line_id, pdf_url in pdf_links.items():
-            success = False
             for attempt in range(2):
                 try:
                     pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
-                    if pdf_resp.status_code != 200:
-                        time.sleep(1); continue
+                    if pdf_resp.status_code != 200: time.sleep(1); continue
                     extracted_text = []
                     with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
                         for idx, page in enumerate(pdf.pages):
                             page_text = page.extract_text(layout=True)
                             if page_text: extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
-                            time.sleep(0.05) # Yield CPU to prevent UI freezing
-                    final_content = "\n\n".join(extracted_text)
-                    if not final_content.strip(): final_content = "PDF is image-based or copy-protected."
+                            time.sleep(0.05) 
+                    final_content = "\n\n".join(extracted_text) or "PDF is image-based or copy-protected."
 
-                    cursor.execute("INSERT OR REPLACE INTO schedule_cache (line, url, content_txt, last_updated) VALUES (?, ?, ?, ?)", (line_id, pdf_url, final_content, current_timestamp))
+                    conn.execute("INSERT OR REPLACE INTO schedule_cache (line, url, content_txt, last_updated) VALUES (?, ?, ?, ?)", (line_id, pdf_url, final_content, current_timestamp))
                     if line_id in line_titles:
-                        cursor.execute("INSERT OR REPLACE INTO line_title_cache (line, title, last_updated) VALUES (?, ?, ?)", (line_id, line_titles[line_id], current_timestamp))
+                        conn.execute("INSERT OR REPLACE INTO line_title_cache (line, title, last_updated) VALUES (?, ?, ?)", (line_id, line_titles[line_id], current_timestamp))
                     processed_lines.append(line_id)
-                    success = True
                     break
-                except Exception:
-                    time.sleep(1); continue
+                except Exception: time.sleep(1); continue
             time.sleep(0.2)
         conn.commit(); conn.close()
         return f"Sync completed: {len(processed_lines)}/{len(pdf_links)} PDFs downloaded!"
-    except Exception as e:
-        return f"Scraping failed: {e}"
+    except Exception as e: return f"Scraping failed: {e}"
 
 def query_line_schedule_cache(line_id: str):
     try:
@@ -868,57 +732,38 @@ def query_line_schedule_cache(line_id: str):
             if three_digits not in candidates: candidates.append(three_digits)
 
         conn = get_db_connection()
-        cursor = conn.cursor()
-        result = None
-        for candidate in candidates:
-            cursor.execute("SELECT content_txt, url, last_updated FROM schedule_cache WHERE line = ?", (candidate,))
-            result = cursor.fetchone()
-            if result: break
+        result = next((conn.execute("SELECT content_txt, url, last_updated FROM schedule_cache WHERE line = ?", (c,)).fetchone() for c in candidates if conn.execute("SELECT content_txt, url, last_updated FROM schedule_cache WHERE line = ?", (c,)).fetchone()), None)
         conn.close()
         
-        if result:
-            content_txt, pdf_url, last_updated = result
-            link_txt = f"\n\n🔗 Official Link: {pdf_url}" if pdf_url else ""
-            return f"Cached Schedules for Line {line_id} (Updated on {last_updated}):\n\n{content_txt}{link_txt}"
+        if result: return f"Cached Schedules for Line {line_id} (Updated on {result[2]}):\n\n{result[0]}{f'{chr(10)}{chr(10)}🔗 Official Link: {result[1]}' if result[1] else ''}"
         return f"No cached schedules for line {line_id}."
     except Exception as e: return f"SQLite read error: {e}"
 
 def get_knowledge_base_content():
-    context = ""
-    for file in glob.glob("knowledge/*.md"):
-        with open(file, "r", encoding="utf-8") as f: context += f"\n--- CONTENT FROM {os.path.basename(file)} ---\n{f.read()}"
-    return context if context else "No extra documentation found."
+    return "".join(f"\n--- CONTENT FROM {os.path.basename(file)} ---\n{open(file, 'r', encoding='utf-8').read()}" for file in glob.glob("knowledge/*.md")) or "No extra documentation found."
 
 def get_schedule_cache_age_days():
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(last_updated) FROM schedule_cache")
-        result = cursor.fetchone()
+        res = conn.execute("SELECT MAX(last_updated) FROM schedule_cache").fetchone()
         conn.close()
-        if not result or not result[0]: return None
-        return (datetime.now() - datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S")).days
+        return (datetime.now() - datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")).days if res and res[0] else None
     except Exception: return None
 
 def get_ticket_cache_age_days():
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(last_updated) FROM ticket_cache")
-        result = cursor.fetchone()
+        res = conn.execute("SELECT MAX(last_updated) FROM ticket_cache").fetchone()
         conn.close()
-        if not result or not result[0]: return None
-        return (datetime.now() - datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S")).days
+        return (datetime.now() - datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")).days if res and res[0] else None
     except Exception: return None
 
 def get_stop_index_count():
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM stop_line_cache")
-        result = cursor.fetchone()
+        res = conn.execute("SELECT COUNT(*) FROM stop_line_cache").fetchone()
         conn.close()
-        return result[0] if result else 0
+        return res[0] if res else 0
     except Exception: return 0
 
 def auto_sync_if_needed(day_limit: int = 7):
@@ -926,27 +771,28 @@ def auto_sync_if_needed(day_limit: int = 7):
     st.session_state.auto_sync_attempted_this_session = True
     
     sch_age = get_schedule_cache_age_days()
-    if sch_age is None or sch_age >= day_limit:
-        threading.Thread(target=sync_all_guimabus_schedules, daemon=True).start()
-    elif get_stop_index_count() == 0:
-        threading.Thread(target=build_stop_index, daemon=True).start()
+    if sch_age is None or sch_age >= day_limit: threading.Thread(target=sync_all_guimabus_schedules, daemon=True).start()
+    elif get_stop_index_count() == 0: threading.Thread(target=build_stop_index, daemon=True).start()
         
     tkt_age = get_ticket_cache_age_days()
-    if tkt_age is None or tkt_age >= day_limit:
-        threading.Thread(target=sync_tickets_and_tariff, daemon=True).start()
+    if tkt_age is None or tkt_age >= day_limit: threading.Thread(target=sync_tickets_and_tariff, daemon=True).start()
 
 FALLBACK_TICKET_TYPES = {"Mensal": {"description": "Valid for the month. Unlimited trips.", "price": "Consult tariff", "card_cost": "5€", "deadline": "18th", "documents": ["ID Card"]}}
 
+# --- FULLY FIXED TICKET SCRAPER ---
 def sync_guimabus_tickets():
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = requests.get("https://guimabus.pt/titulos/", headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
+        
         for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']): tag.decompose()
+        
         full_text = soup.get_text(separator="\n")
         normalized_text = "\n".join([l.strip() for l in full_text.split("\n") if l.strip()])
-        blocks = re.split(r'\nPASSE\n', "\n" + normalized_text)[1:]
+        blocks = re.split(r'\nPASSE[.\s]*\n', "\n" + normalized_text)[1:]
+        
         if not blocks: return "No ticket types found."
 
         conn = get_db_connection()
@@ -957,30 +803,69 @@ def sync_guimabus_tickets():
             lines = block.split("\n")
             if not lines or not lines[0].strip(): continue
             type_name = lines[0].strip()
-            rest = "\n".join(lines[1:])
             
-            # Improved robust regex for capturing deadlines correctly
-            m_dead = re.search(r'([Ss]ó\s+podem\s+ser\s+(?:emitidos|carregados).*?\.|[Oo]\s+carregamento.*?\.)', rest, re.DOTALL | re.IGNORECASE)
-            deadline = m_dead.group(1).strip().replace('\n', ' ') if m_dead else "Deadline not specified on website."
+            price, card_cost, deadline = "Consult tariff table", "Not specified", "Deadline not specified on website."
+            docs_list, description_lines = [], []
+            parsing_mode = "desc"
+            
+            for line in lines[1:]:
+                line_lower = line.lower()
+                line_stripped = line.strip()
+                
+                if not line_stripped: continue
+                    
+                if "só podem ser" in line_lower or "até ao dia" in line_lower or ("carregamento" in line_lower and "mês" in line_lower):
+                    deadline = line_stripped
+                    parsing_mode = "deadline"
+                    continue
+                    
+                if "preço:" in line_lower:
+                    val = re.split(r'preço:', line, flags=re.IGNORECASE)[1].strip()
+                    if val: price = val
+                    parsing_mode = "price"
+                    continue
+                    
+                if line_lower == "gratuito":
+                    price = "Gratuito"
+                    parsing_mode = "price"
+                    continue
+                    
+                if "custo do cartão:" in line_lower:
+                    val = re.split(r'custo do cartão:', line, flags=re.IGNORECASE)[1].strip()
+                    if val: card_cost = val
+                    parsing_mode = "card"
+                    continue
+                    
+                if "documentos necessários:" in line_lower:
+                    parsing_mode = "docs"
+                    val = re.split(r'documentos necessários:', line, flags=re.IGNORECASE)[1].strip()
+                    if val: docs_list.append(val)
+                    continue
+                    
+                # Handling line continuations safely
+                if parsing_mode == "desc":
+                    description_lines.append(line_stripped)
+                elif parsing_mode == "docs":
+                    docs_list.append(line_stripped)
+                elif parsing_mode == "deadline":
+                    deadline += " " + line_stripped
+                elif parsing_mode == "price" and price in ["Consult tariff table", ""]:
+                    price = line_stripped
+                    parsing_mode = "done" 
+                elif parsing_mode == "card" and card_cost in ["Not specified", ""]:
+                    card_cost = line_stripped
+                    parsing_mode = "done"
 
-            m_price = re.search(r'Preço:\s*(.+)', rest)
-            if m_price: price = m_price.group(1).strip()
-            elif re.search(r'\bGRATUITO\b', rest, re.IGNORECASE): price = "Gratuito"
-            else: price = "Consult tariff table"
-
-            m_card = re.search(r'Custo do cartão:\s*([\d,]+€)', rest)
-            card_cost = m_card.group(1).strip() if m_card else "Not specified"
-
-            m_desc = re.match(r'(.*?)(?:Preço:|GRATUITO|Gratuito|\*\*Documentos necessários)', rest, re.DOTALL)
-            description = m_desc.group(1).strip().replace("\n", " ") if m_desc else ""
-
-            m_docs = re.search(r'\*\*Documentos necessários:\*\*(.*?)(?:Só podem ser emitidos|[Oo] carregamento|$)', rest, re.DOTALL)
-            docs_list = [d.strip() for d in m_docs.group(1).split("\n") if d.strip() and not re.match(r'^(Custo do cartão|Preço)', d, re.IGNORECASE)] if m_docs else ["ID Card"]
+            description = " ".join(description_lines)
+            if not docs_list: docs_list = ["ID Card / Identification Document"]
 
             cursor.execute("INSERT OR REPLACE INTO ticket_cache (ticket_type, description, price, card_cost, deadline, documents_json, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?)", (type_name, description, price, card_cost, deadline, json.dumps(docs_list, ensure_ascii=False), ts))
-        conn.commit(); conn.close()
+            
+        conn.commit()
+        conn.close()
         return "Ticket sync complete."
-    except Exception as e: return f"Failed to sync ticket types: {e}"
+    except Exception as e: 
+        return f"Failed to sync ticket types: {e}"
 
 def sync_guimabus_tariff():
     try:
@@ -997,7 +882,7 @@ def sync_guimabus_tariff():
             for idx, page in enumerate(pdf.pages):
                 txt = page.extract_text(layout=True)
                 if txt: extracted.append(f"[PAGE {idx+1}]\n{txt}")
-                time.sleep(0.05) # Yield CPU
+                time.sleep(0.05) 
         final_content = "\n\n".join(extracted) or "Image-based PDF."
         
         conn = get_db_connection()
@@ -1006,8 +891,7 @@ def sync_guimabus_tariff():
         return "Tariff sync complete."
     except Exception as e: return f"Failed to sync tariff: {e}"
 
-def sync_tickets_and_tariff():
-    return f"{sync_guimabus_tickets()}\n{sync_guimabus_tariff()}"
+def sync_tickets_and_tariff(): return f"{sync_guimabus_tickets()}\n{sync_guimabus_tariff()}"
 
 def _extract_stops_from_text(text: str):
     stops = set()
@@ -1022,16 +906,13 @@ def _extract_stops_from_text(text: str):
 def build_stop_index():
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT line, content_txt FROM schedule_cache")
-        cached_lines = cursor.fetchall()
-        cursor.execute("DELETE FROM stop_line_cache")
-        
+        cached_lines = conn.execute("SELECT line, content_txt FROM schedule_cache").fetchall()
+        conn.execute("DELETE FROM stop_line_cache")
         count = 0
         for line_id, content in cached_lines:
             if not content: continue
             for stop in _extract_stops_from_text(content):
-                cursor.execute("INSERT OR IGNORE INTO stop_line_cache (line, stop) VALUES (?, ?)", (line_id, stop))
+                conn.execute("INSERT OR IGNORE INTO stop_line_cache (line, stop) VALUES (?, ?)", (line_id, stop))
                 count += 1
         conn.commit(); conn.close()
         return f"Stop index rebuilt: {count} associations."
@@ -1042,33 +923,26 @@ def _normalize_stop_name(text: str):
     t = re.sub(r'\bsanta\b', 'sta.', t)
     t = re.sub(r'\bsanto\b', 'sto.', t).replace('.', '')
     t = unicodedata.normalize('NFKD', t)
-    t = ''.join(c for c in t if not unicodedata.combining(c))
-    return re.sub(r'\s+', ' ', t).strip()
+    return re.sub(r'\s+', ' ', ''.join(c for c in t if not unicodedata.combining(c))).strip()
 
 def _search_lines_by_title(norm_term: str):
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT line, title FROM line_title_cache")
-        all_titles = cursor.fetchall()
+        all_titles = conn.execute("SELECT line, title FROM line_title_cache").fetchall()
         conn.close()
     except Exception: return set(), []
     
     found_lines, found_titles = set(), []
     for line_id, title in all_titles:
         if title and re.search(r'\b' + re.escape(norm_term) + r'\b', _normalize_stop_name(title)):
-            found_lines.add(line_id)
-            found_titles.append(f"Line {line_id}: {title}")
+            found_lines.add(line_id); found_titles.append(f"Line {line_id}: {title}")
     return found_lines, found_titles
 
 def enrich_stops_with_parish(progress_callback=None):
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT stop FROM stop_line_cache")
-        all_stops = [row[0] for row in cursor.fetchall()]
-        cursor.execute("SELECT stop FROM stop_parish_cache")
-        already_done = {row[0] for row in cursor.fetchall()}
+        all_stops = [row[0] for row in conn.execute("SELECT DISTINCT stop FROM stop_line_cache").fetchall()]
+        already_done = {row[0] for row in conn.execute("SELECT stop FROM stop_parish_cache").fetchall()}
         conn.close()
     except Exception: return "Error preparing enrichment."
 
@@ -1096,12 +970,10 @@ def get_parish_from_stop(stop_name: str):
         all_data = conn.execute("SELECT stop, parish FROM stop_parish_cache WHERE parish IS NOT NULL").fetchall()
         conn.close()
     except Exception: return None
-
     norm_name = _normalize_stop_name(stop_name)
     for stop, parish in all_data:
         stop_norm = _normalize_stop_name(stop)
-        if re.search(r'\b' + re.escape(norm_name) + r'\b', stop_norm) or re.search(r'\b' + re.escape(stop_norm) + r'\b', norm_name):
-            return parish
+        if re.search(r'\b' + re.escape(norm_name) + r'\b', stop_norm) or re.search(r'\b' + re.escape(stop_norm) + r'\b', norm_name): return parish
     return None
 
 def find_stops_by_parish(parish_name: str):
@@ -1122,11 +994,9 @@ def plan_trip_with_transfer(origin: str, destination: str):
         all_data = conn.execute("SELECT line, stop FROM stop_line_cache").fetchall()
         conn.close()
     except Exception: return "Error querying stop index."
-    
     if not all_data: return "Index not built."
 
-    orig_lines, dest_lines, line_stops_map = set(), set(), {}
-    found_orig, found_dest = set(), set()
+    orig_lines, dest_lines, line_stops_map, found_orig, found_dest = set(), set(), {}, set(), set()
     for l_id, s in all_data:
         line_stops_map.setdefault(l_id, set()).add(s)
         s_norm = _normalize_stop_name(s)
@@ -1143,8 +1013,7 @@ def plan_trip_with_transfer(origin: str, destination: str):
 
     warn_msg = ("\n⚠️ Title used for Origin." if warn_o_title else "") + ("\n⚠️ Title used for Dest." if warn_d_title else "")
 
-    if orig_lines & dest_lines:
-        return f"DIRECT line(s) between '{origin}' and '{destination}':\n" + "\n".join(f"- Line {l}" for l in (orig_lines & dest_lines)) + warn_msg
+    if orig_lines & dest_lines: return f"DIRECT line(s) between '{origin}' and '{destination}':\n" + "\n".join(f"- Line {l}" for l in (orig_lines & dest_lines)) + warn_msg
 
     o_stops = set.union(*(line_stops_map.get(l, set()) for l in orig_lines))
     d_stops = set.union(*(line_stops_map.get(l, set()) for l in dest_lines))
@@ -1153,9 +1022,7 @@ def plan_trip_with_transfer(origin: str, destination: str):
     if not transfers: return "No transfer found."
     summary = f"No direct line. Suggested transfers:\n\n"
     for t in sorted(transfers):
-        l_to = [l for l in orig_lines if t in line_stops_map.get(l, set())]
-        l_from = [l for l in dest_lines if t in line_stops_map.get(l, set())]
-        summary += f"- Via **{t}**: lines {'/'.join(l_to)} -> '{t}' -> lines {'/'.join(l_from)}.\n"
+        summary += f"- Via **{t}**: lines {'/'.join([l for l in orig_lines if t in line_stops_map.get(l, set())])} -> '{t}' -> lines {'/'.join([l for l in dest_lines if t in line_stops_map.get(l, set())])}.\n"
     return summary + warn_msg
 
 def query_stop_parish_tool(name: str):
@@ -1206,8 +1073,7 @@ def verify_ticket_documents(ticket_type: str, uploaded_files: dict):
         if f is None: continue
         parts.extend([f"\n--- Document: '{n}' ---", {"mime_type": f.type or "application/octet-stream", "data": f.getvalue()}])
     if len(parts) == 1: return "No documents uploaded."
-    try:
-        return genai.GenerativeModel("gemini-3.5-flash").generate_content(parts, request_options={"timeout": 40}).text
+    try: return genai.GenerativeModel("gemini-3.5-flash").generate_content(parts, request_options={"timeout": 40}).text
     except Exception as e: return f"Error: {e}"
 
 def recommend_ticket_types(answers: dict, available_types: dict):
@@ -1435,7 +1301,6 @@ def render_arcade_game(ui):
     """
     return components.html(html_game, height=650)
 
-# --- STATE INITIALIZATION ---
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": ui["initial_msg"]}]
 
@@ -1447,7 +1312,6 @@ if "game_active" not in st.session_state:
 
 auto_sync_if_needed(day_limit=7)
 
-# --- SIDEBAR (AGENT MANAGEMENT) ---
 with st.sidebar:
     st.header(ui["sidebar_panel"])
     if st.button(ui["clear_history"], use_container_width=True):
@@ -1560,7 +1424,6 @@ prompt_text = st.chat_input(ui["chat_input"])
 audio_file = st.audio_input(ui["speak"])
 
 prompt = None
-input_type = "Text"
 
 if "last_processed_audio_id" not in st.session_state:
     st.session_state.last_processed_audio_id = None
@@ -1569,10 +1432,8 @@ if prompt_text:
     prompt = prompt_text
 elif audio_file:
     current_audio_id = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
-
     if current_audio_id != st.session_state.last_processed_audio_id:
         st.session_state.last_processed_audio_id = current_audio_id
-        input_type = "Audio"
         with st.spinner(ui["processing_audio"]):
             try:
                 transcription_response = genai.GenerativeModel("gemini-3.5-flash").generate_content([
@@ -1593,11 +1454,8 @@ if prompt:
         with st.spinner(ui["processing_agent"]):
             try:
                 base_context = get_knowledge_base_content()
-                
-                # --- AI LANGUAGE RULE ---
                 LANGUAGE_INSTRUCTION = "CRUCIAL LANGUAGE RULE: You MUST respond entirely in European Portuguese (pt-PT)." if st.session_state.language == "PT" else "CRUCIAL LANGUAGE RULE: You MUST respond entirely in English."
 
-                # --- AI SCHEDULE INSTRUCTION (Strictly enforces presenting times + link) ---
                 SCHEDULE_INSTRUCTION = (
                     "MANDATÓRIO: Sempre que te pedirem horários ou linhas, tens de apresentar OBRIGATORIAMENTE as horas de partida/chegada do horário pedido lendo a cache da ferramenta `query_line_schedule_cache`. NUNCA mandes apenas o link sem mostrares o horário no texto. No final da tua resposta, tens OBRIGATORIAMENTE de colocar o link: 'Consulta o horário oficial aqui: [LINK DA LINHA]'." 
                     if st.session_state.language == "PT" else 
@@ -1656,7 +1514,7 @@ if prompt:
 
                 api_history = []
                 for msg in st.session_state.messages[:-1]:
-                    if msg["content"] != ui["initial_msg"] and msg["content"] != UI_TEXT["PT"]["initial_msg"] and msg["content"] != UI_TEXT["EN"]["initial_msg"]:
+                    if msg["content"] not in [ui["initial_msg"], UI_TEXT["PT"]["initial_msg"], UI_TEXT["EN"]["initial_msg"]]:
                         api_role = "model" if msg["role"] == "assistant" else "user"
                         api_history.append({"role": api_role, "parts": [msg["content"]]})
                 
