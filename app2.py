@@ -1977,6 +1977,18 @@ with st.sidebar:
         if st.sidebar.button("📥 Importar Ficheiro JSON Local", use_container_width=True):
             with st.spinner("A ler geo_guimaraes.json..."):
                 st.sidebar.success(importar_json_local())
+        if st.sidebar.button("🔍 Inspecionar Conteúdo Geográfico", use_container_width=True):
+            conn = sqlite3.connect("agente_memoria.db")
+            cursor = conn.cursor()
+            # Verifica o total de registos
+            total = cursor.execute("SELECT COUNT(*) FROM nos_geograficos").fetchone()[0]
+            st.sidebar.write(f"Total de locais na BD: {total}")
+    
+            # Mostra os primeiros 5 nomes para veres o formato
+            amostra = cursor.execute("SELECT nome FROM nos_geograficos LIMIT 5").fetchall()
+            for item in amostra:
+            st.sidebar.caption(f"Exemplo: {item[0]}")
+            conn.close()
                 
         if st.sidebar.button(ui["logout_admin"], key="admin_logout_btn"):
             st.session_state.admin_autenticado = False
