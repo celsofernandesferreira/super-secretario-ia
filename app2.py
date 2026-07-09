@@ -987,11 +987,19 @@ def importar_json_local():
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         inseridos = 0
-        for item in dados_geo:
+        # O teu ficheiro é um dicionário gigante, por isso usamos .values() para extrair cada local
+        for item in dados_geo.values():
             cursor.execute("""
                 INSERT OR IGNORE INTO nos_geograficos (tipo, nome, freguesia, latitude, longitude, ultima_atualizacao)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (item.get("tipo", "poi_json"), item.get("nome"), item.get("freguesia"), item.get("latitude"), item.get("longitude"), timestamp))
+            """, (
+                item.get("tipo", "poi_json"), 
+                item.get("nome_real"),  # Ajustado para a chave correta do teu ficheiro
+                item.get("freguesia"),  # Pode não existir no JSON, fica a Null na BD (sem problema)
+                item.get("lat"),        # Ajustado para a chave correta do teu ficheiro
+                item.get("lon"),        # Ajustado para a chave correta do teu ficheiro
+                timestamp
+            ))
             inseridos += 1
             
         conn.commit()
