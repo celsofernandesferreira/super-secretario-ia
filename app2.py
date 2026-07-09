@@ -1981,7 +1981,7 @@ if prompt:
             try:
                 contexto_base = len_knowledge_base()
                 
-                                PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
+                PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
                 És um Agente focado em automação, suporte e infraestrutura IT.
                 Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas.
 
