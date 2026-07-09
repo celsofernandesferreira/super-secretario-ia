@@ -975,7 +975,8 @@ def importar_pois_guimaraes():
         return f"Sucesso: {pois_guardados} Pontos de Interesse (Hospitais, Cafés, etc.) guardados na BD local!"
     except Exception as e:
         return f"Erro na extração de POIs: {e}"
-        def importar_json_local():
+        
+def importar_json_local():
     try:
         # Lê o ficheiro local automaticamente
         with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
