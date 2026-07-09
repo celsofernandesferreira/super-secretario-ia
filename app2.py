@@ -1393,17 +1393,6 @@ def construir_indice_paragens():
     except Exception as e:
         return f"Falha ao construir índice de paragens: {e}"
 
-def _normalizar_nome_paragem(texto: str):
-    t = texto.lower().strip()
-    t = re.sub(r'\bsão\b', 's.', t)
-    t = re.sub(r'\bsanta\b', 'sta.', t)
-    t = re.sub(r'\bsanto\b', 'sto.', t)
-    t = t.replace('.', '')
-    t = unicodedata.normalize('NFKD', t)
-    t = ''.join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r'\s+', ' ', t).strip()
-    return t
-
 def _procurar_linhas_por_titulo(termo_norm: str):
     try:
         conn = sqlite3.connect("agente_memoria.db")
