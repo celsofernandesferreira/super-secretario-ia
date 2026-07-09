@@ -195,6 +195,14 @@ if "save_nome" in query_params and "save_pontos" in query_params:
     st.rerun()
 
 # 4. Injeção de CSS Avançado
+/* Adiciona isto dentro da tua tag <style> no st.markdown da Secção 4 */
+.stApp > header {
+    background: transparent;
+}
+.stChatMessageContainer {
+    /* Garante que o scroll desce o suficiente para não ficar atrás do rodapé */
+    padding-bottom: 260px !important; 
+}
 st.markdown("""
     <style>
         .stChatInputContainer {
@@ -306,9 +314,13 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     
     html_rodape = f"""
     <style>
+        /* Limpeza das margens do body interno do iframe */
+        body {{ margin: 0; padding: 0; overflow: hidden; }}
+        
         .footer-wrapper {{
-            position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
-            background-color: #1e1e1e; color: white; z-index: 9999;
+            /* Agora usamos absolute porque o iframe em si é que será fixed */
+            position: absolute; top: 0; left: 0; width: 100%; height: 160px;
+            background-color: #1e1e1e; color: white;
             border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
             display: flex; flex-direction: column; overflow: hidden;
         }}
@@ -320,7 +332,7 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             display: flex; align-items: center; flex: 1; padding: 0 20px; 
         }}
         .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
-        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
+        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; display: none; }}
         .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
         #ticker-text {{ 
             position: absolute; white-space: nowrap; font-size: 20px; 
@@ -343,6 +355,22 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     </div>
 
     <script>
+        // --- HACK DO ENGENHEIRO: FIXAR O IFRAME NA JANELA PRINCIPAL ---
+        try {{
+            const frame = window.frameElement;
+            if (frame) {{
+                frame.style.position = 'fixed';
+                // Colocamos a 85px do fundo para não tapar o st.chat_input
+                frame.style.bottom = '85px'; 
+                frame.style.left = '0';
+                frame.style.width = '100%';
+                frame.style.zIndex = '999';
+                frame.style.border = 'none';
+            }}
+        }} catch(e) {{
+            console.warn("Bloqueio de CORS ao tentar aceder ao frame pai.");
+        }}
+
         const anuncios = {dados_js};
         let indice = 0;
         const txt = document.getElementById('ticker-text');
@@ -363,10 +391,10 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             }}
             
             txt.style.animation = 'none';
-            txt.offsetHeight;
-            txt.style.animation = 'scroll-left 25s linear infinite';
+            txt.offsetHeight; // Forçar o reflow do DOM
             
-            let pos = container.offsetWidth / 2;
+            // Garantir que o texto começa fora da caixa do lado direito
+            let pos = container.offsetWidth;
             txt.style.left = pos + "px";
             
             function animar() {{
@@ -384,7 +412,7 @@ def renderizar_rodape_anuncios(anuncios_ativos):
         correrAviso();
     </script>
     """
-    components.html(html_rodape, height=170)
+    components.html(html_rodape, height=160)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
