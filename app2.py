@@ -936,7 +936,46 @@ def obter_contagem_indice_paragens():
 
 # --- NOVAS FUNÇÕES GEOGRÁFICAS (OVERPASS, FOLIUM, MAPS) ---
 def importar_pois_guimaraes():
-def importar_json_local():
+    query = """
+    [out:json][timeout:25];
+    area["name"="Guimarães"]->.searchArea;
+    (
+      node["amenity"~"hospital|clinic|doctors|pharmacy|cafe|restaurant|school|university"](area.searchArea);
+      node["tourism"~"museum|attraction|monument"](area.searchArea);
+      node["shop"~"supermarket|mall|bakery"](area.searchArea);
+    );
+    out center;
+    """
+    url = "https://overpass-api.de/api/interpreter"
+    try:
+        response = requests.post(url, data={'data': query}, timeout=30)
+        dados = response.json()
+        
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        pois_guardados = 0
+        for elemento in dados.get('elements', []):
+            tags = elemento.get('tags', {})
+            nome_poi = tags.get('name')
+            tipo_poi = tags.get('amenity', tags.get('tourism', tags.get('shop', 'poi')))
+            
+            if nome_poi and 'lat' in elemento and 'lon' in elemento:
+                lat = elemento['lat']
+                lon = elemento['lon']
+                cursor.execute("""
+                    INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (f"poi_{tipo_poi}", nome_poi, lat, lon, timestamp))
+                pois_guardados += 1
+                
+        conn.commit()
+        conn.close()
+        return f"Sucesso: {pois_guardados} Pontos de Interesse (Hospitais, Cafés, etc.) guardados na BD local!"
+    except Exception as e:
+        return f"Erro na extração de POIs: {e}"
+        def importar_json_local():
     try:
         # Lê o ficheiro local automaticamente
         with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
@@ -1009,45 +1048,6 @@ def encontrar_paragem_mais_proxima_tool(local_nome: str):
             
     except Exception as e:
         return f"Erro a calcular proximidade: {e}"
-    query = """
-    [out:json][timeout:25];
-    area["name"="Guimarães"]->.searchArea;
-    (
-      node["amenity"~"hospital|clinic|doctors|pharmacy|cafe|restaurant|school|university"](area.searchArea);
-      node["tourism"~"museum|attraction|monument"](area.searchArea);
-      node["shop"~"supermarket|mall|bakery"](area.searchArea);
-    );
-    out center;
-    """
-    url = "https://overpass-api.de/api/interpreter"
-    try:
-        response = requests.post(url, data={'data': query}, timeout=30)
-        dados = response.json()
-        
-        conn = sqlite3.connect("agente_memoria.db")
-        cursor = conn.cursor()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        pois_guardados = 0
-        for elemento in dados.get('elements', []):
-            tags = elemento.get('tags', {})
-            nome_poi = tags.get('name')
-            tipo_poi = tags.get('amenity', tags.get('tourism', tags.get('shop', 'poi')))
-            
-            if nome_poi and 'lat' in elemento and 'lon' in elemento:
-                lat = elemento['lat']
-                lon = elemento['lon']
-                cursor.execute("""
-                    INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (f"poi_{tipo_poi}", nome_poi, lat, lon, timestamp))
-                pois_guardados += 1
-                
-        conn.commit()
-        conn.close()
-        return f"Sucesso: {pois_guardados} Pontos de Interesse (Hospitais, Cafés, etc.) guardados na BD local!"
-    except Exception as e:
-        return f"Erro na extração de POIs: {e}"
 
 def importar_ruas_freguesia(nome_freguesia):
     url = "https://overpass-api.de/api/interpreter"
