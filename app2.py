@@ -966,7 +966,10 @@ def importar_pois_guimaraes():
         
 def importar_json_local():
     try:
-        # Lê o ficheiro local automaticamente
+        if not os.path.exists("geo_guimaraes.json"):
+            logging.error("ERRO: O ficheiro geo_guimaraes.json não existe na pasta raiz!")
+            return "Ficheiro não encontrado."
+
         with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
             dados_geo = json.load(f)
             
@@ -975,26 +978,26 @@ def importar_json_local():
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         inseridos = 0
-        # O teu ficheiro é um dicionário gigante, por isso usamos .values() para extrair cada local
-        for item in dados_geo.values():
+        for chave, item in dados_geo.items(): # Usamos .items() porque o teu JSON é { "id": {dados...} }
             cursor.execute("""
-                INSERT OR IGNORE INTO nos_geograficos (tipo, nome, freguesia, latitude, longitude, ultima_atualizacao)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
+                VALUES (?, ?, ?, ?, ?)
             """, (
                 item.get("tipo", "poi_json"), 
-                item.get("nome_real"),  # Ajustado para a chave correta do teu ficheiro
-                item.get("freguesia"),  # Pode não existir no JSON, fica a Null na BD (sem problema)
-                item.get("lat"),        # Ajustado para a chave correta do teu ficheiro
-                item.get("lon"),        # Ajustado para a chave correta do teu ficheiro
+                item.get("nome_real"), 
+                item.get("lat"), 
+                item.get("lon"), 
                 timestamp
             ))
             inseridos += 1
             
         conn.commit()
         conn.close()
-        logging.info(f"Sucesso: {inseridos} locais do geo_guimaraes.json importados na automação de arranque.")
+        logging.info(f"Sucesso: {inseridos} locais importados do JSON.")
+        return f"Sucesso: {inseridos} locais importados."
     except Exception as e:
-        logging.error(f"Erro ao ler geo_guimaraes.json no arranque: {e}")
+        logging.error(f"ERRO CRÍTICO NA IMPORTAÇÃO JSON: {e}")
+        return f"Erro: {e}"
 
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     R = 6371.0 # Raio da Terra em km
