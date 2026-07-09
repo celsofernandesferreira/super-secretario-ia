@@ -1991,12 +1991,22 @@ with st.sidebar:
             with st.spinner("A ler geo_guimaraes.json..."):
                 st.sidebar.success(importar_json_local())
                 
-        if st.sidebar.button("🔍 Inspecionar Conteúdo Geográfico", use_container_width=True):
-            conn = sqlite3.connect("agente_memoria.db")
-            cursor = conn.cursor()
-            # Verifica o total de registos
-            total = cursor.execute("SELECT COUNT(*) FROM nos_geograficos").fetchone()[0]
-            st.sidebar.write(f"Total de locais na BD: {total}")
+# Verifica se esta estrutura está alinhada corretamente no teu ficheiro
+if st.sidebar.button("🔍 Inspecionar Conteúdo Geográfico", use_container_width=True):
+    conn = sqlite3.connect("agente_memoria.db")
+    cursor = conn.cursor()
+    
+    # Total de registos
+    total = cursor.execute("SELECT COUNT(*) FROM nos_geograficos").fetchone()[0]
+    st.sidebar.write(f"Total de locais na BD: {total}")
+    
+    # Amostra - Certifica-te que as linhas abaixo estão com a mesma indentação
+    amostra = cursor.execute("SELECT nome FROM nos_geograficos LIMIT 5").fetchall()
+    
+    for item in amostra:
+        st.sidebar.caption(f"Exemplo: {item[0]}") # <--- Esta linha precisa de estar indentada
+        
+    conn.close()
     
             # Mostra os primeiros 5 nomes para veres o formato
             amostra = cursor.execute("SELECT nome FROM nos_geograficos LIMIT 5").fetchall()
