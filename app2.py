@@ -71,7 +71,7 @@ UI_TEXT = {
         "ad_notice": "Aviso",
         "ticket_title": "🎫 Pedido de Passe — Guimabus",
         "ticket_warning": "⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão.**",
-        "ticket_updated": "📅 Dados de tipologias atualizados em:",
+        "ticket_updated": "📅 Dados atualizados em:",
         "ticket_wizard": "🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas",
         "ticket_age": "A tua idade",
         "ticket_resident": "Resides no concelho de Guimarães?",
@@ -91,6 +91,7 @@ UI_TEXT = {
         "ticket_desc": "**Descrição:**",
         "ticket_price": "**Preço:**",
         "ticket_card": "**Custo do cartão:**",
+        "ticket_deadline": "**Prazo / Recarregamento:**",
         "ticket_docs_req": "**Documentos necessários para esta tipologia:**",
         "ticket_verify_btn": "🔍 Verificar documentos carregados",
         "ticket_upload_warn": "Carrega pelo menos um documento.",
@@ -157,7 +158,7 @@ UI_TEXT = {
         "ad_notice": "Notice",
         "ticket_title": "🎫 Guimabus Ticket Request",
         "ticket_warning": "⚠️ **Important warning:** this form is a support and preliminary verification tool. **It is not an official submission channel.**",
-        "ticket_updated": "📅 Ticket types data updated on:",
+        "ticket_updated": "📅 Data updated on:",
         "ticket_wizard": "🧭 Don't know which type fits you? Answer these questions",
         "ticket_age": "Your age",
         "ticket_resident": "Do you reside in the Guimarães municipality?",
@@ -177,6 +178,7 @@ UI_TEXT = {
         "ticket_desc": "**Description:**",
         "ticket_price": "**Price:**",
         "ticket_card": "**Card Cost:**",
+        "ticket_deadline": "**Deadline / Recharge:**",
         "ticket_docs_req": "**Required documents for this type:**",
         "ticket_verify_btn": "🔍 Verify uploaded documents",
         "ticket_upload_warn": "Upload at least one document.",
@@ -204,12 +206,19 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-# 2. DATABASE CONFIGURATION (Persistent SQLite)
-def initialize_db():
-    conn = sqlite3.connect("agent_memory.db")
+# 2. DATABASE CONFIGURATION (Persistent SQLite with Concurrency Safety)
+def get_db_connection():
+    """Returns a highly concurrent SQLite connection."""
+    conn = sqlite3.connect("agent_memory.db", timeout=15.0) # 15s timeout to prevent locking errors
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA busy_timeout=5000;")
+    return conn
+
+def initialize_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS global_history (
@@ -296,7 +305,7 @@ def initialize_db():
 
 def save_message_db(session_id, role, content):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
@@ -310,7 +319,7 @@ def save_message_db(session_id, role, content):
 
 def get_top_10_scores():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT name, score FROM high_scores ORDER BY score DESC, id ASC LIMIT 10")
         results = cursor.fetchall()
@@ -322,7 +331,7 @@ def get_top_10_scores():
 
 def save_score_db(name, score):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         cursor.execute(
@@ -361,11 +370,11 @@ with col3:
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# URL Parameters for Arcade High Scores
+# URL Parameters for Arcade High Scores (Improved Capture)
 query_params = st.query_params
 if "save_name" in query_params and "save_score" in query_params:
     record_name = query_params["save_name"].upper()
-    record_score = int(query_params["save_score"])
+    record_score = int(float(query_params["save_score"]))
     
     save_score_db(record_name, record_score)
     toast_msg = ui["toast_score"].replace("{name}", record_name).replace("{score}", str(record_score))
@@ -636,7 +645,7 @@ def generate_google_maps_link(location_name: str):
 
 def generate_line_map_html(line_id):
     os.makedirs("maps", exist_ok=True)
-    conn = sqlite3.connect("agent_memory.db")
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT stop FROM stop_line_cache WHERE line = ? OR line = ?", (line_id, str(line_id).zfill(3)))
     line_stops = [row[0] for row in cursor.fetchall()]
@@ -764,7 +773,7 @@ def get_stop_schedules(stop_id: str):
     try:
         search_terms = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', source_text).split()
         if not search_terms: search_terms = [source_text]
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         conditions = " AND ".join(["content_txt LIKE ?" for _ in search_terms])
         values = [f"%{term}%" for term in search_terms]
@@ -812,7 +821,7 @@ def sync_all_guimabus_schedules():
         
         if not pdf_links: return "No schedule PDF files found on the main page."
         
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         processed_lines = []
@@ -829,6 +838,7 @@ def sync_all_guimabus_schedules():
                         for idx, page in enumerate(pdf.pages):
                             page_text = page.extract_text(layout=True)
                             if page_text: extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
+                            time.sleep(0.05) # Yield CPU to prevent UI freezing
                     final_content = "\n\n".join(extracted_text)
                     if not final_content.strip(): final_content = "PDF is image-based or copy-protected."
 
@@ -840,7 +850,7 @@ def sync_all_guimabus_schedules():
                     break
                 except Exception:
                     time.sleep(1); continue
-            time.sleep(0.4)
+            time.sleep(0.2)
         conn.commit(); conn.close()
         return f"Sync completed: {len(processed_lines)}/{len(pdf_links)} PDFs downloaded!"
     except Exception as e:
@@ -857,7 +867,7 @@ def query_line_schedule_cache(line_id: str):
             three_digits = user_input.zfill(3)
             if three_digits not in candidates: candidates.append(three_digits)
 
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         result = None
         for candidate in candidates:
@@ -881,7 +891,7 @@ def get_knowledge_base_content():
 
 def get_schedule_cache_age_days():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT MAX(last_updated) FROM schedule_cache")
         result = cursor.fetchone()
@@ -892,7 +902,7 @@ def get_schedule_cache_age_days():
 
 def get_ticket_cache_age_days():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT MAX(last_updated) FROM ticket_cache")
         result = cursor.fetchone()
@@ -903,7 +913,7 @@ def get_ticket_cache_age_days():
 
 def get_stop_index_count():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM stop_line_cache")
         result = cursor.fetchone()
@@ -914,11 +924,13 @@ def get_stop_index_count():
 def auto_sync_if_needed(day_limit: int = 7):
     if st.session_state.get("auto_sync_attempted_this_session"): return
     st.session_state.auto_sync_attempted_this_session = True
+    
     sch_age = get_schedule_cache_age_days()
     if sch_age is None or sch_age >= day_limit:
         threading.Thread(target=sync_all_guimabus_schedules, daemon=True).start()
     elif get_stop_index_count() == 0:
         threading.Thread(target=build_stop_index, daemon=True).start()
+        
     tkt_age = get_ticket_cache_age_days()
     if tkt_age is None or tkt_age >= day_limit:
         threading.Thread(target=sync_tickets_and_tariff, daemon=True).start()
@@ -937,7 +949,7 @@ def sync_guimabus_tickets():
         blocks = re.split(r'\nPASSE\n', "\n" + normalized_text)[1:]
         if not blocks: return "No ticket types found."
 
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -947,8 +959,9 @@ def sync_guimabus_tickets():
             type_name = lines[0].strip()
             rest = "\n".join(lines[1:])
             
-            m_dead = re.search(r'(Só podem ser emitidos.*?\.)', rest, re.IGNORECASE)
-            deadline = m_dead.group(1).strip() if m_dead else "Deadline not specified."
+            # Improved robust regex for capturing deadlines correctly
+            m_dead = re.search(r'([Ss]ó\s+podem\s+ser\s+(?:emitidos|carregados).*?\.|[Oo]\s+carregamento.*?\.)', rest, re.DOTALL | re.IGNORECASE)
+            deadline = m_dead.group(1).strip().replace('\n', ' ') if m_dead else "Deadline not specified on website."
 
             m_price = re.search(r'Preço:\s*(.+)', rest)
             if m_price: price = m_price.group(1).strip()
@@ -961,7 +974,7 @@ def sync_guimabus_tickets():
             m_desc = re.match(r'(.*?)(?:Preço:|GRATUITO|Gratuito|\*\*Documentos necessários)', rest, re.DOTALL)
             description = m_desc.group(1).strip().replace("\n", " ") if m_desc else ""
 
-            m_docs = re.search(r'\*\*Documentos necessários:\*\*(.*?)(?:Só podem ser emitidos|$)', rest, re.DOTALL)
+            m_docs = re.search(r'\*\*Documentos necessários:\*\*(.*?)(?:Só podem ser emitidos|[Oo] carregamento|$)', rest, re.DOTALL)
             docs_list = [d.strip() for d in m_docs.group(1).split("\n") if d.strip() and not re.match(r'^(Custo do cartão|Preço)', d, re.IGNORECASE)] if m_docs else ["ID Card"]
 
             cursor.execute("INSERT OR REPLACE INTO ticket_cache (ticket_type, description, price, card_cost, deadline, documents_json, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?)", (type_name, description, price, card_cost, deadline, json.dumps(docs_list, ensure_ascii=False), ts))
@@ -984,9 +997,10 @@ def sync_guimabus_tariff():
             for idx, page in enumerate(pdf.pages):
                 txt = page.extract_text(layout=True)
                 if txt: extracted.append(f"[PAGE {idx+1}]\n{txt}")
+                time.sleep(0.05) # Yield CPU
         final_content = "\n\n".join(extracted) or "Image-based PDF."
         
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         conn.execute("INSERT OR REPLACE INTO tariff_cache (id, url_pdf, content_txt, last_updated) VALUES (1, ?, ?, ?)", (pdf_url, final_content, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit(); conn.close()
         return "Tariff sync complete."
@@ -1007,7 +1021,7 @@ def _extract_stops_from_text(text: str):
 
 def build_stop_index():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT line, content_txt FROM schedule_cache")
         cached_lines = cursor.fetchall()
@@ -1033,7 +1047,7 @@ def _normalize_stop_name(text: str):
 
 def _search_lines_by_title(norm_term: str):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT line, title FROM line_title_cache")
         all_titles = cursor.fetchall()
@@ -1049,7 +1063,7 @@ def _search_lines_by_title(norm_term: str):
 
 def enrich_stops_with_parish(progress_callback=None):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT stop FROM stop_line_cache")
         all_stops = [row[0] for row in cursor.fetchall()]
@@ -1061,7 +1075,7 @@ def enrich_stops_with_parish(progress_callback=None):
     pending = [p for p in all_stops if p not in already_done]
     if not pending: return "All stops enriched."
 
-    conn = sqlite3.connect("agent_memory.db")
+    conn = get_db_connection()
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for idx, stop in enumerate(pending):
         try:
@@ -1078,7 +1092,7 @@ def enrich_stops_with_parish(progress_callback=None):
 
 def get_parish_from_stop(stop_name: str):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         all_data = conn.execute("SELECT stop, parish FROM stop_parish_cache WHERE parish IS NOT NULL").fetchall()
         conn.close()
     except Exception: return None
@@ -1092,7 +1106,7 @@ def get_parish_from_stop(stop_name: str):
 
 def find_stops_by_parish(parish_name: str):
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         all_data = conn.execute("SELECT stop, parish FROM stop_parish_cache WHERE parish IS NOT NULL").fetchall()
         conn.close()
     except Exception: return []
@@ -1104,7 +1118,7 @@ def plan_trip_with_transfer(origin: str, destination: str):
     norm_orig, norm_dest = _normalize_stop_name(origin), _normalize_stop_name(destination)
     
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         all_data = conn.execute("SELECT line, stop FROM stop_line_cache").fetchall()
         conn.close()
     except Exception: return "Error querying stop index."
@@ -1154,7 +1168,7 @@ def query_stop_parish_tool(name: str):
 
 def get_ticket_types_cache():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         rows = conn.execute("SELECT ticket_type, description, price, card_cost, deadline, documents_json FROM ticket_cache ORDER BY ticket_type").fetchall()
         last_updated = conn.execute("SELECT MAX(last_updated) FROM ticket_cache").fetchone()[0]
         conn.close()
@@ -1170,7 +1184,7 @@ def get_ticket_types_cache():
 
 def query_tariff_cache():
     try:
-        conn = sqlite3.connect("agent_memory.db")
+        conn = get_db_connection()
         res = conn.execute("SELECT content_txt, last_updated FROM tariff_cache WHERE id = 1").fetchone()
         conn.close()
         return f"Tariff (updated {res[1]}):\n\n{res[0]}" if res else "Not synchronized."
@@ -1249,7 +1263,7 @@ def render_ticket_request(ui):
     chosen_type = st.selectbox(ui["ticket_choose"], list(TICKET_TYPES.keys()))
     info = TICKET_TYPES[chosen_type]
 
-    st.markdown(f"{ui['ticket_desc']} {info['description']}\n{ui['ticket_price']} {info['price']} | {ui['ticket_card']} {info['card_cost']}")
+    st.markdown(f"{ui['ticket_desc']} {info['description']}\n{ui['ticket_price']} {info['price']} | {ui['ticket_card']} {info['card_cost']}\n{ui['ticket_deadline']} {info['deadline']}")
     st.markdown(ui["ticket_docs_req"])
     uploaded_files = {}
     for i, doc_name in enumerate(info["documents"]):
@@ -1391,7 +1405,15 @@ def render_arcade_game(ui):
                 var name = nameInput.value.trim().toUpperCase();
                 if(!name) {{ alert("{ui['game_alert']}"); return; }}
                 btnSave.disabled = true; btnSave.innerText = "💾...";
-                window.parent.location.search = "?save_name=" + encodeURIComponent(name) + "&save_score=" + (score / 10);
+                
+                try {{
+                    var url = new URL(window.parent.location.href);
+                    url.searchParams.set("save_name", name);
+                    url.searchParams.set("save_score", (score / 10));
+                    window.parent.location.href = url.toString();
+                }} catch(e) {{
+                    alert("Unable to save data. Security restriction.");
+                }}
             }}
             function changeDir(dir) {{
                 if (!gameStarted || gameOver) return;
@@ -1417,7 +1439,6 @@ def render_arcade_game(ui):
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": ui["initial_msg"]}]
 
-# Dynamically update the initial message if it is the ONLY message in history
 if len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] == "assistant":
     st.session_state.messages[0]["content"] = ui["initial_msg"]
 
@@ -1513,7 +1534,7 @@ with st.sidebar:
 
         with st.sidebar.expander(ui["global_history"]):
             if os.path.exists("agent_memory.db"):
-                conn = sqlite3.connect("agent_memory.db")
+                conn = get_db_connection()
                 for r in reversed(conn.execute("SELECT timestamp, session_id, role, content FROM global_history ORDER BY id DESC LIMIT 30").fetchall()):
                     hr_min = r[0].split(" ")[1] if " " in r[0] else r[0]
                     st.markdown(f"**{'🟢' if r[2]=='user' else '🤖'} [{hr_min}] {ui['visitor'] if r[2]=='user' else ui['agent']} ({r[1]}):** {r[3]}")
@@ -1576,6 +1597,13 @@ if prompt:
                 # --- AI LANGUAGE RULE ---
                 LANGUAGE_INSTRUCTION = "CRUCIAL LANGUAGE RULE: You MUST respond entirely in European Portuguese (pt-PT)." if st.session_state.language == "PT" else "CRUCIAL LANGUAGE RULE: You MUST respond entirely in English."
 
+                # --- AI SCHEDULE INSTRUCTION (Strictly enforces presenting times + link) ---
+                SCHEDULE_INSTRUCTION = (
+                    "MANDATÓRIO: Sempre que te pedirem horários ou linhas, tens de apresentar OBRIGATORIAMENTE as horas de partida/chegada do horário pedido lendo a cache da ferramenta `query_line_schedule_cache`. NUNCA mandes apenas o link sem mostrares o horário no texto. No final da tua resposta, tens OBRIGATORIAMENTE de colocar o link: 'Consulta o horário oficial aqui: [LINK DA LINHA]'." 
+                    if st.session_state.language == "PT" else 
+                    "MANDATORY: Whenever asked about schedules or lines, you MUST present the actual departure/arrival times by reading the cache from the `query_line_schedule_cache` tool. NEVER just send the link without showing the times in your text. At the very end of your response, you MUST include the link: 'Check the official schedule here: [LINE LINK]'."
+                )
+
                 EXECUTIVE_PROMPT = f"""You are Celso Ferreira's Elite Executive Assistant.
                 You are an Agent focused on automation, IT support, and infrastructure.
 
@@ -1592,11 +1620,10 @@ if prompt:
                 - generate_google_maps_link: receives a location name (stop, cafe, hospital, street) and returns a direct Google Maps link.
                 - find_closest_stop: discovers the closest official bus stop to any cafe, factory, or point of interest.
 
-                MANDATORY PLANNING LOGIC AND SCHEDULE PRESENTATION:
+                MANDATORY PLANNING LOGIC:
                 1. If the location IS NOT A STOP (e.g., cafe, factory), use the "find_closest_stop" tool FIRST.
                 2. Use "plan_trip_with_transfer" with the exact stop names.
-                3. MANDATORY: Whenever you indicate a route or line (direct or with transfer), YOU MUST call the "query_line_schedule_cache" tool for EACH line you suggested.
-                4. MANDATORY: In your reply to the user, you must present the relevant schedules for the trip and ALWAYS include the following phrase and hyperlink for EACH mentioned line: "Consulta o ficheiro oficial completo aqui: [LINE LINK]". NEVER provide a route without showing the schedules and their respective links.
+                3. {SCHEDULE_INSTRUCTION}
 
                 TOOL CALLING EXECUTION RULE - CRITICAL:
                 NEVER describe the steps you will take to search. NEVER try to calculate routes mentally or guess stops without the tools giving you that information. CALL THE TOOLS silently. Only write the final text after having the tools' response.
