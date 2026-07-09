@@ -1876,7 +1876,30 @@ if len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] 
 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
+# --- EXECUÇÃO BLOQUEANTE E RESILIENTE DE ATUALIZAÇÕES INICIAIS ---
+is_updating = verificar_necessidade_sync(limite_dias=7)
 
+if is_updating:
+    st.error(ui["updating_system"], icon="⏳")
+    
+    with st.spinner(ui["robot_reading"]):
+        tasks = st.session_state.update_tasks
+        
+        if tasks.get("sch"):
+            sincronizar_todos_horarios_guimabus()
+            construir_indice_paragens()
+        elif tasks.get("idx"):
+            construir_indice_paragens()
+        
+        if tasks.get("tkt"):
+            sincronizar_titulos_e_tarifario()
+            
+        if tasks.get("geo"):
+            importar_pois_guimaraes()
+            importar_json_local()
+            
+    st.session_state.is_updating = False
+    st.rerun() # Refresh força a libertação do input box abaixo.
 # --- SIDEBAR DE ELITE ---
 with st.sidebar:
     st.header(ui["sidebar_panel"])
@@ -1985,31 +2008,6 @@ for message in st.session_state.messages:
     avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
     with st.chat_message(message["role"], avatar=avatar_tipo):
         st.markdown(message["content"])
-
-# --- EXECUÇÃO BLOQUEANTE E RESILIENTE DE ATUALIZAÇÕES INICIAIS ---
-is_updating = verificar_necessidade_sync(limite_dias=7)
-
-if is_updating:
-    st.error(ui["updating_system"], icon="⏳")
-    
-    with st.spinner(ui["robot_reading"]):
-        tasks = st.session_state.update_tasks
-        
-        if tasks.get("sch"):
-            sincronizar_todos_horarios_guimabus()
-            construir_indice_paragens()
-        elif tasks.get("idx"):
-            construir_indice_paragens()
-        
-        if tasks.get("tkt"):
-            sincronizar_titulos_e_tarifario()
-            
-        if tasks.get("geo"):
-            importar_pois_guimaraes()
-            importar_json_local()
-            
-    st.session_state.is_updating = False
-    st.rerun() # Refresh força a libertação do input box abaixo.
 
 # Input só é renderizado de facto depois da função de bloqueio estar livre
 prompt_texto = st.chat_input(ui["chat_input"])
