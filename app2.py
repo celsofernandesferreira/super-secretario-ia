@@ -221,14 +221,6 @@ st.markdown("""
         div[data-testid="stAudioInput"] label {
             display: none !important;
         }
-        /* Adiciona isto dentro da tua tag <style> no st.markdown da Secção 4 */
-.stApp > header {
-    background: transparent;
-}
-.stChatMessageContainer {
-    /* Garante que o scroll desce o suficiente para não ficar atrás do rodapé */
-    padding-bottom: 260px !important; 
-}
     </style>
 """, unsafe_allow_html=True)
 
@@ -243,7 +235,7 @@ except Exception:
 # --- INTEGRAÇÃO FACEBOOK RSS (COM INTELIGÊNCIA ARTIFICIAL PARA DATAS) ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.csv"
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
     
     agora = datetime.now(ZoneInfo("Europe/Lisbon"))
@@ -310,81 +302,89 @@ def obter_avisos_facebook():
 def renderizar_rodape_anuncios(anuncios_ativos):
     if not anuncios_ativos: return
     
-    # Junta todos os textos dos avisos numa única string longa para o letreiro
-    texto_ticker = "     |     ".join([f"🚨 {a.get('texto', a.get('titulo', 'Aviso'))}" for a in anuncios_ativos])
+    dados_js = json.dumps(anuncios_ativos)
     
     html_rodape = f"""
     <style>
-        /* O container fixa-se nativamente no fundo do ecrã */
-        .footer-container-global {{
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            height: 90px;
-            background-color: #1e1e1e;
-            color: white;
-            z-index: 999999;
-            border-top: 4px solid #2ecc71;
-            box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
-            display: flex;
-            flex-direction: column;
+        .footer-wrapper {{
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
+            background-color: #1e1e1e; color: white; z-index: 9999;
+            border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            display: flex; flex-direction: column; overflow: hidden;
         }}
-        .footer-disclaimer {{
-            background: #2a2a2a;
-            color: #eee;
-            font-size: 13px;
-            padding: 4px 20px;
-            text-align: center;
-            font-weight: bold;
-            border-bottom: 1px solid #444;
+        .disclaimer {{
+            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
+            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
         }}
-        .ticker-wrapper {{
-            overflow: hidden;
-            white-space: nowrap;
-            display: flex;
-            align-items: center;
-            flex: 1;
-            width: 100%;
+        .content-area {{ 
+            display: flex; align-items: center; flex: 1; padding: 0 20px; 
         }}
-        .ticker-text {{
-            display: inline-block;
-            white-space: nowrap;
-            font-size: 20px;
-            font-weight: bold;
-            padding-left: 100%; /* Começa fora do ecrã à direita */
-            animation: marquee 35s linear infinite; /* Animação CSS pura (sem JS) */
-        }}
-        
-        /* A magia do movimento sem JavaScript */
-        @keyframes marquee {{
-            0%   {{ transform: translateX(0); }}
-            100% {{ transform: translateX(-100%); }}
-        }}
-        
-        /* Levantar a caixa de texto do chat para não ficar escondida debaixo do rodapé */
-        .stChatInputContainer {{
-            bottom: 100px !important;
-        }}
-        
-        /* Levantar o botão de áudio de acordo com a nova posição da barra */
-        div[data-testid="stAudioInput"] {{
-            bottom: 108px !important;
+        .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
+        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
+        .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
+        #ticker-text {{ 
+            position: absolute; white-space: nowrap; font-size: 20px; 
+            font-weight: bold; top: 35px; left: 50%;
         }}
     </style>
     
-    <div class="footer-container-global">
-        <div class="footer-disclaimer">
-            ⚠️ Aviso importante: Esta é uma ferramenta de apoio. Não é um canal oficial da Guimabus.
+    <div class="footer-wrapper">
+        <div class="disclaimer">
+            ⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.
         </div>
-        <div class="ticker-wrapper">
-            <div class="ticker-text">{texto_ticker}</div>
+        <div class="content-area">
+            <div class="img-box">
+                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
+            </div>
+            <div class="text-container">
+                <div id="ticker-text"></div>
+            </div>
         </div>
     </div>
+
+    <script>
+        const anuncios = {dados_js};
+        let indice = 0;
+        const txt = document.getElementById('ticker-text');
+        const img = document.getElementById('ticker-img');
+        const container = document.querySelector('.text-container');
+
+        async function correrAviso() {{
+            const a = anuncios[indice];
+            
+            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
+            
+            if (a.imagem && a.imagem.trim() !== "") {{
+                img.src = a.imagem;
+                img.style.display = "block";
+                img.style.visibility = "visible";
+            }} else {{
+                img.style.display = "none";
+            }}
+            
+            txt.style.animation = 'none';
+            txt.offsetHeight;
+            txt.style.animation = 'scroll-left 25s linear infinite';
+            
+            let pos = container.offsetWidth / 2;
+            txt.style.left = pos + "px";
+            
+            function animar() {{
+                pos -= 2; 
+                txt.style.left = pos + "px";
+                if (pos < -txt.offsetWidth) {{
+                    indice = (indice + 1) % anuncios.length;
+                    setTimeout(correrAviso, 2000); 
+                }} else {{
+                    requestAnimationFrame(animar);
+                }}
+            }}
+            animar();
+        }}
+        correrAviso();
+    </script>
     """
-    
-    # Injeta diretamente no Streamlit sem criar um Iframe problemático
-    st.markdown(html_rodape, unsafe_allow_html=True)
+    components.html(html_rodape, height=170)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
