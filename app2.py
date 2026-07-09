@@ -14,31 +14,31 @@ import threading
 import pdfplumber
 import unicodedata
 import folium
-import math  # <-- ADICIONADO: Para cálculos de distância GPS
+import math
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
-# 1. CONFIGURAÇÃO DE LOGS (Auditoria Técnica)
+# 1. LOGGING CONFIGURATION (Technical Audit)
 logging.basicConfig(
-    filename="auditoria_agente.log",
+    filename="agent_audit.log",
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     encoding="utf-8"
 )
 
-# 2. CONFIGURAÇÃO DA BASE DE DADOS (SQLite Persistente com High Scores e Cache de Horários)
-def inicializar_bd():
-    conn = sqlite3.connect("agente_memoria.db")
+# 2. DATABASE CONFIGURATION (Persistent SQLite)
+def initialize_db():
+    conn = sqlite3.connect("agent_memory.db")
     cursor = conn.cursor()
-    # Modo WAL: permite leituras normais da app enquanto a sincronização em segundo plano
-    # (numa thread separada) está a escrever, em vez de bloquear tudo à espera.
+    # WAL Mode for better concurrency
     cursor.execute("PRAGMA journal_mode=WAL;")
     cursor.execute("PRAGMA busy_timeout=5000;")
-    # Tabela de histórico global
+    
+    # Global history table
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS historico_global (
+        CREATE TABLE IF NOT EXISTS global_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
             session_id TEXT,
@@ -46,156 +46,151 @@ def inicializar_bd():
             content TEXT
         )
     """)
-    # Tabela: Sistema de High Scores
+    # High Scores System
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS high_scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
-            nome TEXT,
-            pontor INTEGER
+            name TEXT,
+            score INTEGER
         )
     """)
-    # Tabela: Cache de Horários Locais (Evita queries constantes à Web)
+    # Local Schedules Cache
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cache_horarios (
-            linha TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS schedule_cache (
+            line TEXT PRIMARY KEY,
             url TEXT,
-            conteudo_txt TEXT,
-            ultima_atualizacao TEXT
+            content_txt TEXT,
+            last_updated TEXT
         )
     """)
-    # Tabela: Cache das Tipologias de Passe (scraped de guimabus.pt/titulos/)
+    # Ticket Types Cache (scraped from guimabus.pt)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cache_titulos (
-            tipologia TEXT PRIMARY KEY,
-            descricao TEXT,
-            preco TEXT,
-            custo_cartao TEXT,
-            prazo TEXT,
-            documentos_json TEXT,
-            ultima_atualizacao TEXT
+        CREATE TABLE IF NOT EXISTS ticket_cache (
+            ticket_type TEXT PRIMARY KEY,
+            description TEXT,
+            price TEXT,
+            card_cost TEXT,
+            deadline TEXT,
+            documents_json TEXT,
+            last_updated TEXT
         )
     """)
-    # Tabela: Cache do Tarifário (scraped de guimabus.pt/tarifarios/, PDF)
+    # Tariff Cache (scraped from guimabus.pt)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cache_tarifario (
+        CREATE TABLE IF NOT EXISTS tariff_cache (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             url_pdf TEXT,
-            conteudo_txt TEXT,
-            ultima_atualizacao TEXT
+            content_txt TEXT,
+            last_updated TEXT
         )
     """)
-    # Tabela: Índice Paragem <-> Linha (construído a partir do texto dos horários já em cache),
-    # usado para sugerir transbordos entre linhas.
+    # Stop <-> Line Index
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cache_paragens_linha (
-            linha TEXT,
-            paragem TEXT,
-            PRIMARY KEY (linha, paragem)
+        CREATE TABLE IF NOT EXISTS stop_line_cache (
+            line TEXT,
+            stop TEXT,
+            PRIMARY KEY (line, stop)
         )
     """)
-    # Tabela: Título/descrição de cada linha (ex: "171 Quintães - Guimarães (via S. Torcato e Atães)").
-    # Os títulos mencionam frequentemente freguesias que os nomes de paragem, por si só, não indicam.
+    # Line Title Cache
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cache_titulo_linha (
-            linha TEXT PRIMARY KEY,
-            titulo TEXT,
-            ultima_atualizacao TEXT
+        CREATE TABLE IF NOT EXISTS line_title_cache (
+            line TEXT PRIMARY KEY,
+            title TEXT,
+            last_updated TEXT
         )
     """)
-    # Tabela: Freguesia de cada paragem (enriquecimento único via geocodificação OpenStreetMap/Nominatim)
+    # Stop Parish Cache (Nominatim Geocoding)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS cache_paragem_freguesia (
-            paragem TEXT PRIMARY KEY,
-            freguesia TEXT,
-            fonte TEXT,
-            ultima_atualizacao TEXT
+        CREATE TABLE IF NOT EXISTS stop_parish_cache (
+            stop TEXT PRIMARY KEY,
+            parish TEXT,
+            source TEXT,
+            last_updated TEXT
         )
     """)
-    
-    # --- NOVA TABELA: BASE GEOGRÁFICA UNIFICADA ---
+    # Unified Geographic Nodes
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS nos_geograficos (
+        CREATE TABLE IF NOT EXISTS geographic_nodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tipo TEXT, 
-            nome TEXT,
-            freguesia TEXT,
+            type TEXT, 
+            name TEXT,
+            parish TEXT,
             latitude REAL,
             longitude REAL,
-            linhas_associadas TEXT, 
-            ultima_atualizacao TEXT
+            associated_lines TEXT, 
+            last_updated TEXT
         )
     """)
-    # Índice para buscas incrivelmente rápidas de locais
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_node_names ON geographic_nodes(name);")
 
     conn.commit()
     conn.close()
 
-def guardar_mensagem_bd(session_id, role, content):
+def save_message_db(session_id, role, content):
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
-            "INSERT INTO historico_global (timestamp, session_id, role, content) VALUES (?, ?, ?, ?)",
+            "INSERT INTO global_history (timestamp, session_id, role, content) VALUES (?, ?, ?, ?)",
             (timestamp, session_id, role, content)
         )
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Erro ao gravar na Base de Dados: {e}")
+        logging.error(f"Error saving to Database: {e}")
 
-def obter_top_10():
+def get_top_10_scores():
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT nome, pontor FROM high_scores ORDER BY pontor DESC, id ASC LIMIT 10")
-        resultados = cursor.fetchall()
+        cursor.execute("SELECT name, score FROM high_scores ORDER BY score DESC, id ASC LIMIT 10")
+        results = cursor.fetchall()
         conn.close()
-        return resultados
+        return results
     except Exception as e:
-        logging.error(f"Erro ao ler High Scores: {e}")
+        logging.error(f"Error reading High Scores: {e}")
         return []
 
-def guardar_score_bd(nome, pontor):
+def save_score_db(name, score):
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         cursor.execute(
-            "INSERT INTO high_scores (timestamp, nome, pontor) VALUES (?, ?, ?)",
-            (timestamp, nome, pontor)
+            "INSERT INTO high_scores (timestamp, name, score) VALUES (?, ?, ?)",
+            (timestamp, name, score)
         )
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Erro ao gravar High Score: {e}")
+        logging.error(f"Error saving High Score: {e}")
 
-# Inicializa a BD no arranque
-inicializar_bd()
+initialize_db()
 
-# 3. Configuração da página 
-st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
-st.title("💼 O Teu Super Secretário de Produtividade")
+# 3. Page Configuration
+st.set_page_config(page_title="Super Secretary AI", page_icon="💼", layout="wide")
+st.title("💼 Your Super Productivity Secretary")
 
-# Identificador único de sessão
+# Unique Session Identifier
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# --- CAPTURA DE RECORDES VIA URL ---
+# URL Parameters for Arcade High Scores
 query_params = st.query_params
-if "save_nome" in query_params and "save_pontos" in query_params:
-    nome_recorde = query_params["save_nome"].upper()
-    pontos_recorde = int(query_params["save_pontos"])
+if "save_name" in query_params and "save_score" in query_params:
+    record_name = query_params["save_name"].upper()
+    record_score = int(query_params["save_score"])
     
-    guardar_score_bd(nome_recorde, pontos_recorde)
-    st.toast(f"💾 Recorde de {nome_recorde} ({pontos_recorde} pas.) guardado com sucesso!")
+    save_score_db(record_name, record_score)
+    st.toast(f"💾 Score for {record_name} ({record_score} pax) saved successfully!")
     
     st.query_params.clear()
     st.rerun()
 
-# 4. Injeção de CSS Avançado
+# 4. Advanced CSS Injection
 st.markdown("""
     <style>
         .stChatInputContainer {
@@ -225,36 +220,35 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 5. Inicialização da API do Gemini
+# 5. Gemini API Initialization
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
-    st.error("Erro: Chave API em falta nos Secrets do Streamlit.")
-    logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
+    st.error("Error: API Key missing in Streamlit Secrets.")
+    logging.error("Failed to initialize app: API Key missing.")
     st.stop()
 
-# --- INTEGRAÇÃO FACEBOOK RSS (COM INTELIGÊNCIA ARTIFICIAL PARA DATAS) ---
+# --- FACEBOOK RSS INTEGRATION ---
 @st.cache_data(ttl=3600)
-def obter_avisos_facebook():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
-    avisos_ativos = []
+def get_facebook_warnings():
+    rss_url = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    active_warnings = []
     
-    agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-    data_hoje_str = agora.strftime("%d de %B de %Y")
+    now = datetime.now(ZoneInfo("Europe/Lisbon"))
+    today_str = now.strftime("%d de %B de %Y") # PT format for the LLM context
 
     try:
-        response = requests.get(url_rss, timeout=10)
+        response = requests.get(rss_url, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
-        itens = soup.find_all("item")
+        items = soup.find_all("item")
         posts = []
         
-        for i, item in enumerate(itens[:10]):
-            titulo = item.find("title").text if item.find("title") else "Aviso"
+        for i, item in enumerate(items[:10]):
+            title = item.find("title").text if item.find("title") else "Warning"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            texto_limpo = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
-            # --- Lógica de Extração de Imagem Robusta ---
             enclosure = item.find("enclosure")
             img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
             
@@ -265,18 +259,17 @@ def obter_avisos_facebook():
             
             posts.append({
                 "id": i, 
-                "titulo": titulo, 
-                "texto": texto_limpo, 
-                "imagem": img_url
+                "title": title, 
+                "text": clean_text, 
+                "image": img_url
             })
 
-        # IA para filtragem e prioridade
         prompt = f"""
-        Hoje é {data_hoje_str}. Analisa os posts abaixo.
-        1. Identifica a data limite de cada aviso.
-        2. Se a data limite já passou em relação a {data_hoje_str}, considera o aviso EXPIROU.
-        3. Se o aviso é sobre obras/trânsito/greves, prioridade 5. Caso contrário, prioridade 1.
-        4. Devolve APENAS um JSON: [ {{"id": 0, "prioridade": 5}}, ... ] (apenas os ATIVOS).
+        Today is {today_str}. Analyze the posts below.
+        1. Identify the expiration date of each warning.
+        2. If the expiration date has passed relative to {today_str}, consider the warning EXPIRED.
+        3. If the warning is about roadworks/traffic/strikes (obras/trânsito/greves), priority 5. Otherwise, priority 1.
+        4. Return ONLY a JSON array: [ {{"id": 0, "priority": 5}}, ... ] (only the ACTIVE ones).
         Posts: {json.dumps(posts, ensure_ascii=False)}
         """
         
@@ -285,27 +278,27 @@ def obter_avisos_facebook():
         match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
         
         if match:
-            resultado = json.loads("[" + match.group(1) + "]")
-            for r in resultado:
+            result = json.loads("[" + match.group(1) + "]")
+            for r in result:
                 p = next((x for x in posts if x["id"] == r["id"]), None)
                 if p:
-                    avisos_ativos.append({
-                        "texto": p["texto"], 
-                        "imagem": p["imagem"], 
-                        "prioridade": r["prioridade"]
+                    active_warnings.append({
+                        "text": p["text"], 
+                        "image": p["image"], 
+                        "priority": r["priority"]
                     })
-            avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+            active_warnings.sort(key=lambda x: x["priority"], reverse=True)
             
     except Exception as e:
-        logging.error(f"Erro RSS: {e}")
-    return avisos_ativos
+        logging.error(f"RSS Error: {e}")
+    return active_warnings
 
-def renderizar_rodape_anuncios(anuncios_ativos):
-    if not anuncios_ativos: return
+def render_ad_footer(active_ads):
+    if not active_ads: return
     
-    dados_js = json.dumps(anuncios_ativos)
+    js_data = json.dumps(active_ads)
     
-    html_rodape = f"""
+    footer_html = f"""
     <style>
         .footer-wrapper {{
             position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
@@ -331,7 +324,7 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     
     <div class="footer-wrapper">
         <div class="disclaimer">
-            ⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.
+            ⚠️ Important Notice: This is a support and preliminary verification tool. It is not an official Guimabus submission channel.
         </div>
         <div class="content-area">
             <div class="img-box">
@@ -344,19 +337,19 @@ def renderizar_rodape_anuncios(anuncios_ativos):
     </div>
 
     <script>
-        const anuncios = {dados_js};
-        let indice = 0;
+        const ads = {js_data};
+        let index = 0;
         const txt = document.getElementById('ticker-text');
         const img = document.getElementById('ticker-img');
         const container = document.querySelector('.text-container');
 
-        async function correrAviso() {{
-            const a = anuncios[indice];
+        async function runTicker() {{
+            const a = ads[index];
             
-            txt.innerText = "🚨 " + (a.texto || a.titulo || "Aviso");
+            txt.innerText = "🚨 " + (a.text || a.title || "Notice");
             
-            if (a.imagem && a.imagem.trim() !== "") {{
-                img.src = a.imagem;
+            if (a.image && a.image.trim() !== "") {{
+                img.src = a.image;
                 img.style.display = "block";
                 img.style.visibility = "visible";
             }} else {{
@@ -370,27 +363,27 @@ def renderizar_rodape_anuncios(anuncios_ativos):
             let pos = container.offsetWidth / 2;
             txt.style.left = pos + "px";
             
-            function animar() {{
+            function animate() {{
                 pos -= 2; 
                 txt.style.left = pos + "px";
                 if (pos < -txt.offsetWidth) {{
-                    indice = (indice + 1) % anuncios.length;
-                    setTimeout(correrAviso, 2000); 
+                    index = (index + 1) % ads.length;
+                    setTimeout(runTicker, 2000); 
                 }} else {{
-                    requestAnimationFrame(animar);
+                    requestAnimationFrame(animate);
                 }}
             }}
-            animar();
+            animate();
         }}
-        correrAviso();
+        runTicker();
     </script>
     """
-    components.html(html_rodape, height=170)
+    components.html(footer_html, height=170)
 
-# --- NOVAS FUNÇÕES GEOGRÁFICAS (JSON ESTÁTICO) ---
-def normalizar_nome_pesquisa(texto):
-    if not texto: return ""
-    t = texto.lower().strip()
+# --- GEOGRAPHIC FUNCTIONS ---
+def normalize_search_name(text):
+    if not text: return ""
+    t = text.lower().strip()
     t = unicodedata.normalize('NFKD', t)
     t = ''.join(c for c in t if not unicodedata.combining(c))
     t = re.sub(r'[^a-z0-9]', '_', t)
@@ -398,152 +391,144 @@ def normalizar_nome_pesquisa(texto):
     return t
 
 @st.cache_data
-def carregar_mapa_estatico():
-    """Lê o ficheiro JSON de Guimarães diretamente para a memória."""
+def load_static_map():
     try:
         with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        logging.error(f"Erro ao carregar geo_guimaraes.json: {e}")
+        logging.error(f"Error loading geo_guimaraes.json: {e}")
         return {}
 
-# O mapa global carregado em milissegundos
-MAPA_LOCAL = carregar_mapa_estatico()
+LOCAL_MAP = load_static_map()
 
-def calcular_distancia(lat1, lon1, lat2, lon2):
-    """Calcula a distância em metros entre dois pontos GPS usando a Fórmula de Haversine."""
-    R = 6371.0 # Raio da Terra em km
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371.0 
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c * 1000 # Distância em metros
+    return R * c * 1000 
 
-def encontrar_paragem_mais_proxima(local_nome: str):
-    """Encontra a paragem de autocarro mais próxima de qualquer café, rua ou fábrica."""
-    if not MAPA_LOCAL:
-        return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
+def find_closest_stop(location_name: str):
+    """Finds the closest bus stop to any cafe, street, or factory."""
+    if not LOCAL_MAP:
+        return "Static map is not loaded. Check the geo_guimaraes.json file."
 
-    chave_pesquisa = normalizar_nome_pesquisa(local_nome)
-    local_encontrado = None
+    search_key = normalize_search_name(location_name)
+    found_location = None
 
-    # 1. Encontrar as coordenadas do local pedido (Ex: "Cachorrão")
-    for chave, dados in MAPA_LOCAL.items():
-        if chave_pesquisa in chave or chave in chave_pesquisa:
-            local_encontrado = dados
+    for key, data in LOCAL_MAP.items():
+        if search_key in key or key in search_key:
+            found_location = data
             break
 
-    if not local_encontrado:
-        return f"Não consegui localizar '{local_nome}' no mapa estático de Guimarães."
+    if not found_location:
+        return f"Could not locate '{location_name}' in the static map of Guimarães."
 
-    lat_origem = local_encontrado["lat"]
-    lon_origem = local_encontrado["lon"]
+    lat_origin = found_location["lat"]
+    lon_origin = found_location["lon"]
 
-    # 2. Iterar por todas as paragens e calcular a distância matemática
-    paragem_mais_proxima = None
-    menor_distancia = float('inf')
+    closest_stop = None
+    shortest_distance = float('inf')
 
-    for chave, dados in MAPA_LOCAL.items():
-        if dados.get("tipo") in ["bus_stop", "public_transport"]:
-            dist = calcular_distancia(lat_origem, lon_origem, dados["lat"], dados["lon"])
-            if dist < menor_distancia:
-                menor_distancia = dist
-                paragem_mais_proxima = dados["nome_real"]
+    for key, data in LOCAL_MAP.items():
+        if data.get("type") in ["bus_stop", "public_transport"]:
+            dist = calculate_distance(lat_origin, lon_origin, data["lat"], data["lon"])
+            if dist < shortest_distance:
+                shortest_distance = dist
+                closest_stop = data["nome_real"] # Assuming JSON keeps the PT keys
 
-    if paragem_mais_proxima:
-        return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'."
+    if closest_stop:
+        return f"The location '{found_location['nome_real']}' is {int(shortest_distance)} meters away from the '{closest_stop}' bus stop."
     else:
-        return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
+        return "Location found, but no bus stops in the vicinity."
 
-def gerar_link_google_maps(local_nome: str):
-    """Procura no JSON estático e gera o link do Maps"""
-    if not MAPA_LOCAL:
-        return "O mapa estático não foi carregado corretamente. Verifica se o ficheiro geo_guimaraes.json está na pasta."
+def generate_google_maps_link(location_name: str):
+    """Searches the static JSON and generates a Maps link"""
+    if not LOCAL_MAP:
+        return "Static map not properly loaded."
 
-    chave_pesquisa = normalizar_nome_pesquisa(local_nome)
+    search_key = normalize_search_name(location_name)
     
-    for chave_mapa, dados_local in MAPA_LOCAL.items():
-        if chave_pesquisa in chave_mapa or chave_mapa in chave_pesquisa:
-            nome_real = dados_local["nome_real"]
-            lat = dados_local["lat"]
-            lon = dados_local["lon"]
-            link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-            return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir no Google Maps aqui: {link_maps}"
+    for map_key, local_data in LOCAL_MAP.items():
+        if search_key in map_key or map_key in search_key:
+            real_name = local_data["nome_real"]
+            lat = local_data["lat"]
+            lon = local_data["lon"]
+            maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            return f"📍 Found exact location for '{real_name}'. Open in Google Maps here: {maps_link}"
             
-    return f"Não encontrei '{local_nome}' no mapa estático de Guimarães."
+    return f"Could not find '{location_name}' in Guimarães static map."
 
-def gerar_mapa_linha_html(linha_id):
-    """Gera o mapa visual folium cruzando a cache SQLite com o JSON Estático"""
+def generate_line_map_html(line_id):
+    """Generates a Folium map by cross-referencing SQLite cache with Static JSON"""
     os.makedirs("maps", exist_ok=True)
     
-    # 1. Pega nas paragens da linha
-    conn = sqlite3.connect("agente_memoria.db")
+    conn = sqlite3.connect("agent_memory.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT paragem FROM cache_paragens_linha WHERE linha = ? OR linha = ?", (linha_id, str(linha_id).zfill(3)))
-    paragens_da_linha = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT stop FROM stop_line_cache WHERE line = ? OR line = ?", (line_id, str(line_id).zfill(3)))
+    line_stops = [row[0] for row in cursor.fetchall()]
     conn.close()
     
-    if not paragens_da_linha:
-        return "Sem paragens em cache para esta linha."
+    if not line_stops:
+        return "No cached stops for this line."
     
-    coordenadas_rota = []
-    paragens_com_coord = []
+    route_coordinates = []
+    stops_with_coords = []
     
-    # 2. Pesquisa cada paragem no JSON Estático
-    for paragem in paragens_da_linha:
-        chave_p = normalizar_nome_pesquisa(paragem)
-        for k, v in MAPA_LOCAL.items():
-            if chave_p in k or k in chave_p:
-                coordenadas_rota.append([v["lat"], v["lon"]])
-                paragens_com_coord.append({
-                    "nome": paragem,
+    for stop in line_stops:
+        search_key = normalize_search_name(stop)
+        for k, v in LOCAL_MAP.items():
+            if search_key in k or k in search_key:
+                route_coordinates.append([v["lat"], v["lon"]])
+                stops_with_coords.append({
+                    "name": stop,
                     "lat": v["lat"],
                     "lon": v["lon"]
                 })
                 break
     
-    if not paragens_com_coord:
-        return "Sem dados geográficos suficientes no JSON para mapear esta linha."
+    if not stops_with_coords:
+        return "Not enough geographic data to map this line."
         
-    mapa = folium.Map(location=[paragens_com_coord[0]["lat"], paragens_com_coord[0]["lon"]], zoom_start=13, tiles="OpenStreetMap")
+    map_obj = folium.Map(location=[stops_with_coords[0]["lat"], stops_with_coords[0]["lon"]], zoom_start=13, tiles="OpenStreetMap")
     
-    for p in paragens_com_coord:
-        popup_text = f"<b>Paragem:</b> {p['nome']}<br><b>Linha:</b> {linha_id}"
+    for p in stops_with_coords:
+        popup_text = f"<b>Stop:</b> {p['name']}<br><b>Line:</b> {line_id}"
         folium.Marker(
             location=[p["lat"], p["lon"]],
             popup=folium.Popup(popup_text, max_width=300),
             icon=folium.Icon(color="green", icon="bus", prefix="fa")
-        ).add_to(mapa)
+        ).add_to(map_obj)
         
-    if len(coordenadas_rota) > 1:
-        folium.PolyLine(coordenadas_rota, color="blue", weight=3, opacity=0.7).add_to(mapa)
+    if len(route_coordinates) > 1:
+        folium.PolyLine(route_coordinates, color="blue", weight=3, opacity=0.7).add_to(map_obj)
         
-    caminho_ficheiro = f"maps/linha_{linha_id}.html"
-    mapa.save(caminho_ficheiro)
-    return caminho_ficheiro
+    file_path = f"maps/line_{line_id}.html"
+    map_obj.save(file_path)
+    return file_path
 
-# --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
-def _extrair_lista_veiculos(dados):
-    if isinstance(dados, list):
-        return dados
-    if isinstance(dados, dict):
-        for chave in ("vehicles", "data", "results", "items", "veiculos"):
-            valor = dados.get(chave)
-            if isinstance(valor, list):
-                return valor
-        for valor in dados.values():
-            if isinstance(valor, list):
-                return valor
+# --- CONTEXT TOOLS ---
+def _extract_vehicle_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("vehicles", "data", "results", "items", "veiculos"):
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
+        for val in data.values():
+            if isinstance(val, list):
+                return val
     return []
 
-def _primeiro_valor(dicionario, chaves, default=None):
-    for chave in chaves:
-        if isinstance(dicionario, dict) and chave in dicionario and dicionario[chave] is not None:
-            return dicionario[chave]
+def _first_value(dictionary, keys, default=None):
+    for key in keys:
+        if isinstance(dictionary, dict) and key in dictionary and dictionary[key] is not None:
+            return dictionary[key]
     return default
 
-# Dicionário auxiliar para mapeamento rápido de paragens críticas que dão problemas na API
-DICIONARIO_PARAGENS_CONHECIDAS = {
+KNOWN_STOPS_DICTIONARY = {
     "vaca negra": "1103",
     "central": "1001",
     "hospital": "1045",
@@ -552,7 +537,7 @@ DICIONARIO_PARAGENS_CONHECIDAS = {
 }
 
 @st.cache_data(ttl=60)
-def obter_dados_guimabus(route_id: str = None):
+def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = "https://gmr.elevensystems.pt/api/locations"
     params = {"passengerInfo": "true"}
@@ -564,54 +549,54 @@ def obter_dados_guimabus(route_id: str = None):
         response.raise_for_status()
 
         try:
-            dados = response.json()
+            data = response.json()
         except ValueError:
-            return "Não foi possível ler os dados da Guimabus (resposta em formato inesperado)."
+            return "Unable to read Guimabus data (unexpected response format)."
 
-        veiculos = _extrair_lista_veiculos(dados)
-        if not veiculos:
-            linha_txt = f" da linha {route_id}" if route_id else ""
-            return f"Não há autocarros{linha_txt} em circulação neste momento."
+        vehicles = _extract_vehicle_list(data)
+        if not vehicles:
+            line_txt = f" on line {route_id}" if route_id else ""
+            return f"There are currently no buses{line_txt} in circulation."
 
-        total_atraso = 0
-        count_com_atraso = 0
-        resumo = "Dados de frota em tempo real (Guimabus):\n"
-        for bus in veiculos:
-            id_bus = _primeiro_valor(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
-            linha = _primeiro_valor(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
-            status = _primeiro_valor(bus, ["busStatus", "status", "state"], "N/A")
-            atraso = _primeiro_valor(bus, ["delay", "delayMinutes", "delay_min"], None)
+        total_delay = 0
+        delayed_count = 0
+        summary = "Real-time fleet data (Guimabus):\n"
+        for bus in vehicles:
+            bus_id = _first_value(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
+            line = _first_value(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
+            status = _first_value(bus, ["busStatus", "status", "state"], "N/A")
+            delay = _first_value(bus, ["delay", "delayMinutes", "delay_min"], None)
 
-            linha_txt = f" (Linha {linha})" if linha else ""
-            atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
-            resumo += f"- Autocarro {id_bus}{linha_txt}: Status {status} (Atraso: {atraso_txt})\n"
+            line_txt = f" (Line {line})" if line else ""
+            delay_txt = f"{delay}min" if delay is not None else "unknown"
+            summary += f"- Bus {bus_id}{line_txt}: Status {status} (Delay: {delay_txt})\n"
 
-            if isinstance(atraso, (int, float)):
-                total_atraso += atraso
-                count_com_atraso += 1
+            if isinstance(delay, (int, float)):
+                total_delay += delay
+                delayed_count += 1
 
-        if count_com_atraso > 0:
-            media = total_atraso / count_com_atraso
-            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
-        return resumo
+        if delayed_count > 0:
+            avg_delay = total_delay / delayed_count
+            summary += f"\n--- Statistic: Average fleet delay: {avg_delay:.1f} minutes. ---"
+        return summary
     except Exception as e:
-        return f"Erro na ligação ao tracking: {e}"
+        return f"Tracking connection error: {e}"
 
 @st.cache_data(ttl=30)
-def obter_horarios_paragem(stop_id: str):
+def get_stop_schedules(stop_id: str):
     if not stop_id:
-        return "É necessário indicar o ID da paragem."
+        return "Stop ID is required."
     
-    origem_texto = str(stop_id).strip().lower()
-    id_numérico = None
+    source_text = str(stop_id).strip().lower()
+    numeric_id = None
     
-    for nome_p, id_p in DICIONARIO_PARAGENS_CONHECIDAS.items():
-        if nome_p in origem_texto:
-            id_numérico = id_p
+    for name_p, id_p in KNOWN_STOPS_DICTIONARY.items():
+        if name_p in source_text:
+            numeric_id = id_p
             break
             
-    if id_numérico or origem_texto.isdigit():
-        target_id = id_numérico if id_numérico else origem_texto
+    if numeric_id or source_text.isdigit():
+        target_id = numeric_id if numeric_id else source_text
         headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
         url = f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes"
         params = {"shape": "true", "passengerInfo": "true"}
@@ -619,289 +604,289 @@ def obter_horarios_paragem(stop_id: str):
         try:
             response = requests.get(url, headers=headers, params=params, timeout=5)
             response.raise_for_status()
-            dados = response.json()
-            rotas = _extrair_lista_veiculos(dados)
-            if rotas:
-                resumo = f"Horários/previsões em tempo real para a paragem {target_id}:\n"
-                for rota in rotas:
-                    linha = _primeiro_valor(rota, ["line", "lineName", "route", "routeShortName", "routeId"], "N/A")
-                    destino = _primeiro_valor(rota, ["destination", "headsign", "direction"], None)
-                    eta = _primeiro_valor(rota, ["eta", "etaMinutes", "waitTime", "waitingTime", "arrivalTime", "nextArrival"], None)
-                    destino_txt = f" → {destino}" if destino else ""
-                    eta_txt = f"{eta} min" if eta is not None else "sem previsão"
-                    resumo += f"- Linha {linha}{destino_txt}: {eta_txt}\n"
-                return resumo
+            data = response.json()
+            routes = _extract_vehicle_list(data)
+            if routes:
+                summary = f"Real-time forecasts for stop {target_id}:\n"
+                for route in routes:
+                    line = _first_value(route, ["line", "lineName", "route", "routeShortName", "routeId"], "N/A")
+                    dest = _first_value(route, ["destination", "headsign", "direction"], None)
+                    eta = _first_value(route, ["eta", "etaMinutes", "waitTime", "waitingTime", "arrivalTime", "nextArrival"], None)
+                    dest_txt = f" → {dest}" if dest else ""
+                    eta_txt = f"{eta} min" if eta is not None else "no forecast"
+                    summary += f"- Line {line}{dest_txt}: {eta_txt}\n"
+                return summary
         except Exception:
             pass
 
     try:
-        termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', origem_texto).split()
-        if not termos_pesquisa:
-            termos_pesquisa = [origem_texto]
+        search_terms = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', source_text).split()
+        if not search_terms:
+            search_terms = [source_text]
 
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
         
-        condicoes = " AND ".join(["conteudo_txt LIKE ?" for _ in termos_pesquisa])
-        valores = [f"%{termo}%" for termo in termos_pesquisa]
+        conditions = " AND ".join(["content_txt LIKE ?" for _ in search_terms])
+        values = [f"%{term}%" for term in search_terms]
         
-        query_sql = f"SELECT linha, conteudo_txt FROM cache_horarios WHERE {condicoes}"
-        cursor.execute(query_sql, valores)
-        linhas_encontradas = cursor.fetchall()
+        query_sql = f"SELECT line, content_txt FROM schedule_cache WHERE {conditions}"
+        cursor.execute(query_sql, values)
+        found_lines = cursor.fetchall()
         conn.close()
         
-        if linhas_encontradas:
-            resultado_busca = f"Varri a cache de horários local e identifiquei com sucesso as linhas que contêm referências a '{stop_id}':\n"
-            for row in linhas_encontradas:
-                num_linha = row[0]
-                texto_completo = row[1]
+        if found_lines:
+            search_result = f"Scanned local schedule cache and successfully identified lines referencing '{stop_id}':\n"
+            for row in found_lines:
+                num_line = row[0]
+                full_text = row[1]
                 
-                linhas_texto = texto_completo.split("\n")
-                trecho_relevante = []
-                for l in linhas_texto:
-                    if any(termo in l.lower() for termo in termos_pesquisa) or "página" in l.lower() or "tabela" in l.lower():
-                        trecho_relevante.append(l)
+                text_lines = full_text.split("\n")
+                relevant_snippet = []
+                for l in text_lines:
+                    if any(term in l.lower() for term in search_terms) or "página" in l.lower() or "tabela" in l.lower():
+                        relevant_snippet.append(l)
                 
-                contexto_linha = "\n".join(trecho_relevante[:25])
-                resultado_busca += f"\n--- MAPEAMENTO AUTOMÁTICO DETETADO: LINHA {num_linha} ---\n{contexto_linha}\n"
+                line_context = "\n".join(relevant_snippet[:25])
+                search_result += f"\n--- AUTOMATIC MAPPING DETECTED: LINE {num_line} ---\n{line_context}\n"
             
-            return resultado_busca
+            return search_result
             
     except Exception as e_db:
-        logging.error(f"Erro no varrimento avançado de texto em BD: {e_db}")
+        logging.error(f"Error in advanced text scan in DB: {e_db}")
 
-    return f"Não foi possível obter informação em tempo real nem encontrar registos em cache para a localização '{stop_id}'."
+    return f"Could not fetch real-time information or find cached records for location '{stop_id}'."
 
-def sincronizar_todos_horarios_guimabus():
+def sync_all_guimabus_schedules():
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    url_principal = "https://guimabus.pt/horarios-linhas/"
+    main_url = "https://guimabus.pt/horarios-linhas/"
     
     try:
-        response = requests.get(url_principal, headers=headers, timeout=12)
+        response = requests.get(main_url, headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        links_pdf = {}
-        titulos_linha = {}
+        pdf_links = {}
+        line_titles = {}
         for link in soup.find_all('a', href=True):
             href = link['href']
             if ".pdf" in href and "horario" in href.lower():
                 match = re.search(r'linha-([a-z0-9]+)', href.lower())
                 if match:
-                    linha_id = match.group(1).upper()
-                    if linha_id not in links_pdf:
-                        links_pdf[linha_id] = href
-                        texto_link = link.get_text(strip=True)
-                        if texto_link:
-                            titulos_linha[linha_id] = texto_link
+                    line_id = match.group(1).upper()
+                    if line_id not in pdf_links:
+                        pdf_links[line_id] = href
+                        link_text = link.get_text(strip=True)
+                        if link_text:
+                            line_titles[line_id] = link_text
         
-        if not links_pdf:
-            return "Nenhum ficheiro PDF de horários localizado na página principal."
+        if not pdf_links:
+            return "No schedule PDF files found on the main page."
         
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
         
-        linhas_processadas = []
-        linhas_falhadas = []
-        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        processed_lines = []
+        failed_lines = []
+        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        for linha_id, url_pdf in links_pdf.items():
-            sucesso = False
-            ultimo_erro = None
-            for tentativa in range(2):
+        for line_id, pdf_url in pdf_links.items():
+            success = False
+            last_error = None
+            for attempt in range(2):
                 try:
-                    pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
-                    if pdf_response.status_code != 200:
-                        ultimo_erro = f"HTTP {pdf_response.status_code}"
+                    pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
+                    if pdf_resp.status_code != 200:
+                        last_error = f"HTTP {pdf_resp.status_code}"
                         time.sleep(1)
                         continue
 
-                    texto_extraido = []
-                    with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
-                        for idx, pagina in enumerate(pdf.pages):
-                            texto_pag = pagina.extract_text(layout=True)
-                            if texto_pag:
-                                texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
+                    extracted_text = []
+                    with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
+                        for idx, page in enumerate(pdf.pages):
+                            page_text = page.extract_text(layout=True)
+                            if page_text:
+                                extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
 
-                    conteudo_final = "\n\n".join(texto_extraido)
-                    if not conteudo_final.strip():
-                        conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
+                    final_content = "\n\n".join(extracted_text)
+                    if not final_content.strip():
+                        final_content = "PDF is image-based or copy-protected."
 
                     cursor.execute("""
-                        INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
+                        INSERT OR REPLACE INTO schedule_cache (line, url, content_txt, last_updated)
                         VALUES (?, ?, ?, ?)
-                    """, (linha_id, url_pdf, conteudo_final, timestamp_atual))
+                    """, (line_id, pdf_url, final_content, current_timestamp))
 
-                    if linha_id in titulos_linha:
+                    if line_id in line_titles:
                         cursor.execute("""
-                            INSERT OR REPLACE INTO cache_titulo_linha (linha, titulo, ultima_atualizacao)
+                            INSERT OR REPLACE INTO line_title_cache (line, title, last_updated)
                             VALUES (?, ?, ?)
-                        """, (linha_id, titulos_linha[linha_id], timestamp_atual))
+                        """, (line_id, line_titles[line_id], current_timestamp))
 
-                    linhas_processadas.append(linha_id)
-                    sucesso = True
+                    processed_lines.append(line_id)
+                    success = True
                     break
                 except Exception as e:
-                    ultimo_erro = str(e)
+                    last_error = str(e)
                     time.sleep(1)
                     continue
 
-            if not sucesso:
-                linhas_falhadas.append(linha_id)
-                logging.error(f"Falha ao processar o PDF da linha {linha_id} após 2 tentativas: {ultimo_erro}")
+            if not success:
+                failed_lines.append(line_id)
+                logging.error(f"Failed to process Line {line_id} PDF after 2 attempts: {last_error}")
 
             time.sleep(0.4)
 
         conn.commit()
         conn.close()
         
-        msg_sucesso = f"Sincronização concluída: {len(linhas_processadas)}/{len(links_pdf)} PDFs descarregados e convertidos na BD local!"
-        if linhas_falhadas:
-            msg_sucesso += f" Falharam: {', '.join(linhas_falhadas)}."
-        logging.info(msg_sucesso)
-        return msg_sucesso
+        success_msg = f"Sync completed: {len(processed_lines)}/{len(pdf_links)} PDFs downloaded and parsed!"
+        if failed_lines:
+            success_msg += f" Failed: {', '.join(failed_lines)}."
+        logging.info(success_msg)
+        return success_msg
         
     except Exception as e:
-        error_msg = f"Falha na automação de scraping dos PDFs: {e}"
+        error_msg = f"PDF automation scraping failed: {e}"
         logging.error(error_msg)
         return error_msg
 
-def consultar_cache_horario_linha(linha_id: str):
+def query_line_schedule_cache(line_id: str):
     try:
-        entrada = str(linha_id).strip().upper()
-        if not entrada:
-            return "É necessário indicar o número da linha."
+        user_input = str(line_id).strip().upper()
+        if not user_input:
+            return "Line number is required."
 
-        candidatos = [entrada]
-        if entrada.isdigit():
-            sem_zeros = entrada.lstrip('0') or '0'
-            if sem_zeros not in candidatos:
-                candidatos.append(sem_zeros)
-            com_tres_digitos = entrada.zfill(3)
-            if com_tres_digitos not in candidatos:
-                candidatos.append(com_tres_digitos)
+        candidates = [user_input]
+        if user_input.isdigit():
+            no_zeros = user_input.lstrip('0') or '0'
+            if no_zeros not in candidates:
+                candidates.append(no_zeros)
+            three_digits = user_input.zfill(3)
+            if three_digits not in candidates:
+                candidates.append(three_digits)
 
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        resultado = None
-        for candidato in candidatos:
-            cursor.execute("SELECT conteudo_txt, url, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (candidato,))
-            resultado = cursor.fetchone()
-            if resultado:
+        result = None
+        for candidate in candidates:
+            cursor.execute("SELECT content_txt, url, last_updated FROM schedule_cache WHERE line = ?", (candidate,))
+            result = cursor.fetchone()
+            if result:
                 break
         conn.close()
         
-        if resultado:
-            conteudo_txt, url_pdf, ultima_atualizacao = resultado
-            link_txt = f"\n\n🔗 Link oficial para confirmares: {url_pdf}" if url_pdf else ""
-            return f"Horários em Cache para a Linha {linha_id} (Atualizado em {ultima_atualizacao}):\n\n{conteudo_txt}{link_txt}"
-        return f"Não existem horários em cache para a linha {linha_id}. Peça ao administrador para rodar a Sincronização Geral."
+        if result:
+            content_txt, pdf_url, last_updated = result
+            link_txt = f"\n\n🔗 Official Link: {pdf_url}" if pdf_url else ""
+            return f"Cached Schedules for Line {line_id} (Updated on {last_updated}):\n\n{content_txt}{link_txt}"
+        return f"No cached schedules for line {line_id}. Ask the admin to run a General Sync."
     except Exception as e:
-        return f"Erro na leitura da cache SQLite: {e}"
+        return f"SQLite cache read error: {e}"
 
-def len_knowledge_base():
-    contexto = ""
+def get_knowledge_base_content():
+    context = ""
     files = glob.glob("knowledge/*.md")
     for file in files:
         with open(file, "r", encoding="utf-8") as f:
-            contexto += f"\n--- CONTEÚDO DE {os.path.basename(file)} ---\n{f.read()}"
-    return contexto if contexto else "Sem documentação extra encontrada na Knowledge Base."
+            context += f"\n--- CONTENT FROM {os.path.basename(file)} ---\n{f.read()}"
+    return context if context else "No extra documentation found in the Knowledge Base."
 
-def obter_idade_cache_horarios_dias():
+def get_schedule_cache_age_days():
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_horarios")
-        resultado = cursor.fetchone()
+        cursor.execute("SELECT MAX(last_updated) FROM schedule_cache")
+        result = cursor.fetchone()
         conn.close()
-        if not resultado or not resultado[0]:
+        if not result or not result[0]:
             return None
-        ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
-        return (datetime.now() - ultima).days
+        last_date = datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - last_date).days
     except Exception as e:
-        logging.error(f"Erro ao verificar idade da cache de horários: {e}")
+        logging.error(f"Error checking schedule cache age: {e}")
         return None
 
-def obter_idade_cache_titulos_dias():
+def get_ticket_cache_age_days():
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos")
-        resultado = cursor.fetchone()
+        cursor.execute("SELECT MAX(last_updated) FROM ticket_cache")
+        result = cursor.fetchone()
         conn.close()
-        if not resultado or not resultado[0]:
+        if not result or not result[0]:
             return None
-        ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
-        return (datetime.now() - ultima).days
+        last_date = datetime.strptime(result[0], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - last_date).days
     except Exception as e:
-        logging.error(f"Erro ao verificar idade da cache de títulos: {e}")
+        logging.error(f"Error checking ticket cache age: {e}")
         return None
 
-def obter_contagem_indice_paragens():
+def get_stop_index_count():
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM cache_paragens_linha")
-        resultado = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM stop_line_cache")
+        result = cursor.fetchone()
         conn.close()
-        return resultado[0] if resultado else 0
+        return result[0] if result else 0
     except Exception as e:
-        logging.error(f"Erro ao contar índice de paragens: {e}")
+        logging.error(f"Error counting stop index: {e}")
         return 0
 
-# --- THREADS / BACKGROUND JOBS ---
-def _sync_horarios_em_background():
+# --- BACKGROUND JOBS ---
+def _sync_schedules_background():
     try:
-        resultado = sincronizar_todos_horarios_guimabus()
-        logging.info(f"[Segundo plano] Sincronização de horários: {resultado}")
-        resultado_indice = construir_indice_paragens()
-        logging.info(f"[Segundo plano] {resultado_indice}")
+        result = sync_all_guimabus_schedules()
+        logging.info(f"[Background] Schedule sync: {result}")
+        idx_result = build_stop_index()
+        logging.info(f"[Background] {idx_result}")
     except Exception as e:
-        logging.error(f"[Segundo plano] Falha na sincronização de horários: {e}")
+        logging.error(f"[Background] Schedule sync failed: {e}")
 
-def _construir_indice_em_background():
+def _build_index_background():
     try:
-        resultado_indice = construir_indice_paragens()
-        logging.info(f"[Segundo plano] {resultado_indice}")
+        idx_result = build_stop_index()
+        logging.info(f"[Background] {idx_result}")
     except Exception as e:
-        logging.error(f"[Segundo plano] Falha ao construir índice de paragens: {e}")
+        logging.error(f"[Background] Stop index build failed: {e}")
 
-def _sync_titulos_tarifario_em_background():
+def _sync_tickets_tariff_background():
     try:
-        resultado = sincronizar_titulos_e_tarifario()
-        logging.info(f"[Segundo plano] Sincronização de títulos/tarifário: {resultado}")
+        result = sync_tickets_and_tariff()
+        logging.info(f"[Background] Tickets/Tariff sync: {result}")
     except Exception as e:
-        logging.error(f"[Segundo plano] Falha na sincronização de títulos/tarifário: {e}")
+        logging.error(f"[Background] Tickets/Tariff sync failed: {e}")
 
-def sincronizar_automaticamente_se_necessario(limite_dias: int = 7):
-    if st.session_state.get("sync_automatico_tentado_nesta_sessao"):
+def auto_sync_if_needed(day_limit: int = 7):
+    if st.session_state.get("auto_sync_attempted_this_session"):
         return
-    st.session_state.sync_automatico_tentado_nesta_sessao = True
+    st.session_state.auto_sync_attempted_this_session = True
 
-    idade_horarios = obter_idade_cache_horarios_dias()
-    if idade_horarios is None or idade_horarios >= limite_dias:
-        threading.Thread(target=_sync_horarios_em_background, daemon=True).start()
-        logging.info("Sincronização de horários iniciada em segundo plano.")
-    elif obter_contagem_indice_paragens() == 0:
-        threading.Thread(target=_construir_indice_em_background, daemon=True).start()
-        logging.info("Construção do índice de paragens iniciada em segundo plano.")
+    schedule_age = get_schedule_cache_age_days()
+    if schedule_age is None or schedule_age >= day_limit:
+        threading.Thread(target=_sync_schedules_background, daemon=True).start()
+        logging.info("Schedule sync started in background.")
+    elif get_stop_index_count() == 0:
+        threading.Thread(target=_build_index_background, daemon=True).start()
+        logging.info("Stop index build started in background.")
 
-    idade_titulos = obter_idade_cache_titulos_dias()
-    if idade_titulos is None or idade_titulos >= limite_dias:
-        threading.Thread(target=_sync_titulos_tarifario_em_background, daemon=True).start()
-        logging.info("Sincronização de títulos/tarifário iniciada em segundo plano.")
+    ticket_age = get_ticket_cache_age_days()
+    if ticket_age is None or ticket_age >= day_limit:
+        threading.Thread(target=_sync_tickets_tariff_background, daemon=True).start()
+        logging.info("Tickets/Tariff sync started in background.")
 
-TIPOLOGIAS_PASSE_FALLBACK = {
+FALLBACK_TICKET_TYPES = {
     "Mensal": {
-        "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
-        "preco": "Consultar tabela tarifária",
-        "custo_cartao": "5€",
-        "prazo": "Só pode ser emitido ou carregado até ao dia 18 de cada mês.",
-        "documentos": ["Cartão de Cidadão / Documento de identificação"],
+        "description": "Valid for the month and Origin/Destination acquired. Unlimited trips.",
+        "price": "Consult tariff table",
+        "card_cost": "5€",
+        "deadline": "Can only be issued or recharged until the 18th of each month.",
+        "documents": ["ID Card / Identification Document"],
     },
 }
 
-def sincronizar_titulos_guimabus():
+def sync_guimabus_tickets():
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     url = "https://guimabus.pt/titulos/"
 
@@ -913,186 +898,187 @@ def sincronizar_titulos_guimabus():
         for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']):
             tag.decompose()
 
-        texto_completo = soup.get_text(separator="\n")
-        linhas_texto = [l.strip() for l in texto_completo.split("\n")]
-        linhas_texto = [l for l in linhas_texto if l]
-        texto_normalizado = "\n".join(linhas_texto)
+        full_text = soup.get_text(separator="\n")
+        text_lines = [l.strip() for l in full_text.split("\n")]
+        text_lines = [l for l in text_lines if l]
+        normalized_text = "\n".join(text_lines)
 
-        blocos = re.split(r'\nPASSE\n', "\n" + texto_normalizado)
-        blocos = [b for b in blocos[1:]]
+        blocks = re.split(r'\nPASSE\n', "\n" + normalized_text)
+        blocks = [b for b in blocks[1:]]
 
-        if not blocos:
-            return "Não foi possível identificar nenhuma tipologia de passe na página."
+        if not blocks:
+            return "Could not identify any ticket types on the page."
 
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        tipologias_processadas = []
+        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        processed_types = []
 
-        for bloco in blocos:
-            linhas_bloco = bloco.split("\n")
-            if not linhas_bloco:
+        for block in blocks:
+            block_lines = block.split("\n")
+            if not block_lines:
                 continue
-            nome_tipologia = linhas_bloco[0].strip()
-            if not nome_tipologia:
+            type_name = block_lines[0].strip()
+            if not type_name:
                 continue
 
-            resto_texto = "\n".join(linhas_bloco[1:])
+            rest_of_text = "\n".join(block_lines[1:])
 
-            match_prazo = re.search(r'(Só podem ser emitidos.*?\.)', resto_texto, re.IGNORECASE)
-            prazo = match_prazo.group(1).strip() if match_prazo else "Prazo não indicado na página."
+            # Kept Portuguese Regex Strings to match website content successfully
+            match_deadline = re.search(r'(Só podem ser emitidos.*?\.)', rest_of_text, re.IGNORECASE)
+            deadline = match_deadline.group(1).strip() if match_deadline else "Deadline not specified."
 
-            match_preco = re.search(r'Preço:\s*(.+)', resto_texto)
-            if match_preco:
-                preco = match_preco.group(1).strip()
-            elif re.search(r'\bGRATUITO\b', resto_texto, re.IGNORECASE):
-                preco = "Gratuito"
+            match_price = re.search(r'Preço:\s*(.+)', rest_of_text)
+            if match_price:
+                price = match_price.group(1).strip()
+            elif re.search(r'\bGRATUITO\b', rest_of_text, re.IGNORECASE):
+                price = "Gratuito"
             else:
-                match_desconto = re.search(r'(\d{1,3}%\s*de desconto[^\n.]*\.)', resto_texto, re.IGNORECASE)
-                preco = match_desconto.group(1).strip() if match_desconto else "Consultar tabela tarifária"
+                match_discount = re.search(r'(\d{1,3}%\s*de desconto[^\n.]*\.)', rest_of_text, re.IGNORECASE)
+                price = match_discount.group(1).strip() if match_discount else "Consult tariff table"
 
-            match_cartao = re.search(r'Custo do cartão:\s*([\d,]+€)', resto_texto)
-            custo_cartao = match_cartao.group(1).strip() if match_cartao else "Não indicado"
+            match_card = re.search(r'Custo do cartão:\s*([\d,]+€)', rest_of_text)
+            card_cost = match_card.group(1).strip() if match_card else "Not specified"
 
-            match_descricao = re.match(r'(.*?)(?:Preço:|GRATUITO|Gratuito|\*\*Documentos necessários)', resto_texto, re.DOTALL)
-            descricao = match_descricao.group(1).strip().replace("\n", " ") if match_descricao else ""
+            match_desc = re.match(r'(.*?)(?:Preço:|GRATUITO|Gratuito|\*\*Documentos necessários)', rest_of_text, re.DOTALL)
+            description = match_desc.group(1).strip().replace("\n", " ") if match_desc else ""
 
-            match_docs = re.search(r'\*\*Documentos necessários:\*\*(.*?)(?:Só podem ser emitidos|$)', resto_texto, re.DOTALL)
-            documentos = []
+            match_docs = re.search(r'\*\*Documentos necessários:\*\*(.*?)(?:Só podem ser emitidos|$)', rest_of_text, re.DOTALL)
+            docs_list = []
             if match_docs:
-                candidatos_doc = [d.strip() for d in match_docs.group(1).split("\n") if d.strip()]
-                for d in candidatos_doc:
+                candidates = [d.strip() for d in match_docs.group(1).split("\n") if d.strip()]
+                for d in candidates:
                     if re.match(r'^(Custo do cartão|Preço)', d, re.IGNORECASE):
                         continue
-                    documentos.append(d)
-            if not documentos:
-                documentos = ["Cartão de Cidadão / Documento de Identificação"]
+                    docs_list.append(d)
+            if not docs_list:
+                docs_list = ["ID Card / Identification Document"]
 
             cursor.execute("""
-                INSERT OR REPLACE INTO cache_titulos (tipologia, descricao, preco, custo_cartao, prazo, documentos_json, ultima_atualizacao)
+                INSERT OR REPLACE INTO ticket_cache (ticket_type, description, price, card_cost, deadline, documents_json, last_updated)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (nome_tipologia, descricao, preco, custo_cartao, prazo, json.dumps(documentos, ensure_ascii=False), timestamp_atual))
-            tipologias_processadas.append(nome_tipologia)
+            """, (type_name, description, price, card_cost, deadline, json.dumps(docs_list, ensure_ascii=False), current_timestamp))
+            processed_types.append(type_name)
 
         conn.commit()
         conn.close()
 
-        msg = f"Sincronização de títulos concluída: {len(tipologias_processadas)} tipologias."
+        msg = f"Ticket type sync complete: {len(processed_types)} types."
         logging.info(msg)
         return msg
 
     except Exception as e:
-        error_msg = f"Falha ao sincronizar títulos de passe: {e}"
+        error_msg = f"Failed to sync ticket types: {e}"
         logging.error(error_msg)
         return error_msg
 
-def sincronizar_tarifario_guimabus():
+def sync_guimabus_tariff():
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    url_pagina = "https://guimabus.pt/tarifarios/"
+    page_url = "https://guimabus.pt/tarifarios/"
 
     try:
-        response = requests.get(url_pagina, headers=headers, timeout=12)
+        response = requests.get(page_url, headers=headers, timeout=12)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        url_pdf = None
+        pdf_url = None
         for link in soup.find_all('a', href=True):
             href = link['href']
             if ".pdf" in href.lower() and ("tarifa" in href.lower() or "tabela" in href.lower()):
-                url_pdf = href
+                pdf_url = href
                 break
-        if not url_pdf:
+        if not pdf_url:
             for link in soup.find_all('a', href=True):
                 if ".pdf" in link['href'].lower():
-                    url_pdf = link['href']
+                    pdf_url = link['href']
                     break
 
-        if not url_pdf:
-            return "Não foi encontrado nenhum PDF de tarifário na página."
+        if not pdf_url:
+            return "No tariff PDF found on the page."
 
-        pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
-        pdf_response.raise_for_status()
+        pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
+        pdf_resp.raise_for_status()
 
-        texto_extraido = []
-        with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
-            for idx, pagina in enumerate(pdf.pages):
-                texto_pag = pagina.extract_text(layout=True)
-                if texto_pag:
-                    texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
+        extracted_text = []
+        with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
+            for idx, page in enumerate(pdf.pages):
+                page_text = page.extract_text(layout=True)
+                if page_text:
+                    extracted_text.append(f"[PAGE {idx+1}]\n{page_text}")
 
-        conteudo_final = "\n\n".join(texto_extraido)
-        if not conteudo_final.strip():
-            conteudo_final = "PDF em formato de imagem."
+        final_content = "\n\n".join(extracted_text)
+        if not final_content.strip():
+            final_content = "Image-based PDF format."
 
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
-            INSERT OR REPLACE INTO cache_tarifario (id, url_pdf, conteudo_txt, ultima_atualizacao)
+            INSERT OR REPLACE INTO tariff_cache (id, url_pdf, content_txt, last_updated)
             VALUES (1, ?, ?, ?)
-        """, (url_pdf, conteudo_final, timestamp_atual))
+        """, (pdf_url, final_content, current_timestamp))
         conn.commit()
         conn.close()
 
-        msg = f"Sincronização do tarifário concluída (fonte: {url_pdf})."
+        msg = f"Tariff sync complete (source: {pdf_url})."
         logging.info(msg)
         return msg
 
     except Exception as e:
-        error_msg = f"Falha ao sincronizar tarifário: {e}"
+        error_msg = f"Failed to sync tariff: {e}"
         logging.error(error_msg)
         return error_msg
 
-def sincronizar_titulos_e_tarifario():
-    resultado_titulos = sincronizar_titulos_guimabus()
-    resultado_tarifario = sincronizar_tarifario_guimabus()
-    return f"{resultado_titulos}\n{resultado_tarifario}"
+def sync_tickets_and_tariff():
+    ticket_result = sync_guimabus_tickets()
+    tariff_result = sync_guimabus_tariff()
+    return f"{ticket_result}\n{tariff_result}"
 
-def _extrair_paragens_de_texto(texto: str):
-    paragens = set()
-    padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
-    for linha_texto in texto.split("\n"):
-        linha_texto = linha_texto.strip()
-        if not linha_texto or "|" in linha_texto or linha_texto.startswith("[PÁGINA") or linha_texto.startswith("[P"):
+def _extract_stops_from_text(text: str):
+    stops = set()
+    pattern = re.compile(r'^(?P<name>.+?)\s+(?P<schedules>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
+    for text_line in text.split("\n"):
+        text_line = text_line.strip()
+        if not text_line or "|" in text_line or text_line.startswith("[PAGE") or text_line.startswith("[P"):
             continue
-        m = padrao.match(linha_texto)
+        m = pattern.match(text_line)
         if m:
-            nome = m.group("nome").strip(" -\t")
-            if len(nome) >= 3:
-                paragens.add(nome)
-    return paragens
+            name = m.group("name").strip(" -\t")
+            if len(name) >= 3:
+                stops.add(name)
+    return stops
 
-def construir_indice_paragens():
+def build_stop_index():
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT linha, conteudo_txt FROM cache_horarios")
-        linhas_cache = cursor.fetchall()
+        cursor.execute("SELECT line, content_txt FROM schedule_cache")
+        cached_lines = cursor.fetchall()
 
-        cursor.execute("DELETE FROM cache_paragens_linha")
-        total_paragens = 0
-        for linha_id, conteudo_txt in linhas_cache:
-            if not conteudo_txt:
+        cursor.execute("DELETE FROM stop_line_cache")
+        total_stops = 0
+        for line_id, content_txt in cached_lines:
+            if not content_txt:
                 continue
-            paragens = _extrair_paragens_de_texto(conteudo_txt)
-            for paragem in paragens:
+            stops = _extract_stops_from_text(content_txt)
+            for stop in stops:
                 cursor.execute(
-                    "INSERT OR IGNORE INTO cache_paragens_linha (linha, paragem) VALUES (?, ?)",
-                    (linha_id, paragem)
+                    "INSERT OR IGNORE INTO stop_line_cache (line, stop) VALUES (?, ?)",
+                    (line_id, stop)
                 )
-                total_paragens += 1
+                total_stops += 1
         conn.commit()
         conn.close()
-        msg = f"Índice de paragens reconstruído: {total_paragens} associações linha-paragem."
+        msg = f"Stop index rebuilt: {total_stops} line-stop associations."
         logging.info(msg)
         return msg
     except Exception as e:
-        error_msg = f"Falha ao construir índice de paragens: {e}"
+        error_msg = f"Failed to build stop index: {e}"
         logging.error(error_msg)
         return error_msg
 
-def _normalizar_nome_paragem(texto: str):
-    t = texto.lower().strip()
+def _normalize_stop_name(text: str):
+    t = text.lower().strip()
     t = re.sub(r'\bsão\b', 's.', t)
     t = re.sub(r'\bsanta\b', 'sta.', t)
     t = re.sub(r'\bsanto\b', 'sto.', t)
@@ -1102,60 +1088,60 @@ def _normalizar_nome_paragem(texto: str):
     t = re.sub(r'\s+', ' ', t).strip()
     return t
 
-def _procurar_linhas_por_titulo(termo_norm: str):
+def _search_lines_by_title(norm_term: str):
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT linha, titulo FROM cache_titulo_linha")
-        todos_titulos = cursor.fetchall()
+        cursor.execute("SELECT line, title FROM line_title_cache")
+        all_titles = cursor.fetchall()
         conn.close()
     except Exception as e:
-        logging.error(f"Erro ao consultar títulos de linha: {e}")
+        logging.error(f"Error querying line titles: {e}")
         return set(), []
 
-    linhas_encontradas = set()
-    titulos_encontrados = []
-    for linha_id, titulo in todos_titulos:
-        if not titulo:
+    found_lines = set()
+    found_titles = []
+    for line_id, title in all_titles:
+        if not title:
             continue
-        titulo_norm = _normalizar_nome_paragem(titulo)
-        if re.search(r'\b' + re.escape(termo_norm) + r'\b', titulo_norm):
-            linhas_encontradas.add(linha_id)
-            titulos_encontrados.append(f"Linha {linha_id}: {titulo}")
-    return linhas_encontradas, titulos_encontrados
+        title_norm = _normalize_stop_name(title)
+        if re.search(r'\b' + re.escape(norm_term) + r'\b', title_norm):
+            found_lines.add(line_id)
+            found_titles.append(f"Line {line_id}: {title}")
+    return found_lines, found_titles
 
-def enriquecer_paragens_com_freguesia(progresso_callback=None):
+def enrich_stops_with_parish(progress_callback=None):
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT paragem FROM cache_paragens_linha")
-        todas_paragens = [row[0] for row in cursor.fetchall()]
-        cursor.execute("SELECT paragem FROM cache_paragem_freguesia")
-        ja_feitas = {row[0] for row in cursor.fetchall()}
+        cursor.execute("SELECT DISTINCT stop FROM stop_line_cache")
+        all_stops = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT stop FROM stop_parish_cache")
+        already_done = {row[0] for row in cursor.fetchall()}
         conn.close()
     except Exception as e:
-        return f"Erro ao preparar o enriquecimento: {e}"
+        return f"Error preparing enrichment: {e}"
 
-    paragens_a_fazer = [p for p in todas_paragens if p not in ja_feitas]
-    if not paragens_a_fazer:
-        return "Todas as paragens já têm freguesia associada — nada a fazer."
+    pending_stops = [p for p in all_stops if p not in already_done]
+    if not pending_stops:
+        return "All stops are already associated with a parish — nothing to do."
 
     headers = {
-        'User-Agent': 'SuperSecretarioIA-Guimaraes/1.0'
+        'User-Agent': 'SuperSecretaryAI-Guimaraes/1.0'
     }
 
-    conn = sqlite3.connect("agente_memoria.db")
+    conn = sqlite3.connect("agent_memory.db")
     cursor = conn.cursor()
-    timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    sucesso = 0
-    falha = 0
+    current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    success_count = 0
+    fail_count = 0
 
-    for idx, paragem in enumerate(paragens_a_fazer):
+    for idx, stop in enumerate(pending_stops):
         try:
             resp = requests.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={
-                    "q": f"{paragem}, Guimarães, Portugal",
+                    "q": f"{stop}, Guimarães, Portugal",
                     "format": "json",
                     "addressdetails": 1,
                     "countrycodes": "pt",
@@ -1165,424 +1151,426 @@ def enriquecer_paragens_com_freguesia(progresso_callback=None):
                 timeout=10
             )
             resp.raise_for_status()
-            resultados = resp.json()
-            freguesia = None
-            if resultados:
-                endereco = resultados[0].get("address", {})
-                freguesia = (endereco.get("suburb") or endereco.get("city_district")
-                             or endereco.get("village") or endereco.get("town")
-                             or endereco.get("municipality"))
+            results = resp.json()
+            parish = None
+            if results:
+                address = results[0].get("address", {})
+                parish = (address.get("suburb") or address.get("city_district")
+                             or address.get("village") or address.get("town")
+                             or address.get("municipality"))
 
-            if freguesia:
+            if parish:
                 cursor.execute("""
-                    INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao)
+                    INSERT OR REPLACE INTO stop_parish_cache (stop, parish, source, last_updated)
                     VALUES (?, ?, ?, ?)
-                """, (paragem, freguesia, "nominatim", timestamp_atual))
-                sucesso += 1
+                """, (stop, parish, "nominatim", current_timestamp))
+                success_count += 1
             else:
                 cursor.execute("""
-                    INSERT OR REPLACE INTO cache_paragem_freguesia (paragem, freguesia, fonte, ultima_atualizacao)
+                    INSERT OR REPLACE INTO stop_parish_cache (stop, parish, source, last_updated)
                     VALUES (?, ?, ?, ?)
-                """, (paragem, None, "sem_resultado", timestamp_atual))
-                falha += 1
+                """, (stop, None, "no_result", current_timestamp))
+                fail_count += 1
 
-            if progresso_callback:
-                progresso_callback(idx + 1, len(paragens_a_fazer), paragem)
+            if progress_callback:
+                progress_callback(idx + 1, len(pending_stops), stop)
 
         except Exception as e:
-            logging.warning(f"Falha ao geocodificar '{paragem}': {e}")
-            falha += 1
+            logging.warning(f"Failed to geocode '{stop}': {e}")
+            fail_count += 1
 
         time.sleep(1.1)
 
     conn.commit()
     conn.close()
 
-    msg = f"Enriquecimento de freguesias concluído: {sucesso} paragens associadas, {falha} sem resultado."
+    msg = f"Parish enrichment completed: {success_count} associated, {fail_count} with no result."
     logging.info(msg)
     return msg
 
-def obter_freguesia_de_paragem(nome_paragem: str):
+def get_parish_from_stop(stop_name: str):
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL")
-        todas = cursor.fetchall()
+        cursor.execute("SELECT stop, parish FROM stop_parish_cache WHERE parish IS NOT NULL")
+        all_data = cursor.fetchall()
         conn.close()
     except Exception as e:
-        logging.error(f"Erro ao consultar freguesia de paragem: {e}")
+        logging.error(f"Error querying stop parish: {e}")
         return None
 
-    nome_norm = _normalizar_nome_paragem(nome_paragem)
-    for paragem, freguesia in todas:
-        paragem_norm = _normalizar_nome_paragem(paragem)
-        match_direto = re.search(r'\b' + re.escape(nome_norm) + r'\b', paragem_norm)
-        match_inverso = re.search(r'\b' + re.escape(paragem_norm) + r'\b', nome_norm)
-        if match_direto or match_inverso:
-            return freguesia
+    norm_name = _normalize_stop_name(stop_name)
+    for stop, parish in all_data:
+        stop_norm = _normalize_stop_name(stop)
+        direct_match = re.search(r'\b' + re.escape(norm_name) + r'\b', stop_norm)
+        reverse_match = re.search(r'\b' + re.escape(stop_norm) + r'\b', norm_name)
+        if direct_match or reverse_match:
+            return parish
     return None
 
-def procurar_paragens_por_freguesia(nome_freguesia: str):
+def find_stops_by_parish(parish_name: str):
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT paragem, freguesia FROM cache_paragem_freguesia WHERE freguesia IS NOT NULL")
-        todas = cursor.fetchall()
+        cursor.execute("SELECT stop, parish FROM stop_parish_cache WHERE parish IS NOT NULL")
+        all_data = cursor.fetchall()
         conn.close()
     except Exception as e:
-        logging.error(f"Erro ao procurar paragens por freguesia: {e}")
+        logging.error(f"Error searching stops by parish: {e}")
         return []
 
-    freguesia_norm = _normalizar_nome_paragem(nome_freguesia)
+    norm_parish = _normalize_stop_name(parish_name)
     return [
-        paragem for paragem, freguesia in todas 
-        if re.search(r'\b' + re.escape(freguesia_norm) + r'\b', _normalizar_nome_paragem(freguesia))
+        stop for stop, parish in all_data 
+        if re.search(r'\b' + re.escape(norm_parish) + r'\b', _normalize_stop_name(parish))
     ]
 
-def planear_viagem_com_transbordo(origem: str, destino: str):
-    if not origem or not destino:
-        return "É necessário indicar a paragem de origem e a paragem de destino."
+def plan_trip_with_transfer(origin: str, destination: str):
+    if not origin or not destination:
+        return "You must provide an origin stop and a destination stop."
 
-    origem_norm = _normalizar_nome_paragem(origem)
-    destino_norm = _normalizar_nome_paragem(destino)
+    norm_origin = _normalize_stop_name(origin)
+    norm_dest = _normalize_stop_name(destination)
 
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT linha, paragem FROM cache_paragens_linha")
-        todas = cursor.fetchall()
+        cursor.execute("SELECT line, stop FROM stop_line_cache")
+        all_data = cursor.fetchall()
         conn.close()
     except Exception as e:
-        return f"Erro ao consultar o índice de paragens: {e}"
+        return f"Error querying stop index: {e}"
 
-    if not todas:
-        return ("O índice de paragens ainda não foi construído. Peça ao administrador para "
-                "sincronizar os horários.")
+    if not all_data:
+        return "The stop index has not been built yet. Ask the admin to sync schedules."
 
-    linhas_origem = set()
-    paragens_origem_encontradas = set()
-    linhas_destino = set()
-    paragens_destino_encontradas = set()
-    mapa_linha_paragens = {}
+    origin_lines = set()
+    found_origin_stops = set()
+    dest_lines = set()
+    found_dest_stops = set()
+    line_stops_map = {}
 
-    for linha_id, paragem in todas:
-        mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
-        paragem_norm = _normalizar_nome_paragem(paragem)
-        if re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm):
-            linhas_origem.add(linha_id)
-            paragens_origem_encontradas.add(paragem)
-        if re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm):
-            linhas_destino.add(linha_id)
-            paragens_destino_encontradas.add(paragem)
+    for line_id, stop in all_data:
+        line_stops_map.setdefault(line_id, set()).add(stop)
+        stop_norm = _normalize_stop_name(stop)
+        if re.search(r'\b' + re.escape(norm_origin) + r'\b', stop_norm):
+            origin_lines.add(line_id)
+            found_origin_stops.add(stop)
+        if re.search(r'\b' + re.escape(norm_dest) + r'\b', stop_norm):
+            dest_lines.add(line_id)
+            found_dest_stops.add(stop)
 
-    if not linhas_origem:
-        linhas_origem, titulos_origem = _procurar_linhas_por_titulo(origem_norm)
-        aviso_origem_por_titulo = bool(linhas_origem)
+    if not origin_lines:
+        origin_lines, origin_titles = _search_lines_by_title(norm_origin)
+        warn_origin_title = bool(origin_lines)
     else:
-        aviso_origem_por_titulo = False
-    if not linhas_destino:
-        linhas_destino, titulos_destino = _procurar_linhas_por_titulo(destino_norm)
-        aviso_destino_por_titulo = bool(linhas_destino)
+        warn_origin_title = False
+        
+    if not dest_lines:
+        dest_lines, dest_titles = _search_lines_by_title(norm_dest)
+        warn_dest_title = bool(dest_lines)
     else:
-        aviso_destino_por_titulo = False
+        warn_dest_title = False
 
-    aviso_origem_por_freguesia = None
-    aviso_destino_por_freguesia = None
-    if not linhas_origem:
-        paragens_da_freguesia = procurar_paragens_por_freguesia(origem)
-        if paragens_da_freguesia:
-            for paragem_freg in paragens_da_freguesia:
-                for linha_id, paragem_indice in todas:
-                    if _normalizar_nome_paragem(paragem_freg) == _normalizar_nome_paragem(paragem_indice):
-                        linhas_origem.add(linha_id)
-                        paragens_origem_encontradas.add(paragem_indice)
-            if linhas_origem:
-                aviso_origem_por_freguesia = paragens_da_freguesia
-    if not linhas_destino:
-        paragens_da_freguesia = procurar_paragens_por_freguesia(destino)
-        if paragens_da_freguesia:
-            for paragem_freg in paragens_da_freguesia:
-                for linha_id, paragem_indice in todas:
-                    if _normalizar_nome_paragem(paragem_freg) == _normalizar_nome_paragem(paragem_indice):
-                        linhas_destino.add(linha_id)
-                        paragens_destino_encontradas.add(paragem_indice)
-            if linhas_destino:
-                aviso_destino_por_freguesia = paragens_da_freguesia
+    warn_origin_parish = None
+    warn_dest_parish = None
+    if not origin_lines:
+        parish_stops = find_stops_by_parish(origin)
+        if parish_stops:
+            for par_stop in parish_stops:
+                for line_id, idx_stop in all_data:
+                    if _normalize_stop_name(par_stop) == _normalize_stop_name(idx_stop):
+                        origin_lines.add(line_id)
+                        found_origin_stops.add(idx_stop)
+            if origin_lines:
+                warn_origin_parish = parish_stops
+                
+    if not dest_lines:
+        parish_stops = find_stops_by_parish(destination)
+        if parish_stops:
+            for par_stop in parish_stops:
+                for line_id, idx_stop in all_data:
+                    if _normalize_stop_name(par_stop) == _normalize_stop_name(idx_stop):
+                        dest_lines.add(line_id)
+                        found_dest_stops.add(idx_stop)
+            if dest_lines:
+                warn_dest_parish = parish_stops
 
-    if not linhas_origem:
-        return f"Não encontrei nenhuma paragem nem freguesia que corresponda a '{origem}'."
-    if not linhas_destino:
-        return f"Não encontrei nenhuma paragem nem freguesia que corresponda a '{destino}'."
+    if not origin_lines:
+        return f"Could not find any stop or parish matching '{origin}'."
+    if not dest_lines:
+        return f"Could not find any stop or parish matching '{destination}'."
 
-    aviso_precisao = ""
-    if aviso_origem_por_titulo:
-        aviso_precisao += f"\n⚠️ Nota: '{origem}' encontrada pelo TÍTULO da linha (ex: {', '.join(titulos_origem[:2])})."
-    if aviso_destino_por_titulo:
-        aviso_precisao += f"\n⚠️ Nota: '{destino}' encontrada pelo TÍTULO da linha (ex: {', '.join(titulos_destino[:2])})."
-    if aviso_origem_por_freguesia:
-        aviso_precisao += f"\n📍 '{origem}' é freguesia. Paragens: {', '.join(aviso_origem_por_freguesia[:4])}."
-    if aviso_destino_por_freguesia:
-        aviso_precisao += f"\n📍 '{destino}' é freguesia. Paragens: {', '.join(aviso_destino_por_freguesia[:4])}."
+    precision_warning = ""
+    if warn_origin_title:
+        precision_warning += f"\n⚠️ Note: '{origin}' found via line TITLE (ex: {', '.join(origin_titles[:2])})."
+    if warn_dest_title:
+        precision_warning += f"\n⚠️ Note: '{destination}' found via line TITLE (ex: {', '.join(dest_titles[:2])})."
+    if warn_origin_parish:
+        precision_warning += f"\n📍 '{origin}' is a parish. Stops: {', '.join(warn_origin_parish[:4])}."
+    if warn_dest_parish:
+        precision_warning += f"\n📍 '{destination}' is a parish. Stops: {', '.join(warn_dest_parish[:4])}."
 
-    linhas_diretas = linhas_origem & linhas_destino
-    if linhas_diretas:
-        resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}' (sem transbordo):\n"
-        for linha_id in linhas_diretas:
-            resumo += f"- Linha {linha_id}\n"
-        resumo += aviso_precisao
-        return resumo
+    direct_lines = origin_lines & dest_lines
+    if direct_lines:
+        summary = f"Found DIRECT line(s) between '{origin}' and '{destination}' (no transfers):\n"
+        for line_id in direct_lines:
+            summary += f"- Line {line_id}\n"
+        summary += precision_warning
+        return summary
 
-    stops_linhas_origem = set()
-    for linha_id in linhas_origem:
-        stops_linhas_origem |= mapa_linha_paragens.get(linha_id, set())
-    stops_linhas_destino = set()
-    for linha_id in linhas_destino:
-        stops_linhas_destino |= mapa_linha_paragens.get(linha_id, set())
+    origin_line_stops = set()
+    for line_id in origin_lines:
+        origin_line_stops |= line_stops_map.get(line_id, set())
+        
+    dest_line_stops = set()
+    for line_id in dest_lines:
+        dest_line_stops |= line_stops_map.get(line_id, set())
 
-    transbordos_candidatos = stops_linhas_origem & stops_linhas_destino
-    transbordos_candidatos -= paragens_origem_encontradas
-    transbordos_candidatos -= paragens_destino_encontradas
+    candidate_transfers = origin_line_stops & dest_line_stops
+    candidate_transfers -= found_origin_stops
+    candidate_transfers -= found_dest_stops
 
-    if not transbordos_candidatos:
-        return f"Não encontrei nenhuma linha direta nem um ponto de transbordo óbvio entre '{origem}' e '{destino}'."
+    if not candidate_transfers:
+        return f"No direct line or obvious transfer point found between '{origin}' and '{destination}'."
 
-    resumo = f"Não há linha direta entre '{origem}' e '{destino}'. Sugestão de transbordo:\n\n"
-    for paragem_transbordo in sorted(transbordos_candidatos):
-        linhas_ate_transbordo = [l for l in linhas_origem if paragem_transbordo in mapa_linha_paragens.get(l, set())]
-        linhas_desde_transbordo = [l for l in linhas_destino if paragem_transbordo in mapa_linha_paragens.get(l, set())]
-        resumo += f"- Via **{paragem_transbordo}**: apanha a linha {'/'.join(linhas_ate_transbordo)} desde '{origem}', desce em '{paragem_transbordo}', e apanha a linha {'/'.join(linhas_desde_transbordo)} até '{destino}'.\n"
+    summary = f"No direct line between '{origin}' and '{destination}'. Suggested transfers:\n\n"
+    for transfer_stop in sorted(candidate_transfers):
+        lines_to_transfer = [l for l in origin_lines if transfer_stop in line_stops_map.get(l, set())]
+        lines_from_transfer = [l for l in dest_lines if transfer_stop in line_stops_map.get(l, set())]
+        summary += f"- Via **{transfer_stop}**: take line(s) {'/'.join(lines_to_transfer)} from '{origin}', get off at '{transfer_stop}', and take line(s) {'/'.join(lines_from_transfer)} to '{destination}'.\n"
 
-    resumo += aviso_precisao
-    return resumo
+    summary += precision_warning
+    return summary
 
-def consultar_freguesia_paragem_tool(nome: str):
-    if not nome:
-        return "É necessário indicar o nome da paragem ou da freguesia."
+def query_stop_parish_tool(name: str):
+    if not name:
+        return "You must provide a stop or parish name."
 
-    freguesia = obter_freguesia_de_paragem(nome)
-    if freguesia:
-        return f"A paragem '{nome}' fica na freguesia de {freguesia}."
+    parish = get_parish_from_stop(name)
+    if parish:
+        return f"The stop '{name}' is located in the parish of {parish}."
 
-    paragens = procurar_paragens_por_freguesia(nome)
-    if paragens:
-        return f"Paragens conhecidas na freguesia de '{nome}': {', '.join(paragens)}."
+    stops = find_stops_by_parish(name)
+    if stops:
+        return f"Known stops in the parish of '{name}': {', '.join(stops)}."
 
-    return f"Não tenho ainda informação de freguesia para '{nome}'."
+    return f"I have no parish information for '{name}' yet."
 
-def obter_tipologias_cache():
+def get_ticket_types_cache():
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT tipologia, descricao, preco, custo_cartao, prazo, documentos_json FROM cache_titulos ORDER BY tipologia")
-        linhas = cursor.fetchall()
+        cursor.execute("SELECT ticket_type, description, price, card_cost, deadline, documents_json FROM ticket_cache ORDER BY ticket_type")
+        rows = cursor.fetchall()
         conn.close()
 
-        if not linhas:
-            return TIPOLOGIAS_PASSE_FALLBACK, None
+        if not rows:
+            return FALLBACK_TICKET_TYPES, None
 
-        resultado = {}
-        for tipologia, descricao, preco, custo_cartao, prazo, documentos_json in linhas:
+        result = {}
+        for type_name, desc, price, card_cost, deadline, docs_json in rows:
             try:
-                documentos = json.loads(documentos_json)
+                documents = json.loads(docs_json)
             except Exception:
-                documentos = [documentos_json]
-            resultado[tipologia] = {
-                "descricao": descricao,
-                "preco": preco,
-                "custo_cartao": custo_cartao,
-                "prazo": prazo,
-                "documentos": documentos,
+                documents = [docs_json]
+            result[type_name] = {
+                "description": desc,
+                "price": price,
+                "card_cost": card_cost,
+                "deadline": deadline,
+                "documents": documents,
             }
 
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos")
-        ultima_atualizacao = cursor.fetchone()[0]
+        cursor.execute("SELECT MAX(last_updated) FROM ticket_cache")
+        last_updated = cursor.fetchone()[0]
         conn.close()
 
-        return resultado, ultima_atualizacao
+        return result, last_updated
     except Exception as e:
-        logging.error(f"Erro ao ler cache de tipologias: {e}")
-        return TIPOLOGIAS_PASSE_FALLBACK, None
+        logging.error(f"Error reading ticket types cache: {e}")
+        return FALLBACK_TICKET_TYPES, None
 
-def consultar_tarifario_cache():
+def query_tariff_cache():
     try:
-        conn = sqlite3.connect("agente_memoria.db")
+        conn = sqlite3.connect("agent_memory.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT conteudo_txt, ultima_atualizacao FROM cache_tarifario WHERE id = 1")
-        resultado = cursor.fetchone()
+        cursor.execute("SELECT content_txt, last_updated FROM tariff_cache WHERE id = 1")
+        result = cursor.fetchone()
         conn.close()
-        if resultado:
-            return f"Tabela tarifária (atualizada em {resultado[1]}):\n\n{resultado[0]}"
-        return "O tarifário ainda não foi sincronizado."
+        if result:
+            return f"Tariff table (updated on {result[1]}):\n\n{result[0]}"
+        return "The tariff table has not been synchronized yet."
     except Exception as e:
-        return f"Erro na leitura da cache do tarifário: {e}"
+        return f"Error reading tariff cache: {e}"
 
-def consultar_tipologias_cache_tool():
-    tipologias, ultima_atualizacao = obter_tipologias_cache()
-    if not tipologias:
-        return "Não existem tipologias de passe em cache."
-    aviso_idade = f" (dados de {ultima_atualizacao})" if ultima_atualizacao else ""
-    resumo = f"Tipologias de passe disponíveis{aviso_idade}:\n\n"
-    for nome, info in tipologias.items():
-        docs_txt = "; ".join(info["documentos"])
-        resumo += f"- **{nome}**: {info['descricao']} Preço: {info['preco']}. Custo do cartão: {info['custo_cartao']}. Prazo: {info['prazo']}. Documentos: {docs_txt}.\n"
-    return resumo
+def query_ticket_types_cache_tool():
+    ticket_types, last_update = get_ticket_types_cache()
+    if not ticket_types:
+        return "No ticket types in cache."
+    age_warning = f" (data from {last_update})" if last_update else ""
+    summary = f"Available ticket types{age_warning}:\n\n"
+    for name, info in ticket_types.items():
+        docs_txt = "; ".join(info["documents"])
+        summary += f"- **{name}**: {info['description']} Price: {info['price']}. Card Cost: {info['card_cost']}. Deadline: {info['deadline']}. Documents: {docs_txt}.\n"
+    return summary
 
-def verificar_documentos_passe(tipologia: str, ficheiros_carregados: dict):
-    tipologias_atuais, _ = obter_tipologias_cache()
-    info = tipologias_atuais.get(tipologia, {"documentos": ["documento não especificado"]})
-    partes = [
-        f"Vais rever documentos carregados por um utilizador que pediu um passe do tipo '{tipologia}'.\n"
-        f"Documentos exigidos para este tipo de passe: {', '.join(info['documentos'])}.\n\n"
-        "Para CADA documento carregado abaixo (pela ordem em que aparecem), diz:\n"
-        "1. Que tipo de documento parece ser.\n"
-        "2. Se parece corresponder a um dos documentos exigidos.\n"
-        "3. Se está legível e completo.\n"
-        "Sê direto e claro. Diz também se falta carregar algum dos documentos exigidos."
+def verify_ticket_documents(ticket_type: str, uploaded_files: dict):
+    current_types, _ = get_ticket_types_cache()
+    info = current_types.get(ticket_type, {"documents": ["unspecified document"]})
+    parts = [
+        f"You are going to review uploaded documents for a user requesting a '{ticket_type}' ticket.\n"
+        f"Required documents for this type: {', '.join(info['documents'])}.\n\n"
+        "For EACH document uploaded below (in order), state:\n"
+        "1. What kind of document it appears to be.\n"
+        "2. If it seems to match one of the required documents.\n"
+        "3. If it is legible and complete.\n"
+        "Be direct and clear. Also mention if any required document is missing."
     ]
 
-    nomes_documentos = []
-    for nome_doc, ficheiro in ficheiros_carregados.items():
-        if ficheiro is None:
+    doc_names = []
+    for doc_name, file_obj in uploaded_files.items():
+        if file_obj is None:
             continue
-        nomes_documentos.append(nome_doc)
+        doc_names.append(doc_name)
         try:
-            dados_bytes = ficheiro.getvalue()
-            mime = ficheiro.type or "application/octet-stream"
-            partes.append(f"\n--- Documento carregado para: '{nome_doc}' ---")
-            partes.append({"mime_type": mime, "data": dados_bytes})
+            data_bytes = file_obj.getvalue()
+            mime = file_obj.type or "application/octet-stream"
+            parts.append(f"\n--- Uploaded document for: '{doc_name}' ---")
+            parts.append({"mime_type": mime, "data": data_bytes})
         except Exception as e:
-            logging.error(f"Erro ao ler ficheiro carregado '{nome_doc}': {e}")
+            logging.error(f"Error reading uploaded file '{doc_name}': {e}")
 
-    if not nomes_documentos:
-        return "Nenhum documento foi carregado ainda."
+    if not doc_names:
+        return "No documents have been uploaded yet."
 
     try:
-        model_verificacao = genai.GenerativeModel("gemini-3.5-flash")
-        resposta = model_verificacao.generate_content(partes, request_options={"timeout": 40})
-        return resposta.text
+        verification_model = genai.GenerativeModel("gemini-3.5-flash")
+        response = verification_model.generate_content(parts, request_options={"timeout": 40})
+        return response.text
     except Exception as e:
-        return f"Não foi possível verificar os documentos neste momento: {e}"
+        return f"Could not verify the documents at this time: {e}"
 
-def recomendar_tipologias_passe(respostas: dict, tipologias_disponiveis: dict):
-    idade = respostas.get("idade")
-    estudante = respostas.get("estudante")
-    nivel_estudo = respostas.get("nivel_estudo")
-    residente_gmr = respostas.get("residente_gmr")
-    incapacidade_60 = respostas.get("incapacidade_60")
-    antigo_combatente = respostas.get("antigo_combatente")
-    usa_passe_cp = respostas.get("usa_passe_cp")
-    reforma_antecipada = respostas.get("reforma_antecipada")
+def recommend_ticket_types(answers: dict, available_types: dict):
+    age = answers.get("age")
+    student = answers.get("student")
+    study_level = answers.get("study_level")
+    gmr_resident = answers.get("gmr_resident")
+    disability_60 = answers.get("disability_60")
+    veteran = answers.get("veteran")
+    uses_cp_pass = answers.get("uses_cp_pass")
+    early_retirement = answers.get("early_retirement")
 
-    candidatas = []
+    candidates = []
 
-    def _tem(nome_parcial):
-        for nome in tipologias_disponiveis:
-            if nome_parcial.lower() in nome.lower():
-                return nome
+    def _has(partial_name):
+        for name in available_types:
+            if partial_name.lower() in name.lower():
+                return name
         return None
 
-    if antigo_combatente and _tem("Antigo Combatente"): candidatas.append(_tem("Antigo Combatente"))
-    if incapacidade_60 and _tem("Mobilidade Condicionada"): candidatas.append(_tem("Mobilidade Condicionada"))
-    if idade is not None and idade >= 65 and residente_gmr and _tem("65+"): candidatas.append(_tem("65+"))
-    if reforma_antecipada and idade is not None and 60 <= idade < 65 and _tem("Reformado"): candidatas.append(_tem("Reformado"))
-    if estudante:
-        if nivel_estudo == "superior":
-            if residente_gmr and _tem("Universitário Residente"): candidatas.append(_tem("Universitário Residente"))
-            elif _tem("Universitário Não Residente"): candidatas.append(_tem("Universitário Não Residente"))
-        elif nivel_estudo == "ate_18" and _tem("18+TP"): candidatas.append(_tem("18+TP"))
-        elif nivel_estudo == "ate_23" and _tem("23+TP"): candidatas.append(_tem("23+TP"))
-    if usa_passe_cp and _tem("Mensal CP"): candidatas.append(_tem("Mensal CP"))
+    if veteran and _has("Antigo Combatente"): candidates.append(_has("Antigo Combatente"))
+    if disability_60 and _has("Mobilidade Condicionada"): candidates.append(_has("Mobilidade Condicionada"))
+    if age is not None and age >= 65 and gmr_resident and _has("65+"): candidates.append(_has("65+"))
+    if early_retirement and age is not None and 60 <= age < 65 and _has("Reformado"): candidates.append(_has("Reformado"))
+    if student:
+        if study_level == "superior":
+            if gmr_resident and _has("Universitário Residente"): candidates.append(_has("Universitário Residente"))
+            elif _has("Universitário Não Residente"): candidates.append(_has("Universitário Não Residente"))
+        elif study_level == "up_to_18" and _has("18+TP"): candidates.append(_has("18+TP"))
+        elif study_level == "up_to_23" and _has("23+TP"): candidates.append(_has("23+TP"))
+    if uses_cp_pass and _has("Mensal CP"): candidates.append(_has("Mensal CP"))
 
-    if not candidatas:
-        if residente_gmr and _tem("CIM AVE 50% + 10% CMG"): candidatas.append(_tem("CIM AVE 50% + 10% CMG"))
-        elif residente_gmr and _tem("CIM AVE 50%"): candidatas.append(_tem("CIM AVE 50%"))
-        elif _tem("Mensal") and not _tem("CIM"):
-            for nome in tipologias_disponiveis:
-                if nome.strip().lower() == "mensal":
-                    candidatas.append(nome)
+    if not candidates:
+        if gmr_resident and _has("CIM AVE 50% + 10% CMG"): candidates.append(_has("CIM AVE 50% + 10% CMG"))
+        elif gmr_resident and _has("CIM AVE 50%"): candidates.append(_has("CIM AVE 50%"))
+        elif _has("Mensal") and not _has("CIM"):
+            for name in available_types:
+                if name.strip().lower() == "mensal":
+                    candidates.append(name)
                     break
 
-    vistos = set()
-    candidatas_unicas = []
-    for c in candidatas:
-        if c and c not in vistos:
-            vistos.add(c)
-            candidatas_unicas.append(c)
-    return candidatas_unicas
+    seen = set()
+    unique_candidates = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            unique_candidates.append(c)
+    return unique_candidates
 
-def renderizar_pedido_passe():
-    st.subheader("🎫 Pedido de Passe — Guimabus")
-    st.info("⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão.**")
+def render_ticket_request():
+    st.subheader("🎫 Guimabus Ticket Request")
+    st.info("⚠️ **Important warning:** this form is a support and preliminary verification tool. **It is not an official submission channel.**")
 
-    TIPOLOGIAS_PASSE, ultima_atualizacao = obter_tipologias_cache()
-    if ultima_atualizacao:
-        st.caption(f"📅 Dados de tipologias atualizados em: {ultima_atualizacao}")
+    TICKET_TYPES, last_update = get_ticket_types_cache()
+    if last_update:
+        st.caption(f"📅 Ticket types data updated on: {last_update}")
 
-    with st.expander("🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas", expanded=False):
+    with st.expander("🧭 Don't know which type fits you? Answer these questions", expanded=False):
         col1, col2 = st.columns(2)
-        idade = col1.number_input("A tua idade", min_value=0, max_value=120, value=25, step=1, key="wizard_idade")
-        residente_gmr = col2.checkbox("Resides no concelho de Guimarães?", key="wizard_residente")
+        age = col1.number_input("Your age", min_value=0, max_value=120, value=25, step=1, key="wizard_age")
+        gmr_resident = col2.checkbox("Do you reside in the Guimarães municipality?", key="wizard_resident")
 
-        estudante = st.checkbox("És estudante?", key="wizard_estudante")
-        nivel_estudo = None
-        if estudante:
-            nivel_estudo = st.radio("Que nível de ensino?", options=["ate_18", "ate_23", "superior"], key="wizard_nivel")
+        student = st.checkbox("Are you a student?", key="wizard_student")
+        study_level = None
+        if student:
+            study_level = st.radio("Education level?", options=["up_to_18", "up_to_23", "superior"], key="wizard_level")
 
         col3, col4 = st.columns(2)
-        incapacidade_60 = col3.checkbox("Grau de incapacidade ≥ 60%?", key="wizard_incapacidade")
-        antigo_combatente = col4.checkbox("Antigo combatente ou viúvo(a)?", key="wizard_combatente")
+        disability_60 = col3.checkbox("Disability degree ≥ 60%?", key="wizard_disability")
+        veteran = col4.checkbox("War veteran or widow(er)?", key="wizard_veteran")
 
         col5, col6 = st.columns(2)
-        reforma_antecipada = col5.checkbox("Reforma antecipada (60-65 anos)?", key="wizard_reforma")
-        usa_passe_cp = col6.checkbox("Já tens passe CP?", key="wizard_cp")
+        early_retirement = col5.checkbox("Early retirement (60-65 years)?", key="wizard_retirement")
+        uses_cp_pass = col6.checkbox("Already have a CP train pass?", key="wizard_cp")
 
-        if st.button("🔍 Recomendar tipologia", key="wizard_recomendar"):
-            respostas = {"idade": idade, "residente_gmr": residente_gmr, "estudante": estudante, "nivel_estudo": nivel_estudo, "incapacidade_60": incapacidade_60, "antigo_combatente": antigo_combatente, "reforma_antecipada": reforma_antecipada, "usa_passe_cp": usa_passe_cp}
-            recomendadas = recomendar_tipologias_passe(respostas, TIPOLOGIAS_PASSE)
-            if recomendadas: st.success(f"A(s) tipologia(s) mais indicada(s): **{' / '.join(recomendadas)}**")
-            else: st.warning("O passe **Mensal** normal é provavelmente a opção aplicável.")
+        if st.button("🔍 Recommend ticket type", key="wizard_recommend"):
+            answers = {"age": age, "gmr_resident": gmr_resident, "student": student, "study_level": study_level, "disability_60": disability_60, "veteran": veteran, "early_retirement": early_retirement, "uses_cp_pass": uses_cp_pass}
+            recommended = recommend_ticket_types(answers, TICKET_TYPES)
+            if recommended: st.success(f"Most suitable type(s): **{' / '.join(recommended)}**")
+            else: st.warning("The standard **Mensal** pass is likely your best option.")
 
-    tipologia_escolhida = st.selectbox("Escolhe a tipologia:", list(TIPOLOGIAS_PASSE.keys()))
-    info = TIPOLOGIAS_PASSE[tipologia_escolhida]
+    chosen_type = st.selectbox("Choose the ticket type:", list(TICKET_TYPES.keys()))
+    info = TICKET_TYPES[chosen_type]
 
-    st.markdown(f"**Descrição:** {info['descricao']}\n**Preço:** {info['preco']} | **Custo do cartão:** {info['custo_cartao']}")
-    st.markdown("**Documentos necessários para esta tipologia:**")
-    ficheiros_carregados = {}
-    for i, nome_doc in enumerate(info["documentos"]):
-        ficheiros_carregados[nome_doc] = st.file_uploader(f"📄 {nome_doc}", type=["pdf", "png", "jpg", "jpeg"], key=f"upload_passe_{tipologia_escolhida}_{i}")
+    st.markdown(f"**Description:** {info['description']}\n**Price:** {info['price']} | **Card Cost:** {info['card_cost']}")
+    st.markdown("**Required documents for this type:**")
+    uploaded_files = {}
+    for i, doc_name in enumerate(info["documents"]):
+        uploaded_files[doc_name] = st.file_uploader(f"📄 {doc_name}", type=["pdf", "png", "jpg", "jpeg"], key=f"upload_pass_{chosen_type}_{i}")
 
-    if st.button("🔍 Verificar documentos carregados", use_container_width=True):
-        if not any(f is not None for f in ficheiros_carregados.values()): st.warning("Carrega pelo menos um documento.")
+    if st.button("🔍 Verify uploaded documents", use_container_width=True):
+        if not any(f is not None for f in uploaded_files.values()): st.warning("Upload at least one document.")
         else:
-            with st.spinner("A analisar os documentos (em memória)..."):
-                st.markdown(verificar_documentos_passe(tipologia_escolhida, ficheiros_carregados))
+            with st.spinner("Analyzing documents (in memory)..."):
+                st.markdown(verify_ticket_documents(chosen_type, uploaded_files))
 
-def renderizar_jogo():
-    top_scores = obter_top_10()
+def render_arcade_game():
+    top_scores = get_top_10_scores()
     json_scores = json.dumps(top_scores)
 
-    html_jogo = """
+    html_game = """
     <div style="text-align:center; background-color:#111; padding:15px; border-radius:10px; font-family:sans-serif;">
-        <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Guimabus Arcade: Cabine de Condução 🚌</h3>
+        <h3 style="color:#2ecc71; margin-top:0; margin-bottom:10px;">🚌 Guimabus Arcade: Driving Cabin 🚌</h3>
         
         <canvas id="stage" width="650" height="360" style="border:2px solid #2ecc71; background-color:#000; display:block; margin:0 auto; touch-action:none;"></canvas>
         
         <div style="margin-top: 10px;">
             <button id="btnAction" onclick="toggleGame()" style="padding: 6px 15px; background:#2ecc71; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">Play ▶</button>
-            <input type="text" id="nomeInput" placeholder="Teu Nome aqui" maxlength="10" style="display:none; padding: 5px; border-radius:4px; border:1px solid #2ecc71; background:#222; color:white; width:120px; margin-left:10px; vertical-align:middle; text-transform:uppercase;">
-            <button id="btnGravar" onclick="gravarRecorde()" style="display:none; padding: 6px 15px; background:#f1c40f; color:black; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-left:5px; vertical-align:middle;">Gravar 💾</button>
+            <input type="text" id="nameInput" placeholder="Your Name" maxlength="10" style="display:none; padding: 5px; border-radius:4px; border:1px solid #2ecc71; background:#222; color:white; width:120px; margin-left:10px; vertical-align:middle; text-transform:uppercase;">
+            <button id="btnSave" onclick="saveRecord()" style="display:none; padding: 6px 15px; background:#f1c40f; color:black; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-left:5px; vertical-align:middle;">Save 💾</button>
         </div>
 
         <div style="margin-top: 15px; display: inline-block; width: 100%; text-align: center;">
             <div style="margin-bottom: 5px;">
-                <button data-dir="cima" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▲</button>
+                <button data-dir="up" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▲</button>
             </div>
             <div style="display: flex; justify-content: center; gap: 10px;">
-                <button data-dir="esquerda" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">◀</button>
-                <button data-dir="baixo" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▼</button>
-                <button data-dir="direita" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▶</button>
+                <button data-dir="left" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">◀</button>
+                <button data-dir="down" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▼</button>
+                <button data-dir="right" style="padding: 12px 24px; background: #34495e; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 18px;">▶</button>
             </div>
         </div>
         
@@ -1590,21 +1578,21 @@ def renderizar_jogo():
             var canvas = document.getElementById('stage');
             var ctx = canvas.getContext('2d');
             var btnAction = document.getElementById('btnAction');
-            var nomeInput = document.getElementById('nomeInput');
-            var btnGravar = document.getElementById('btnGravar');
+            var nameInput = document.getElementById('nameInput');
+            var btnSave = document.getElementById('btnSave');
             
             var tnt = 20;
             var gameWidth = 400;
             var cols = gameWidth / tnt, rows = canvas.height / tnt;
-            var snake, dx, dy, apple, score, velocidadeMs;
-            var proximaDirecao = null;
+            var snake, dx, dy, apple, score, speedMs;
+            var nextDir = null;
             var gameInterval = null;
             var gameStarted = false;
             var gameOver = false;
             
             var leaderboard = JSON.parse('JSON_SCORES_PLACEHOLDER');
 
-            function novaMaca() {
+            function newApple() {
                 var pos;
                 do {
                     pos = {
@@ -1615,18 +1603,18 @@ def renderizar_jogo():
                 return pos;
             }
 
-            function estadoInicial() {
+            function initialState() {
                 snake = [{x:160, y:160}, {x:140, y:160}, {x:120, y:160}];
                 dx = tnt; dy = 0;
-                proximaDirecao = null;
+                nextDir = null;
                 score = 0;
-                velocidadeMs = 180;
-                apple = novaMaca();
+                speedMs = 180;
+                apple = newApple();
                 gameOver = false;
-                nomeInput.style.display = 'none';
-                btnGravar.style.display = 'none';
+                nameInput.style.display = 'none';
+                btnSave.style.display = 'none';
             }
-            estadoInicial();
+            initialState();
             
             function drawScene() {
                 ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
@@ -1664,49 +1652,49 @@ def renderizar_jogo():
                 }
 
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
-                ctx.fillText('Passageiros: ' + (score / 10), 15, 25);
+                ctx.fillText('Passengers: ' + (score / 10), 15, 25);
 
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 14px sans-serif';
-                ctx.fillText('🏆 TOP 10 MOTORISTAS', gameWidth + 15, 30);
+                ctx.fillText('🏆 TOP 10 DRIVERS', gameWidth + 15, 30);
                 
                 ctx.font = '12px sans-serif';
                 for(var k=0; k<10; k++) {
                     var yPos = 65 + (k * 26);
                     ctx.fillStyle = (k === 0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
                     
-                    var medalha = (k===0)?"1º ":((k===1)?"2º ":((k===2)?"3º ":(k+1)+"º "));
+                    var medal = (k===0)?"1st ":((k===1)?"2nd ":((k===2)?"3rd ":(k+1)+"th "));
                     if (leaderboard[k]) {
                         var item = leaderboard[k];
-                        ctx.fillText(medalha + item[0], gameWidth + 15, yPos);
+                        ctx.fillText(medal + item[0], gameWidth + 15, yPos);
                         ctx.textAlign = 'end';
-                        ctx.fillText(item[1] + ' pas.', canvas.width - 15, yPos);
+                        ctx.fillText(item[1] + ' pax', canvas.width - 15, yPos);
                         ctx.textAlign = 'start';
                     } else {
                         ctx.fillStyle = '#444';
-                        ctx.fillText(medalha + '------', gameWidth + 15, yPos);
+                        ctx.fillText(medal + '------', gameWidth + 15, yPos);
                     }
                 }
                 
                 if (gameOver) {
                     ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                     ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
-                    ctx.fillText('FIM DA LINHA', gameWidth/2, canvas.height/2 - 20);
+                    ctx.fillText('END OF THE LINE', gameWidth/2, canvas.height/2 - 20);
                     ctx.fillStyle = '#ffffff'; ctx.font = '14px sans-serif';
-                    ctx.fillText('Transportaste ' + (score / 10) + ' passageiros!', gameWidth/2, canvas.height/2 + 5);
+                    ctx.fillText('You transported ' + (score / 10) + ' passengers!', gameWidth/2, canvas.height/2 + 5);
                     ctx.font = '11px sans-serif'; ctx.fillStyle = '#f1c40f';
-                    ctx.fillText('Digita o teu nome no painel abaixo.', gameWidth/2, canvas.height/2 + 30);
+                    ctx.fillText('Type your name below.', gameWidth/2, canvas.height/2 + 30);
                     ctx.textAlign = 'start';
                 }
             }
             
-            function game() {
+            function gameLoop() {
                 if (gameOver) return;
-                if (proximaDirecao) {
-                    if (proximaDirecao.dx !== -dx || proximaDirecao.dy !== -dy) {
-                        dx = proximaDirecao.dx; dy = proximaDirecao.dy;
+                if (nextDir) {
+                    if (nextDir.dx !== -dx || nextDir.dy !== -dy) {
+                        dx = nextDir.dx; dy = nextDir.dy;
                     }
-                    proximaDirecao = null;
+                    nextDir = null;
                 }
                 var head = {x: snake[0].x + dx, y: snake[0].y + dy};
                 if (head.x < 0) head.x = gameWidth - tnt;
@@ -1714,21 +1702,21 @@ def renderizar_jogo():
                 if (head.y < 0) head.y = canvas.height - tnt;
                 else if (head.y >= canvas.height) head.y = 0;
 
-                var vaiComer = (head.x === apple.x && head.y === apple.y);
-                var corpoParaVerificar = vaiComer ? snake : snake.slice(0, snake.length - 1);
-                for (var i = 0; i < corpoParaVerificar.length; i++) { 
-                    if (corpoParaVerificar[i].x === head.x && corpoParaVerificar[i].y === head.y) {
+                var willEat = (head.x === apple.x && head.y === apple.y);
+                var bodyToCheck = willEat ? snake : snake.slice(0, snake.length - 1);
+                for (var i = 0; i < bodyToCheck.length; i++) { 
+                    if (bodyToCheck[i].x === head.x && bodyToCheck[i].y === head.y) {
                         triggerGameOver(); return;
                     } 
                 }
                 snake.unshift(head);
-                if (vaiComer) {
+                if (willEat) {
                     score += 10;
-                    if (score % 50 === 0 && velocidadeMs > 80) {
-                        velocidadeMs -= 10;
-                        clearInterval(gameInterval); gameInterval = setInterval(game, velocidadeMs);
+                    if (score % 50 === 0 && speedMs > 80) {
+                        speedMs -= 10;
+                        clearInterval(gameInterval); gameInterval = setInterval(gameLoop, speedMs);
                     }
-                    apple = novaMaca();
+                    apple = newApple();
                 } else { snake.pop(); }
                 drawScene();
             }
@@ -1737,7 +1725,7 @@ def renderizar_jogo():
                 if (gameOver) { resetGame(); return; }
                 if (!gameStarted) {
                     gameStarted = true; btnAction.innerText = "Pause ⏸";
-                    gameInterval = setInterval(game, velocidadeMs);
+                    gameInterval = setInterval(gameLoop, speedMs);
                 } else {
                     gameStarted = false; btnAction.innerText = "Play ▶"; clearInterval(gameInterval);
                 }
@@ -1746,363 +1734,366 @@ def renderizar_jogo():
                 gameOver = true; gameStarted = false; clearInterval(gameInterval);
                 btnAction.innerText = "Reset 🔄";
                 if((score/10) > 0) {
-                    nomeInput.style.display = 'inline-block';
-                    btnGravar.style.display = 'inline-block';
-                    nomeInput.focus();
+                    nameInput.style.display = 'inline-block';
+                    btnSave.style.display = 'inline-block';
+                    nameInput.focus();
                 }
                 drawScene();
             }
             function resetGame() { 
-                estadoInicial(); gameOver = false; gameStarted = true;
-                btnAction.innerText = "Pause ⏸"; gameInterval = setInterval(game, velocidadeMs);
+                initialState(); gameOver = false; gameStarted = true;
+                btnAction.innerText = "Pause ⏸"; gameInterval = setInterval(gameLoop, speedMs);
                 drawScene();
             }
-            function gravarRecorde() {
-                var nome = nomeInput.value.trim().toUpperCase();
-                if(!nome) { alert('Por favor introduz o teu nome!'); return; }
-                btnGravar.disabled = true;
-                btnGravar.innerText = "💾...";
+            function saveRecord() {
+                var name = nameInput.value.trim().toUpperCase();
+                if(!name) { alert('Please enter your name!'); return; }
+                btnSave.disabled = true;
+                btnSave.innerText = "💾...";
                 
                 var finalScore = (score / 10);
-                window.parent.location.search = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + finalScore;
+                window.parent.location.search = "?save_name=" + encodeURIComponent(name) + "&save_score=" + finalScore;
             }
-            function mudarDirecao(dir) {
+            function changeDir(dir) {
                 if (!gameStarted || gameOver) return;
-                if(dir === 'esquerda' && dx === 0) proximaDirecao = {dx:-tnt, dy:0};
-                if(dir === 'cima' && dy === 0) proximaDirecao = {dx:0, dy:-tnt};
-                if(dir === 'direita' && dx === 0) proximaDirecao = {dx:tnt, dy:0};
-                if(dir === 'baixo' && dy === 0) proximaDirecao = {dx:0, dy:tnt};
+                if(dir === 'left' && dx === 0) nextDir = {dx:-tnt, dy:0};
+                if(dir === 'up' && dy === 0) nextDir = {dx:0, dy:-tnt};
+                if(dir === 'right' && dx === 0) nextDir = {dx:tnt, dy:0};
+                if(dir === 'down' && dy === 0) nextDir = {dx:0, dy:tnt};
             }
             document.addEventListener('keydown', function(e) {
-                var mapa = {37:'esquerda', 38:'cima', 39:'direita', 40:'baixo'};
-                if (mapa[e.keyCode]) { e.preventDefault(); mudarDirecao(mapa[e.keyCode]); }
+                var map = {37:'left', 38:'up', 39:'right', 40:'down'};
+                if (map[e.keyCode]) { e.preventDefault(); changeDir(map[e.keyCode]); }
             });
             document.querySelectorAll('button[data-dir]').forEach(function(btn) {
-                btn.addEventListener('click', function() { mudarDirecao(btn.getAttribute('data-dir')); });
+                btn.addEventListener('click', function() { changeDir(btn.getAttribute('data-dir')); });
             });
             drawScene();
         </script>
     </div>
     """.replace("JSON_SCORES_PLACEHOLDER", json_scores)
-    return components.html(html_jogo, height=650)
+    return components.html(html_game, height=650)
 
-# --- MENSAGEM INICIAL AUTOMÁTICA ---
-MENSAGEM_INICIAL = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. 
+# --- INITIAL MESSAGE ---
+INITIAL_MESSAGE = """Olá, Celso! Sou o teu **Agente de Produtividade de Elite**. (I can also speak English if you prefer!)
 
 Estou pronto para te apoiar em três frentes:
 1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.
 2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.
 3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.
 
-Como posso ajudar hoje?"""
+Como posso ajudar hoje? (How can I help you today?)"""
 
-# --- INICIALIZAÇÃO DE ESTADOS ---
+# --- STATE INITIALIZATION ---
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": MENSAGEM_INICIAL}]
-    logging.info(f"Nova sessão de utilizador iniciada. ID Temporário: {st.session_state.session_id}")
+    st.session_state.messages = [{"role": "assistant", "content": INITIAL_MESSAGE}]
+    logging.info(f"New user session started. Temp ID: {st.session_state.session_id}")
 
-if "jogo_ativo" not in st.session_state:
-    st.session_state.jogo_ativo = False
+if "game_active" not in st.session_state:
+    st.session_state.game_active = False
 
-# Mantém a cache de horários sempre fresca sem depender de um admin lembrar-se de clicar
-sincronizar_automaticamente_se_necessario(limite_dias=7)
+auto_sync_if_needed(day_limit=7)
 
-# --- SIDEBAR DE ELITE (GERENCIAMENTO DO AGENTE) ---
+# --- SIDEBAR (AGENT MANAGEMENT) ---
 with st.sidebar:
-    st.header("⚙️ Painel do Agente")
-    if st.button("🗑️ Limpar O Meu Histórico", use_container_width=True):
-        st.session_state.messages = [{"role": "assistant", "content": MENSAGEM_INICIAL}]
-        st.session_state.jogo_ativo = False
+    st.header("⚙️ Agent Panel")
+    if st.button("🗑️ Clear My History", use_container_width=True):
+        st.session_state.messages = [{"role": "assistant", "content": INITIAL_MESSAGE}]
+        st.session_state.game_active = False
         st.rerun()
     st.divider()
 
-    st.subheader("🕹️ Entretenimento")
-    texto_botao_jogo = "Fechar Jogo X" if st.session_state.jogo_ativo else "Abrir Mini-Game 👾"
-    if st.button(texto_botao_jogo, use_container_width=True):
-        st.session_state.jogo_ativo = not st.session_state.jogo_ativo
+    st.subheader("🕹️ Entertainment")
+    btn_game_text = "Close Game X" if st.session_state.game_active else "Open Mini-Game 👾"
+    if st.button(btn_game_text, use_container_width=True):
+        st.session_state.game_active = not st.session_state.game_active
         st.rerun()
     st.divider()
 
-    st.subheader("🎫 Títulos de Transporte")
-    if "passe_ativo" not in st.session_state:
-        st.session_state.passe_ativo = False
-    texto_botao_passe = "Fechar Pedido de Passe X" if st.session_state.passe_ativo else "Pedir Passe 🎫"
-    if st.button(texto_botao_passe, use_container_width=True):
-        st.session_state.passe_ativo = not st.session_state.passe_ativo
+    st.subheader("🎫 Transport Tickets")
+    if "ticket_active" not in st.session_state:
+        st.session_state.ticket_active = False
+    btn_ticket_text = "Close Ticket Request X" if st.session_state.ticket_active else "Request Ticket 🎫"
+    if st.button(btn_ticket_text, use_container_width=True):
+        st.session_state.ticket_active = not st.session_state.ticket_active
         st.rerun()
     st.divider()
     
-    st.sidebar.subheader("👨‍💻 Desenvolvedor")
+    st.sidebar.subheader("👨‍💻 Developer")
     st.sidebar.info("""**Celso Ferreira**
-*À procura de emprego na área de IT / Informática.*
-📞 Contacto: **917 486 683**""")
+*Looking for IT / Computer Science roles.*
+📞 Contact: **917 486 683**""")
     st.sidebar.divider()
     
-    st.write("Estado: **Online**")
-    st.write("Modelo Nativo: `Gemini-3.5-Flash`")
+    st.write("Status: **Online**")
+    st.write("Native Model: `Gemini-3.5-Flash`")
     st.sidebar.divider()
     
-    st.sidebar.subheader("🔒 Área de Administrador")
-    if "admin_autenticado" not in st.session_state:
-        st.session_state.admin_autenticado = False
+    st.sidebar.subheader("🔒 Administrator Area")
+    if "admin_authenticated" not in st.session_state:
+        st.session_state.admin_authenticated = False
 
-    if not st.session_state.admin_autenticado:
-        with st.sidebar.expander("Entrar como administrador"):
-            password_input = st.text_input("Password de administrador", type="password", key="admin_pwd")
-            if st.button("Entrar", key="admin_login_btn"):
+    if not st.session_state.admin_authenticated:
+        with st.sidebar.expander("Login as Administrator"):
+            password_input = st.text_input("Admin Password", type="password", key="admin_pwd")
+            if st.button("Login", key="admin_login_btn"):
                 if password_input and password_input == st.secrets.get("ADMIN_PASSWORD", None):
-                    st.session_state.admin_autenticado = True
-                    logging.info("Login de administrador bem-sucedido.")
+                    st.session_state.admin_authenticated = True
+                    logging.info("Admin login successful.")
                     st.rerun()
                 else:
-                    st.sidebar.error("Password incorreta.")
-                    logging.warning("Tentativa de login de administrador falhada.")
+                    st.sidebar.error("Incorrect password.")
+                    logging.warning("Failed admin login attempt.")
     else:
-        st.sidebar.success("Sessão de administrador activa.")
+        st.sidebar.success("Admin session active.")
         
-        st.sidebar.subheader("🕷️ Automação Web")
-        if st.sidebar.button("🔄 Sincronizar Todos os Horários (Scraping)", use_container_width=True):
-            with st.spinner("O robô está a ler o site da Guimabus..."):
-                resultado_scraping = sincronizar_todos_horarios_guimabus()
-                resultado_indice = construir_indice_paragens()
-                st.sidebar.success(resultado_scraping)
-                st.sidebar.success(resultado_indice)
+        st.sidebar.subheader("🕷️ Web Automation")
+        if st.sidebar.button("🔄 Sync All Schedules (Scraping)", use_container_width=True):
+            with st.spinner("The robot is reading the Guimabus website..."):
+                scraping_result = sync_all_guimabus_schedules()
+                index_result = build_stop_index()
+                st.sidebar.success(scraping_result)
+                st.sidebar.success(index_result)
 
-        if st.sidebar.button("🗺️ Reconstruir Índice de Paragens", use_container_width=True):
-            with st.spinner("A reconstruir o índice a partir da cache já existente..."):
-                st.sidebar.success(construir_indice_paragens())
+        if st.sidebar.button("🗺️ Rebuild Stop Index", use_container_width=True):
+            with st.spinner("Rebuilding index from existing cache..."):
+                st.sidebar.success(build_stop_index())
 
-        if st.sidebar.button("📍 Descobrir Freguesia de Cada Paragem", use_container_width=True):
-            st.sidebar.caption("A perguntar ao OpenStreetMap onde fica cada paragem...")
-            barra_progresso = st.sidebar.progress(0.0)
-            texto_progresso = st.sidebar.empty()
+        if st.sidebar.button("📍 Discover Parish for Each Stop", use_container_width=True):
+            st.sidebar.caption("Querying OpenStreetMap for each stop's parish...")
+            progress_bar = st.sidebar.progress(0.0)
+            progress_text = st.sidebar.empty()
 
-            def _atualizar_progresso(atual, total, paragem_atual):
-                barra_progresso.progress(atual / total)
-                texto_progresso.caption(f"{atual}/{total}: {paragem_atual}")
+            def _update_progress(current, total, current_stop):
+                progress_bar.progress(current / total)
+                progress_text.caption(f"{current}/{total}: {current_stop}")
 
-            resultado_enriquecimento = enriquecer_paragens_com_freguesia(progresso_callback=_atualizar_progresso)
-            st.sidebar.success(resultado_enriquecimento)
+            enrichment_result = enrich_stops_with_parish(progress_callback=_update_progress)
+            st.sidebar.success(enrichment_result)
 
-        if st.sidebar.button("🔄 Sincronizar Títulos e Tarifário", use_container_width=True):
-            with st.spinner("O robô está a ler titulos/ e tarifarios/..."):
-                resultado_titulos = sincronizar_titulos_e_tarifario()
-                st.sidebar.success(resultado_titulos)
+        if st.sidebar.button("🔄 Sync Tickets and Tariff", use_container_width=True):
+            with st.spinner("The robot is reading tickets/ and tariff/..."):
+                tickets_result = sync_tickets_and_tariff()
+                st.sidebar.success(tickets_result)
                 
-        if st.sidebar.button("Sair da área de administrador", key="admin_logout_btn"):
-            st.session_state.admin_autenticado = False
+        if st.sidebar.button("Logout of Administrator Area", key="admin_logout_btn"):
+            st.session_state.admin_authenticated = False
             st.rerun()
 
-        st.sidebar.subheader("📊 Telemetria e BD")
-        if os.path.exists("agente_memoria.db"):
-            with open("agente_memoria.db", "rb") as f:
-                st.sidebar.download_button("📥 Exportar DB SQLite (.db)", f, "agente_memoria.db", "application/octet-stream", use_container_width=True)
+        st.sidebar.subheader("📊 Telemetry and DB")
+        if os.path.exists("agent_memory.db"):
+            with open("agent_memory.db", "rb") as f:
+                st.sidebar.download_button("📥 Export SQLite DB (.db)", f, "agent_memory.db", "application/octet-stream", use_container_width=True)
 
-        with st.sidebar.expander("👁️ Ver Logs do Sistema"):
-            if os.path.exists("auditoria_agente.log"):
-                with open("auditoria_agente.log", "r", encoding="utf-8") as f:
-                    linhas_log = f.readlines()[-10:]
-                    for linha in linhas_log: st.caption(linha.strip())
+        with st.sidebar.expander("👁️ View System Logs"):
+            if os.path.exists("agent_audit.log"):
+                with open("agent_audit.log", "r", encoding="utf-8") as f:
+                    log_lines = f.readlines()[-10:]
+                    for line in log_lines: st.caption(line.strip())
 
-        with st.sidebar.expander("🗄️ Histórico Permanente Global (BD)"):
-            if os.path.exists("agente_memoria.db"):
-                conn = sqlite3.connect("agente_memoria.db")
+        with st.sidebar.expander("🗄️ Global Permanent History (DB)"):
+            if os.path.exists("agent_memory.db"):
+                conn = sqlite3.connect("agent_memory.db")
                 cursor = conn.cursor()
-                cursor.execute("SELECT timestamp, session_id, role, content FROM historico_global ORDER BY id DESC LIMIT 30")
-                linhas_bd = cursor.fetchall()
+                cursor.execute("SELECT timestamp, session_id, role, content FROM global_history ORDER BY id DESC LIMIT 30")
+                db_lines = cursor.fetchall()
                 conn.close()
-                for r in reversed(linhas_bd):
-                    hora_min = r[0].split(" ")[1] if " " in r[0] else r[0]
-                    sessao = r[1]
+                for r in reversed(db_lines):
+                    hr_min = r[0].split(" ")[1] if " " in r[0] else r[0]
+                    session = r[1]
                     if r[2] == "user":
-                        st.markdown(f"**🟢 [{hora_min}] Visitante ({sessao}):** {r[3]}")
+                        st.markdown(f"**🟢 [{hr_min}] Visitor ({session}):** {r[3]}")
                     else:
-                        st.markdown(f"**🤖 [{hora_min}] Agente ({sessao}):** {r[3]}")
+                        st.markdown(f"**🤖 [{hr_min}] Agent ({session}):** {r[3]}")
                     st.divider()
 
-if st.session_state.jogo_ativo:
-    renderizar_jogo()
+if st.session_state.game_active:
+    render_arcade_game()
 
-if st.session_state.get("passe_ativo"):
-    renderizar_pedido_passe()
+if st.session_state.get("ticket_active"):
+    render_ticket_request()
 
-avisos_hoje = obter_avisos_facebook()
-if avisos_hoje:
-    renderizar_rodape_anuncios(avisos_hoje)
+today_warnings = get_facebook_warnings()
+if today_warnings:
+    render_ad_footer(today_warnings)
 
 for message in st.session_state.messages:
-    avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
-    with st.chat_message(message["role"], avatar=avatar_tipo):
+    avatar_type = "💼" if message["role"] == "assistant" else "👤"
+    with st.chat_message(message["role"], avatar=avatar_type):
         st.markdown(message["content"])
 
-prompt_texto = st.chat_input("Como posso ajudar hoje?")
-audio_file = st.audio_input("Falar")
+prompt_text = st.chat_input("How can I help you today?")
+audio_file = st.audio_input("Speak")
 
 prompt = None
-tipo_input = "Texto"
+input_type = "Text"
 
-if "ultimo_audio_processado_id" not in st.session_state:
-    st.session_state.ultimo_audio_processado_id = None
+if "last_processed_audio_id" not in st.session_state:
+    st.session_state.last_processed_audio_id = None
 
-if prompt_texto:
-    prompt = prompt_texto
+if prompt_text:
+    prompt = prompt_text
 elif audio_file:
-    audio_id_atual = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
+    current_audio_id = audio_file.file_id if hasattr(audio_file, "file_id") else audio_file.name
 
-    if audio_id_atual != st.session_state.ultimo_audio_processado_id:
-        st.session_state.ultimo_audio_processado_id = audio_id_atual
-        tipo_input = "Áudio"
-        with st.spinner("A processar e a transcrever o teu áudio..."):
+    if current_audio_id != st.session_state.last_processed_audio_id:
+        st.session_state.last_processed_audio_id = current_audio_id
+        input_type = "Audio"
+        with st.spinner("Processing and transcribing your audio..."):
             try:
                 audio_data = audio_file.read()
-                model_transcrever = genai.GenerativeModel("gemini-3.5-flash")
+                transcription_model = genai.GenerativeModel("gemini-3.5-flash")
                 audio_part = {"mime_type": "audio/wav", "data": audio_data}
 
-                response_transcricao = model_transcrever.generate_content([
-                    "Transcreve estritamente o áudio fornecido para texto, mantendo a pontuação correta e no idioma original. Não adiciones comentários extras.",
+                transcription_response = transcription_model.generate_content([
+                    "Transcribe the provided audio strictly to text, maintaining correct punctuation and the original language. Do not add extra comments.",
                     audio_part
                 ])
-                prompt = response_transcricao.text.strip()
-                logging.info(f"Transcrição de voz concluída com sucesso: '{prompt}'")
+                prompt = transcription_response.text.strip()
+                logging.info(f"Voice transcription completed successfully: '{prompt}'")
             except Exception as e:
-                st.error(f"Erro ao processar o ficheiro de voz: {e}")
-                logging.error(f"Falha na transcrição de áudio: {e}")
+                st.error(f"Error processing voice file: {e}")
+                logging.error(f"Audio transcription failed: {e}")
 
 if prompt:
-    logging.info(f"Input processado [{tipo_input}]: {prompt}")
-    guardar_mensagem_bd(st.session_state.session_id, "user", prompt)
+    logging.info(f"Input processed [{input_type}]: {prompt}")
+    save_message_db(st.session_state.session_id, "user", prompt)
     
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="💼"):
-        with st.spinner("Agente a processar contexto e ferramentas..."):
+        with st.spinner("Agent processing context and tools..."):
             try:
-                contexto_base = len_knowledge_base()
+                base_context = get_knowledge_base_content()
                 
-                PROMPT_EXECUTIVO = """Tu és o Assistente Executivo de Elite do Celso Ferreira.
-                És um Agente focado em automação, suporte e infraestrutura IT.
-                Responde de forma concisa em Português de Portugal utilizando sempre a Knowledge Base e ferramentas.
+                EXECUTIVE_PROMPT = """You are Celso Ferreira's Elite Executive Assistant.
+                You are an Agent focused on automation, IT support, and infrastructure.
 
-                Tens estas ferramentas relacionadas com a frota local da Guimabus:
-                - obter_dados_guimabus: estado em tempo real da frota.
-                - obter_horarios_paragem: previsão de tempos de espera para uma paragem específica.
-                - consultar_cache_horario_linha: consulta a cache local para ler os horários e tabelas fixas.
-                - consultar_tipologias_cache_tool: lê as tipologias de passe.
-                - consultar_tarifario_cache: lê a tabela tarifária completa.
-                - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
-                - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
-                - gerar_link_google_maps: recebe o nome de um local (paragem, café, hospital, rua) e devolve um link direto do Google Maps para esse sítio.
-                - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse.
+                CRUCIAL LANGUAGE RULE: You must respond concisely in European Portuguese (pt-PT) by default. HOWEVER, if the user asks you a question or communicates in English, you MUST switch and respond entirely in English.
 
-                LÓGICA DE PLANEAMENTO OBRIGATÓRIA E APRESENTAÇÃO DE HORÁRIOS:
-                1. Se o local NÃO É UMA PARAGEM (ex: café, fábrica), usa PRIMEIRO a ferramenta "encontrar_paragem_mais_proxima".
-                2. Usa "planear_viagem_com_transbordo" com os nomes exatos das paragens.
-                3. OBRIGATÓRIO: Sempre que indicares uma rota ou linha (seja direta ou com transbordo), ÉS OBRIGADO a chamar a ferramenta "consultar_cache_horario_linha" para CADA linha que sugeriste.
-                4. OBRIGATÓRIO: Na tua resposta ao utilizador, tens de apresentar os horários relevantes para a viagem e incluir SEMPRE a seguinte frase e hiperligação para CADA linha mencionada: "Consulta o ficheiro oficial completo aqui: [LINK DA LINHA]". NUNCA dês uma rota sem mostrar os horários e os respetivos links.
+                You have these tools related to the local Guimabus fleet:
+                - get_guimabus_data: real-time fleet status.
+                - get_stop_schedules: waiting time forecasts for a specific stop.
+                - query_line_schedule_cache: queries the local cache to read fixed schedules and tables.
+                - query_ticket_types_cache_tool: reads ticket types.
+                - query_tariff_cache: reads the complete tariff table.
+                - plan_trip_with_transfer: given an origin and destination stop, tells if there is a direct line or suggests a transfer.
+                - query_stop_parish_tool: tells which parish a stop is in.
+                - generate_google_maps_link: receives a location name (stop, cafe, hospital, street) and returns a direct Google Maps link.
+                - find_closest_stop: discovers the closest official bus stop to any cafe, factory, or point of interest.
 
-                REGRA DE EXECUÇÃO DE FERRAMENTAS (TOOL CALLING) - CRÍTICA:
-                NUNCA descrevas os passos que vais tomar para pesquisar. NUNCA tentes calcular rotas mentalmente nem adivinhar paragens (como Atainde ou afins) sem as ferramentas te darem essa informação. CHAMA AS FERRAMENTAS em silêncio. Só escreve o texto final depois de teres a resposta das ferramentas.
+                MANDATORY PLANNING LOGIC AND SCHEDULE PRESENTATION:
+                1. If the location IS NOT A STOP (e.g., cafe, factory), use the "find_closest_stop" tool FIRST.
+                2. Use "plan_trip_with_transfer" with the exact stop names.
+                3. MANDATORY: Whenever you indicate a route or line (direct or with transfer), YOU MUST call the "query_line_schedule_cache" tool for EACH line you suggested.
+                4. MANDATORY: In your reply to the user, you must present the relevant schedules for the trip and ALWAYS include the following phrase and hyperlink for EACH mentioned line (translated appropriately based on the language you are responding in): "Consulta o ficheiro oficial completo aqui: [LINE LINK]" / "Check the full official file here: [LINE LINK]". NEVER provide a route without showing the schedules and their respective links.
 
-                Usa sempre consultar_tipologias_cache_tool e consultar_tarifario_cache para perguntas sobre passes.
+                TOOL CALLING EXECUTION RULE - CRITICAL:
+                NEVER describe the steps you will take to search. NEVER try to calculate routes mentally or guess stops without the tools giving you that information. CALL THE TOOLS silently. Only write the final text after having the tools' response.
 
-                REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
-                NUNCA inventes, estimes ou "preenchas" dados que as ferramentas não te deram. Usa SEMPRE a informação em "[DATA E HORA ATUAL DO SISTEMA]". Se a ferramenta não te disser como ir de X para Y, pede desculpa e diz clara e honestamente que não tens essa ligação disponível na base de dados, em vez de inventares rotas falsas."""
+                Always use query_ticket_types_cache_tool and query_tariff_cache for ticket-related questions.
 
-                PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
+                ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
+                NEVER invent, estimate, or "fill in" data that the tools did not provide. ALWAYS use the information in "[CURRENT SYSTEM DATE AND TIME]". If the tool does not tell you how to go from X to Y, apologize and state clearly and honestly that you do not have that connection available in the database, instead of inventing fake routes."""
+
+                RECRUITER_PROMPT = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
                 Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
                 
-                PROMPT_HELPDESK_TUTOR = """Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
-                O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
-                Independentemente do problema de suporte, deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
-                'O Celso faria desta maneira para resolver este problema de IT:'
-                Depois, detalha passos de troubleshooting técnicos, comandos em PowerShell ou Linux, e boas práticas aplicadas com precisão."""
+                HELPDESK_TUTOR_PROMPT = """You are an IT Helpdesk and Support Technical Tutor.
+                Your goal is to act as an endless source of IT problem resolution.
 
-                prompt_normalizado = prompt.lower()
-                gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha"]
+                CRUCIAL LANGUAGE RULE: Respond in European Portuguese (pt-PT) by default. However, if the user asks in English, you must respond entirely in English.
+
+                Regardless of the IT issue, you MUST start your answer with this standard phrase (translated to the language you are using): 
+                'O Celso faria desta maneira para resolver este problema de IT:' / 'Celso would solve this IT problem like this:'
+                Then, detail technical troubleshooting steps, PowerShell or Linux commands, and properly applied best practices."""
+
+                normalized_prompt = prompt.lower()
+                helpdesk_triggers = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
                 
-                if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
-                    prompt_sistema_ativo = PROMPT_RECRUITER
-                    logging.info("Router selecionou a Persona: IT Technical Recruiter (EN)")
-                elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
-                    prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
-                    logging.info("Router selecionou a Persona: Tutor de Helpdesk / Modo Celso (PT)")
+                if "entrevista" in normalized_prompt or "interview" in normalized_prompt:
+                    active_system_prompt = RECRUITER_PROMPT
+                    logging.info("Router selected Persona: IT Technical Recruiter (EN)")
+                elif any(word in normalized_prompt for word in helpdesk_triggers):
+                    active_system_prompt = HELPDESK_TUTOR_PROMPT
+                    logging.info("Router selected Persona: Helpdesk Tutor / Celso Mode (Bilingual)")
                 else:
-                    prompt_sistema_ativo = PROMPT_EXECUTIVO
-                    logging.info("Router selecionou a Persona: Assistente Executivo (PT)")
+                    active_system_prompt = EXECUTIVE_PROMPT
+                    logging.info("Router selected Persona: Executive Assistant (Bilingual)")
 
-                historico_api = []
+                api_history = []
                 for msg in st.session_state.messages[:-1]:
-                    if msg["content"] != MENSAGEM_INICIAL:
-                        role_api = "model" if msg["role"] == "assistant" else "user"
-                        historico_api.append({"role": role_api, "parts": [msg["content"]]})
+                    if msg["content"] != INITIAL_MESSAGE:
+                        api_role = "model" if msg["role"] == "assistant" else "user"
+                        api_history.append({"role": api_role, "parts": [msg["content"]]})
                 
-                DIAS_SEMANA_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
-                MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+                PT_WEEKDAYS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+                PT_MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
 
-                def _formatar_data_pt(dt):
-                    return f"{DIAS_SEMANA_PT[dt.weekday()]}, {dt.day} de {MESES_PT[dt.month - 1]} de {dt.year}"
+                def _format_pt_date(dt):
+                    return f"{PT_WEEKDAYS[dt.weekday()]}, {dt.day} de {PT_MONTHS[dt.month - 1]} de {dt.year}"
 
-                agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-                amanha = agora + timedelta(days=1)
-                contexto_data = (
-                    f"[DATA E HORA ATUAL DO SISTEMA: "
-                    f"Hoje é {_formatar_data_pt(agora)}, são {agora.strftime('%H:%M')}. "
-                    f"Amanhã será {_formatar_data_pt(amanha)}.]"
+                now = datetime.now(ZoneInfo("Europe/Lisbon"))
+                tomorrow = now + timedelta(days=1)
+                date_context = (
+                    f"[CURRENT SYSTEM DATE AND TIME: "
+                    f"Today is {_format_pt_date(now)}, the time is {now.strftime('%H:%M')}. "
+                    f"Tomorrow will be {_format_pt_date(tomorrow)}.]"
                 )
 
-                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
+                enriched_prompt = f"{date_context}\n\n{base_context}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [
-                    obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, 
-                    consultar_tipologias_cache_tool, consultar_tarifario_cache, 
-                    planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, 
-                    gerar_link_google_maps, gerar_mapa_linha_html, encontrar_paragem_mais_proxima
+                agent_tools = [
+                    get_guimabus_data, get_stop_schedules, query_line_schedule_cache, 
+                    query_ticket_types_cache_tool, query_tariff_cache, 
+                    plan_trip_with_transfer, query_stop_parish_tool, 
+                    generate_google_maps_link, generate_line_map_html, find_closest_stop
                 ]
                 
-                TIMEOUT_SEGUNDOS = 25
-                candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+                TIMEOUT_SECONDS = 25
+                model_candidates = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
 
                 response = None
-                ultimo_erro_modelo = None
-                for nome_modelo in candidatos_modelo:
+                last_model_error = None
+                for model_name in model_candidates:
                     try:
                         model = genai.GenerativeModel(
-                            model_name=nome_modelo,
-                            system_instruction=prompt_sistema_ativo,
-                            tools=ferramentas_agente
+                            model_name=model_name,
+                            system_instruction=active_system_prompt,
+                            tools=agent_tools
                         )
-                        chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
+                        chat = model.start_chat(history=api_history, enable_automatic_function_calling=True)
                         response = chat.send_message(
-                            prompt_enriquecido,
-                            request_options={"timeout": TIMEOUT_SEGUNDOS}
+                            enriched_prompt,
+                            request_options={"timeout": TIMEOUT_SECONDS}
                         )
-                        if nome_modelo != candidatos_modelo[0]:
-                            logging.warning(f"Modelo principal falhou; resposta obtida com fallback '{nome_modelo}'.")
-                            st.info(f"ℹ️ Modelo principal indisponível — resposta gerada com '{nome_modelo}'.")
+                        if model_name != model_candidates[0]:
+                            logging.warning(f"Main model failed; answer obtained with fallback '{model_name}'.")
+                            st.info(f"ℹ️ Main model unavailable — answer generated with '{model_name}'.")
                         break
                     except Exception as e:
-                        ultimo_erro_modelo = e
+                        last_model_error = e
                         continue
 
                 if response is None:
-                    if ultimo_erro_modelo is not None and "429" in str(ultimo_erro_modelo):
-                        st.error("🚫 Limite diário gratuito da API do Gemini esgotado. Tenta novamente mais tarde.")
+                    if last_model_error is not None and "429" in str(last_model_error):
+                        st.error("🚫 Gemini API daily free limit reached. Please try again later.")
                     else:
-                        st.error("🚫 Não foi possível obter resposta de nenhum modelo disponível neste momento.")
+                        st.error("🚫 Could not get a response from any available models right now.")
                     st.stop()
 
                 full_response = response.text
                 st.markdown(full_response)
                 
-                logging.info(f"Resposta gerada com sucesso ({len(full_response)} caracteres).")
-                guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
+                logging.info(f"Response generated successfully ({len(full_response)} characters).")
+                save_message_db(st.session_state.session_id, "assistant", full_response)
                 
-                st.download_button("📥 Descarregar Resposta (.txt)", full_response, "resposta.txt")
+                st.download_button("📥 Download Response (.txt)", full_response, "response.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
                 
             except Exception as e:
-                st.error(f"Erro detetado no pipeline do agente: {e}")
-                logging.error(f"Falha crítica no pipeline do agente: {e}")
+                st.error(f"Error detected in agent pipeline: {e}")
+                logging.error(f"Critical failure in agent pipeline: {e}")
