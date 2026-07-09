@@ -243,7 +243,7 @@ except Exception:
 # --- INTEGRAÇÃO FACEBOOK RSS (COM INTELIGÊNCIA ARTIFICIAL PARA DATAS) ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.csv"
     avisos_ativos = []
     
     agora = datetime.now(ZoneInfo("Europe/Lisbon"))
