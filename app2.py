@@ -1888,16 +1888,16 @@ if is_updating:
             
     st.session_state.is_updating = False
     st.rerun() # Refresh força a libertação do input box abaixo.
-    
+# ---Language Buttons & Title---
 col1, col2, col3 = st.columns([12, 1, 1])
 with col1:
     st.title(ui["title"])
 with col2:
-    if st.button("🇵🇹 PT", use_container_width=True):
+    if st.button("🇵🇹", use_container_width=True):
         st.session_state.language = "PT"
         st.rerun()
 with col3:
-    if st.button("🇬🇧 EN", use_container_width=True):
+    if st.button("🇬🇧", use_container_width=True):
         st.session_state.language = "EN"
         st.rerun()
 # --- SIDEBAR DE ELITE ---
