@@ -2033,29 +2033,6 @@ if prompt:
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível."""
-                
-                PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
-                Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
-                Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
-                
-                PROMPT_HELPDESK_TUTOR = f"""Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
-                O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
-                
-                {LANGUAGE_INSTRUCTION}
-
-                Independentemente do problema de suporte, deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
-                'O Celso faria desta maneira para resolver este problema de IT:' (if PT) ou 'Celso would solve this IT problem like this:' (if EN)."""
-
-                prompt_normalizado = prompt.lower()
-                gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
-                
-                if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
-                    prompt_sistema_ativo = PROMPT_RECRUITER
-                elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
-                    prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
-                else:
-                    prompt_sistema_ativo = PROMPT_EXECUTIVO
-
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     if msg["content"] not in [ui["initial_msg"], UI_TEXT["PT"]["initial_msg"], UI_TEXT["EN"]["initial_msg"]]:
