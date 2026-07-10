@@ -2028,6 +2028,7 @@ if prompt:
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
+                - encontrar_paragem_mais_proxima : procura a paragem mais proxima de uma freguesia ou local
 
                 MANDATORY PLANNING LOGIC:
                 1. Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
@@ -2071,7 +2072,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, planear_viagem_com_transbordo]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima]
                 
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
