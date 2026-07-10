@@ -397,7 +397,11 @@ def encontrar_paragem_mais_proxima(local_nome: str):
         return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'."
     else:
         return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
-
+    if paragem_mais_proxima:
+        if menor_distancia > 1500:
+            return f"O local '{local_encontrado['nome_real']}' foi encontrado, mas a paragem mais próxima ('{paragem_mais_proxima}') está a {int(menor_distancia)} metros — distância elevada, pode não ser fiável. Confirma o nome exato do local."
+        return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'. ⚠️ Esta função só indica a paragem mais próxima geograficamente — NÃO confirma que linha passa por ela. Usa 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha' com o nome exato desta paragem para confirmar a linha real."
+    else:
 # 3. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 
@@ -2028,7 +2032,7 @@ if prompt:
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
-                - encontrar_paragem_mais_proxima : procura a paragem mais proxima de uma freguesia ou local
+                - encontrar_paragem_mais_proxima : procura a paragem mais próxima (geograficamente) de uma freguesia ou local. NUNCA confirma qual linha serve essa paragem — isso tem de ser sempre verificado depois com 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha'. NUNCA inventes o número da linha a partir desta ferramenta sozinha.
 
                 MANDATORY PLANNING LOGIC:
                 1. Prioridade- Use "planear_viagem_com_transbordo" com os nomes exatos das paragens. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
@@ -2073,7 +2077,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima]
                 
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
