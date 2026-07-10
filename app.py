@@ -1057,7 +1057,7 @@ def gerar_link_google_maps(local_nome: str):
     
     if MAPA_LOCAL:
         for chave_mapa, dados_local in MAPA_LOCAL.items():
-            if chave_pesquisa in chave_mapa or chave_mapa in chave_pesquisa:
+            if re.search(r'\b' + re.escape(chave_pesquisa) + r'\b', chave_mapa) or re.search(r'\b' + re.escape(chave_mapa) + r'\b', chave_pesquisa):
                 nome_real = dados_local["nome_real"]
                 lat = dados_local["lat"]
                 lon = dados_local["lon"]
