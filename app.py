@@ -810,6 +810,7 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
     </script>
     """
     components.html(html_rodape, height=170)
+    
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
