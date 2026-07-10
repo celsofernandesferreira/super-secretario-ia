@@ -369,7 +369,6 @@ def calcular_distancia(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 def encontrar_paragem_mais_proxima(local_nome: str):
-def encontrar_paragem_mais_proxima(local_nome: str):
     """Encontra a paragem de autocarro mais próxima de qualquer café, rua ou fábrica."""
     if not MAPA_LOCAL:
         return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
