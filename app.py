@@ -1991,16 +1991,25 @@ if prompt:
                     "MANDATORY: Whenever asked for directions or schedules, you MUST present the departure/arrival times by using the `consultar_cache_horario_linha` tool for the suggested lines. NEVER just output the lines without schedules. Always query the schedules for the lines you find. At the end, include the official links."
                 )
 
-                PROMPT_EXECUTIVO = f"""Tu és o Assistente Executivo de Elite do Celso Ferreira.
-                És um Agente focado em automação, suporte e infraestrutura IT.
-                Tu és o Agente de Operações da Guimabus.
-                REGRA DE OURO: Segue um ciclo de trabalho em 3 fases:
-                FASE 1: VERIFICAÇÃO. Se o local pedido não for uma paragem, usa 'encontrar_paragem_mais_proxima'. Em caso de não ser uma paragem a ordem de verificação é procurar por Freguesia, se nao corresponder Locais, verifica sempre qual se aproxima mais, Se não souberes, PARA e pergunta ao utilizador.
-                FASE 2: PLANEAMENTO. Usa 'planear_viagem_com_transbordo' apenas com o nome da paragem validado.
-                FASE 3: CONSULTA. Usa 'consultar_cache_horario_linha' para cada linha identificada.
+                PROMPT_EXECUTIVO = f"""Tu és o Agente Executivo da Guimabus.
+                A tua lógica de pensamento DEVE ser:
 
-Se o output de uma ferramenta for vazio ou erro, NÃO TENTES ADIVINHAR. Responde apenas: 'Não possuo essa informação nos meus registos atuais.'
+                [PROTOCOLO DE EXECUÇÃO - SEGUIR ESTA ORDEM]
+                1. ANALISAR: O pedido envolve um local? 
+                -> Se sim, o local é uma paragem ou freguesia conhecida?
+                -> Se não, usa 'encontrar_paragem_mais_proxima'. 
+                -> Se a ferramenta falhar ou não encontrar, DIZ AO UTILIZADOR que não encontraste e PARA. 
+                -> NUNCA inventes uma localização.
 
+                2. ROTEAMENTO: Com a paragem validada, usa 'planear_viagem_com_transbordo'.
+                -> Se o resultado for "Não encontrei", PARA. Não tentes inventar rotas.
+
+                3. DADOS FINAIS: Com as linhas de autocarro validadas, usa 'consultar_cache_horario_linha'.
+                -> Apresenta o horário EXATO da cache juntamente com o link das linhas necessarias para o trajecto.
+                -> Se a cache estiver vazia, avisa o utilizador que não tens horários para aquela linha específica.
+
+[REGRA DE OURO]
+É preferível dizer "Não sei" ou "Não encontrei" do que fornecer um dado aproximado ou inventado. Se não tens certeza absoluta baseada nas ferramentas, responde: "Lamento, não tenho essa informação disponível nos meus registos."
                 {LANGUAGE_INSTRUCTION}
 
                 Tens estas ferramentas relacionadas com a frota local da Guimabus:
