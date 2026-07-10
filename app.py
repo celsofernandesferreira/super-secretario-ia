@@ -522,6 +522,56 @@ def obter_avisos_facebook():
             if any(kw in texto_completo for kw in keywords_urgentes):
                 prioridade = 5 # Prioridade alta
             
+@st.cache_data(ttl=3600)
+def obter_avisos_facebook():
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    avisos_ativos = []
+    # Usamos UTC para comparar corretamente com as datas do RSS
+    agora = datetime.now(timezone.utc) 
+
+    try:
+        response = requests.get(url_rss, timeout=10)
+        soup = BeautifulSoup(response.content, "xml") 
+        itens = soup.find_all("item")
+        
+        # Palavras-chave que ativam a Prioridade Máxima
+        keywords_urgentes = ["obras", "trânsito", "greve", "corte", "interrupção", "condicionamento", "desvio", "urgente"]
+        
+        for item in itens[:10]:
+            titulo = item.find("title").text if item.find("title") else "Aviso"
+            
+            # --- 1. LÓGICA DE EXPIRAÇÃO BASEADA NA DATA DE PUBLICAÇÃO ---
+            pub_date_str = item.find("pubDate").text if item.find("pubDate") else None
+            if pub_date_str:
+                try:
+                    # Converte a string do RSS (Ex: Mon, 10 Jul 2026 13:25:59 GMT) para datetime
+                    pub_date = email.utils.parsedate_to_datetime(pub_date_str)
+                    
+                    # Se a publicação tiver mais de 7 dias, consideramos expirada e ignoramos
+                    if (agora - pub_date).days > 7:
+                        continue 
+                except Exception as e:
+                    logging.warning(f"Erro ao analisar data do RSS: {e}")
+
+            content_encoded = item.find("content:encoded")
+            desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
+            texto_limpo = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            
+            # Extração de imagem
+            enclosure = item.find("enclosure")
+            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
+            if not img_url and desc:
+                img_match = re.search(r'src="([^"]+)"', desc)
+                if img_match:
+                    img_url = img_match.group(1)
+            
+            # --- 2. LÓGICA DE PRIORIDADE BASEADA EM PALAVRAS-CHAVE ---
+            texto_completo = (titulo + " " + texto_limpo).lower()
+            prioridade = 1 # Prioridade normal
+            
+            if any(kw in texto_completo for kw in keywords_urgentes):
+                prioridade = 5 # Prioridade alta
+            
             # Garantir que há texto para mostrar
             texto_final = texto_limpo if texto_limpo else titulo
             
@@ -539,30 +589,6 @@ def obter_avisos_facebook():
         
     return avisos_ativos
 
-
-        prompt = f"""
-        Hoje é {data_hoje_str}. Analisa os posts abaixo.
-        1. Identifica a data limite de cada aviso.
-        2. Se a data limite já passou em relação a {data_hoje_str}, considera o aviso EXPIROU.
-        3. Se o aviso é sobre obras/trânsito/greves, prioridade 5. Caso contrário, prioridade 1.
-        4. Devolve APENAS um JSON: [ {{"id": 0, "prioridade": 5}}, ... ] (apenas os ATIVOS).
-        Posts: {json.dumps(posts, ensure_ascii=False)}
-        """
-        model = genai.GenerativeModel("gemini-3.5-flash")
-        resp = model.generate_content(prompt)
-        match = re.search(r'\[(.*?)\]', resp.text, re.DOTALL)
-        
-        if match:
-            resultado = json.loads("[" + match.group(1) + "]")
-            for r in resultado:
-                p = next((x for x in posts if x["id"] == r["id"]), None)
-                if p:
-                    avisos_ativos.append({"texto": p["texto"], "imagem": p["imagem"], "prioridade": r["prioridade"]})
-            avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
-            
-    except Exception as e:
-        logging.error(f"Erro RSS com AI: {e}")
-    return avisos_ativos
 
 def renderizar_rodape_anuncios(anuncios_ativos, ui):
     if not anuncios_ativos: return
