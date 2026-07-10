@@ -1993,6 +1993,7 @@ if prompt:
                 MANDATORY PLANNING LOGIC:
                 1. Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
                 2. {SCHEDULE_INSTRUCTION}
+                3. Verifique se existem varias linhas mencionar todas e os seus horários
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível."""
