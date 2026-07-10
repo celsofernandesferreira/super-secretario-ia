@@ -2031,7 +2031,7 @@ if prompt:
                 - encontrar_paragem_mais_proxima : procura a paragem mais proxima de uma freguesia ou local
 
                 MANDATORY PLANNING LOGIC:
-                1. Prioridade- Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
+                1. Prioridade- Use "planear_viagem_com_transbordo" com os nomes exatos das paragens. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
                 2. Prioridade- {SCHEDULE_INSTRUCTION}
                 3 Verificar Sempre a localizaçao quando perguntado sobre uma freguesia
                 4. - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
