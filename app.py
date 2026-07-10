@@ -657,6 +657,87 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
         }}
         .disclaimer {{
             background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
+# --- INTEGRAÇÃO FACEBOOK RSS (AI DRIVEN) ---
+@st.cache_data(ttl=3600)
+def obter_avisos_facebook():
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    avisos_ativos = []
+    
+    agora_utc = datetime.now(timezone.utc)
+    agora_local = datetime.now()
+
+    try:
+        response = requests.get(url_rss, timeout=10)
+        soup = BeautifulSoup(response.content, "xml") 
+        itens = soup.find_all("item")
+        
+        for item in itens[:15]: 
+            title = item.find("title").text if item.find("title") else "Aviso"
+            content_encoded = item.find("content:encoded")
+            desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
+            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            
+            enclosure = item.find("enclosure")
+            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
+            if not img_url and desc:
+                img_match = re.search(r'src="([^"]+)"', desc)
+                if img_match: img_url = img_match.group(1)
+            
+            texto_minusculas = clean_text.lower() + " " + title.lower()
+            
+            if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
+                continue
+            
+            # Cálculo simplificado de prioridade
+            pub_date_node = item.find("pubDate")
+            dias_passados = 0
+            if pub_date_node:
+                try:
+                    data_post = email.utils.parsedate_to_datetime(pub_date_node.text)
+                    dias_passados = (agora_utc - data_post).days
+                except Exception:
+                    pass
+            
+            if dias_passados > 7:
+                continue
+                
+            prioridade_calculada = 10 - dias_passados 
+            
+            palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
+            if any(kw in texto_minusculas for kw in palavras_criticas):
+                prioridade_calculada += 20
+        
+            texto_final = clean_text if len(clean_text) > 5 else title
+            
+            avisos_ativos.append({
+                "texto": texto_final, 
+                "imagem": img_url, 
+                "prioridade": prioridade_calculada
+            })
+            
+        avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+        return avisos_ativos[:4]
+            
+    except Exception as e:
+        logging.error(f"Erro RSS Nativo: {e}")
+        
+    return avisos_ativos
+
+def renderizar_rodape_anuncios(anuncios_ativos, ui):
+    if not anuncios_ativos: return
+    
+    dados_js = json.dumps(anuncios_ativos)
+    
+    html_rodape = f"""
+    <style>
+        .footer-wrapper {{
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
+            background-color: #1e1e1e; color: white; z-index: 9999;
+            border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            display: flex; flex-direction: column; overflow: hidden;
+        }}
+        .disclaimer {{
+            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
             text-align: center; font-weight: bold; border-bottom: 1px solid #444;
         }}
         .content-area {{ 
@@ -728,6 +809,7 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
     </script>
     """
     components.html(html_rodape, height=170)
+)
 
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
