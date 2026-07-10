@@ -657,6 +657,7 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
         }}
         .disclaimer {{
             background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
+            
 # --- INTEGRAÇÃO FACEBOOK RSS (AI DRIVEN) ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
@@ -809,8 +810,6 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
     </script>
     """
     components.html(html_rodape, height=170)
-)
-
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
