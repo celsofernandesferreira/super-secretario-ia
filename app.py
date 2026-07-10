@@ -629,6 +629,113 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
             </div>
             <div class="text-container">
                 <div id="ticker-text"></div>
+# --- INTEGRAÇÃO FACEBOOK RSS (HEURÍSTICA - ZERO API COST) ---
+@st.cache_data(ttl=3600)
+def obter_avisos_facebook():
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    avisos_ativos = []
+    # Usamos UTC para comparar corretamente com as datas do RSS
+    agora = datetime.now(timezone.utc) 
+
+    try:
+        response = requests.get(url_rss, timeout=10)
+        soup = BeautifulSoup(response.content, "xml") 
+        itens = soup.find_all("item")
+        
+        # Palavras-chave que ativam a Prioridade Máxima
+        keywords_urgentes = ["obras", "trânsito", "greve", "corte", "interrupção", "condicionamento", "desvio", "urgente"]
+        
+        for item in itens[:10]:
+            titulo = item.find("title").text if item.find("title") else "Aviso"
+            
+            # --- 1. LÓGICA DE EXPIRAÇÃO BASEADA NA DATA DE PUBLICAÇÃO ---
+            pub_date_str = item.find("pubDate").text if item.find("pubDate") else None
+            if pub_date_str:
+                try:
+                    # Converte a string do RSS (Ex: Mon, 10 Jul 2026 13:25:59 GMT) para datetime
+                    pub_date = email.utils.parsedate_to_datetime(pub_date_str)
+                    
+                    # Se a publicação tiver mais de 7 dias, consideramos expirada e ignoramos
+                    if (agora - pub_date).days > 7:
+                        continue 
+                except Exception as e:
+                    logging.warning(f"Erro ao analisar data do RSS: {e}")
+
+            content_encoded = item.find("content:encoded")
+            desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
+            texto_limpo = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            
+            # Extração de imagem
+            enclosure = item.find("enclosure")
+            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
+            if not img_url and desc:
+                img_match = re.search(r'src="([^"]+)"', desc)
+                if img_match:
+                    img_url = img_match.group(1)
+            
+            # --- 2. LÓGICA DE PRIORIDADE BASEADA EM PALAVRAS-CHAVE ---
+            texto_completo = (titulo + " " + texto_limpo).lower()
+            prioridade = 1 # Prioridade normal
+            
+            if any(kw in texto_completo for kw in keywords_urgentes):
+                prioridade = 5 # Prioridade alta
+            
+            # Garantir que há texto para mostrar
+            texto_final = texto_limpo if texto_limpo else titulo
+            
+            avisos_ativos.append({
+                "texto": texto_final, 
+                "imagem": img_url, 
+                "prioridade": prioridade
+            })
+
+        # Ordenar a lista: Prioridade 5 primeiro, Prioridade 1 depois
+        avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+            
+    except Exception as e:
+        logging.error(f"Erro ao processar RSS (Local): {e}")
+        
+    return avisos_ativos
+
+def renderizar_rodape_anuncios(anuncios_ativos, ui):
+    if not anuncios_ativos: return
+    
+    dados_js = json.dumps(anuncios_ativos)
+    
+    html_rodape = f"""
+    <style>
+        .footer-wrapper {{
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
+            background-color: #1e1e1e; color: white; z-index: 9999;
+            border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            display: flex; flex-direction: column; overflow: hidden;
+        }}
+        .disclaimer {{
+            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
+            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
+        }}
+        .content-area {{ 
+            display: flex; align-items: center; flex: 1; padding: 0 20px; 
+        }}
+        .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
+        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
+        .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
+        #ticker-text {{ 
+            position: absolute; white-space: nowrap; font-size: 20px; 
+            font-weight: bold; top: 35px; left: 50%;
+        }}
+    </style>
+    
+    <div class="footer-wrapper">
+        <div class="disclaimer">
+            {ui['ad_disclaimer']}
+        </div>
+        <div class="content-area">
+            <div class="img-box">
+                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
+            </div>
+            <div class="text-container">
+                <div id="ticker-text"></div>
             </div>
         </div>
     </div>
@@ -681,6 +788,7 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
         return dados
+
     if isinstance(dados, dict):
         for chave in ("vehicles", "data", "results", "items", "veiculos"):
             valor = dados.get(chave)
