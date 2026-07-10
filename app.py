@@ -1810,6 +1810,29 @@ if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
 
 # --- SIDEBAR DE ELITE ---
+is_updating = verificar_necessidade_sync(limite_dias=7)
+
+if is_updating:
+    st.error(ui["updating_system"], icon="⏳")
+    
+    with st.spinner(ui["robot_reading"]):
+        tasks = st.session_state.update_tasks
+        
+        if tasks.get("sch"):
+            sincronizar_todos_horarios_guimabus()
+            construir_indice_paragens()
+        elif tasks.get("idx"):
+            construir_indice_paragens()
+        
+        if tasks.get("tkt"):
+            sincronizar_titulos_e_tarifario()
+            
+        if tasks.get("geo"):
+            importar_pois_guimaraes()
+            
+    st.session_state.is_updating = False
+    st.rerun() # Refresh força a libertação do input box abaixo.
+
 with st.sidebar:
     st.header(ui["sidebar_panel"])
     if st.button(ui["clear_history"], use_container_width=True):
