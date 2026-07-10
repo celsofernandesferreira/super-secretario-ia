@@ -2031,8 +2031,9 @@ if prompt:
                 - encontrar_paragem_mais_proxima : procura a paragem mais proxima de uma freguesia ou local
 
                 MANDATORY PLANNING LOGIC:
-                1. Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
-                2. {SCHEDULE_INSTRUCTION}
+                1. Prioridade- Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
+                2. Prioridade- {SCHEDULE_INSTRUCTION}
+                2.2 Caso ja tenhas a resposta correcta paras aqui
                 3. - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
                 4. Se o utilizador pedir direções ou como ir para/de um local que NÃO É UMA PARAGEM (como um café, restaurante, loja ou fábrica), tu DEVES usar primeiro a ferramenta "encontrar_paragem_mais_proxima" para descobrir qual é a paragem da Guimabus que fica perto desse local.
                 5. Nunca associar freguesias a paragens apenas as linhas
