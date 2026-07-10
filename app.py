@@ -375,7 +375,7 @@ def encontrar_paragem_mais_proxima(local_nome: str):
     chave_pesquisa = normalizar_nome_pesquisa(local_nome)
     local_encontrado = None
     for chave, dados in MAPA_LOCAL.items():
-        if chave_pesquisa in chave or chave in chave_pesquisa:
+        if re.search(r'\b' + re.escape(chave_pesquisa) + r'\b', chave) or re.search(r'\b' + re.escape(chave) + r'\b', chave_pesquisa):
             local_encontrado = dados
             break
     if not local_encontrado:
