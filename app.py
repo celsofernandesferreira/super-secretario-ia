@@ -2073,7 +2073,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps]
                 
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
