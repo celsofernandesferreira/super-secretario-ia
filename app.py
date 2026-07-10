@@ -2012,7 +2012,7 @@ Se o output de uma ferramenta for vazio ou erro, NÃO TENTES ADIVINHAR. Responde
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
-                - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
+                - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer Freguesia,café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
 
                 MANDATORY PLANNING LOGIC:
                 1. Se o utilizador pedir direções ou como ir para/de um local que NÃO É UMA PARAGEM (como um café, restaurante, loja ou fábrica), tu DEVES usar primeiro a ferramenta "encontrar_paragem_mais_proxima" para descobrir qual é a paragem da Guimabus que fica perto desse local.
