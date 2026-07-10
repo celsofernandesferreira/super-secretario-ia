@@ -601,6 +601,71 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
         }}
         .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
         #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
+        .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
+        #ticker-text {{ 
+            position: absolute; white-space: nowrap; font-size: 20px; 
+            font-weight: bold; top: 35px; left: 50%;
+        }}
+    </style>
+    
+    <div class="footer-wrapper">
+        <div class="disclaimer">
+            {ui['ad_disclaimer']}
+        </div>
+        <div class="content-area">
+            <div class="img-box">
+                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
+            </div>
+            <div class="text-container">
+                <div id="ticker-text"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const anuncios = {dados_js};
+        let indice = 0;
+        const txt = document.getElementById('ticker-text');
+        const img = document.getElementById('ticker-img');
+        const container = document.querySelector('.text-container');
+
+        async function correrAviso() {{
+            const a = anuncios[indice];
+            
+            txt.innerText = "🚨 " + (a.texto || a.titulo || "{ui['ad_notice']}");
+            
+            if (a.imagem && a.imagem.trim() !== "") {{
+                img.src = a.imagem;
+                img.style.display = "block";
+                img.style.visibility = "visible";
+            }} else {{
+                img.style.display = "none";
+            }}
+            
+            txt.style.animation = 'none';
+            txt.offsetHeight;
+            txt.style.animation = 'scroll-left 25s linear infinite';
+            
+            let pos = container.offsetWidth / 2;
+            txt.style.left = pos + "px";
+            
+            function animar() {{
+                pos -= 2; 
+                txt.style.left = pos + "px";
+                if (pos < -txt.offsetWidth) {{
+                    indice = (indice + 1) % anuncios.length;
+                    setTimeout(correrAviso, 2000); 
+                }} else {{
+                    requestAnimationFrame(animar);
+                }}
+            }}
+            animar();
+        }}
+        correrAviso();
+    </script>
+    """
+    components.html(html_rodape, height=170)
+
 # --- INTEGRAÇÃO FACEBOOK RSS (LÓGICA NATIVA INTELIGENTE) ---
 def extrair_data_futura(texto):
     PT_MONTHS = {
