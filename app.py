@@ -2033,6 +2033,7 @@ if prompt:
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível."""
+               
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
                     if msg["content"] not in [ui["initial_msg"], UI_TEXT["PT"]["initial_msg"], UI_TEXT["EN"]["initial_msg"]]:
