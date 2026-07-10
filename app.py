@@ -2043,6 +2043,8 @@ if prompt:
                 10. Nos horarios apenas se tiver horas em frente a paragem e que significa que passa la nesse horario
                 11. verifica todos os horarios de ida e volta , alguns horarios tem varias paginas
                 12. quando pedem guimaraes significa goncalo, central de camionagem, s.damaso norte ou s.damaso sul
+                13. quando pedem trajecto  tem de verificar ambos os lados de todas as linhas.
+                14. mesmo que ja tenhas encontrado uma solucao tens de verificar todas 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível.
                 Se o resultado de uma ferramenta contiver "⚠️ NÃO CONFIRMADO" ou "📍", és OBRIGADO a comunicar essa incerteza ao utilizador nas mesmas palavras (ex: "não tenho confirmação exata, mas..."). NUNCA apresentes uma paragem/linha encontrada apenas por semelhança de nome ou título como se fosse um facto confirmado."""
