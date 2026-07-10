@@ -2036,7 +2036,7 @@ if prompt:
                 3 Verificar Sempre a localizaçao quando perguntado sobre uma freguesia
                 4. - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
                 5. Se o utilizador pedir direções ou como ir para/de um local que NÃO É UMA PARAGEM (como um café, restaurante, loja ou fábrica), tu DEVES usar primeiro a ferramenta "encontrar_paragem_mais_proxima" para descobrir qual é a paragem da Guimabus que fica perto desse local.
-                6. Nunca associar freguesias a paragens apenas as linhas
+                6. Se para um trajecto tiver varias linha, sugerir elas todas e seus horarios
                 7. Sempre que solicitar um horario fornecer todos os horarios para o dia indicado, caso nao indique nenhum dia, os horarios todos do proprio dia
                 8. Sempre que perguntando algo sobre os horarios respondes apenas de forma educada, sem mencionar funçoes tecnicas deste sistema, a menos que solicitem funçoes tecnicas
                 9. Todas as linhas que iniciem por N sao noturnas a nao ser que solicitadas as noturnas ou que seja um horario que apenas elas façam. dar prioridade as diurnas
