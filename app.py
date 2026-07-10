@@ -369,6 +369,7 @@ def calcular_distancia(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 def encontrar_paragem_mais_proxima(local_nome: str):
+def encontrar_paragem_mais_proxima(local_nome: str):
     """Encontra a paragem de autocarro mais próxima de qualquer café, rua ou fábrica."""
     if not MAPA_LOCAL:
         return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
@@ -380,28 +381,25 @@ def encontrar_paragem_mais_proxima(local_nome: str):
             break
     if not local_encontrado:
         return f"Não consegui localizar '{local_nome}' no mapa estático de Guimarães."
-    
+
     lat_origem = local_encontrado["lat"]
     lon_origem = local_encontrado["lon"]
     paragem_mais_proxima = None
     menor_distancia = float('inf')
-    
+
     for chave, dados in MAPA_LOCAL.items():
         if dados.get("tipo") in ["bus_stop", "public_transport"]:
             dist = calcular_distancia(lat_origem, lon_origem, dados["lat"], dados["lon"])
             if dist < menor_distancia:
                 menor_distancia = dist
                 paragem_mais_proxima = dados["nome_real"]
-                
-    if paragem_mais_proxima:
-        return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'."
-    else:
-        return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
+
     if paragem_mais_proxima:
         if menor_distancia > 1500:
             return f"O local '{local_encontrado['nome_real']}' foi encontrado, mas a paragem mais próxima ('{paragem_mais_proxima}') está a {int(menor_distancia)} metros — distância elevada, pode não ser fiável. Confirma o nome exato do local."
         return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'. ⚠️ Esta função só indica a paragem mais próxima geograficamente — NÃO confirma que linha passa por ela. Usa 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha' com o nome exato desta paragem para confirmar a linha real."
     else:
+        return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
 # 3. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 
