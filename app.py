@@ -714,6 +714,23 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
             background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
             text-align: center; font-weight: bold; border-bottom: 1px solid #444;
         }}
+def renderizar_rodape_anuncios(anuncios_ativos, ui):
+    if not anuncios_ativos: return
+    
+    dados_js = json.dumps(anuncios_ativos)
+    
+    html_rodape = f"""
+    <style>
+        .footer-wrapper {{
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
+            background-color: #1e1e1e; color: white; z-index: 9999;
+            border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
+            display: flex; flex-direction: column; overflow: hidden;
+        }}
+        .disclaimer {{
+            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
+            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
+        }}
         .content-area {{ 
             display: flex; align-items: center; flex: 1; padding: 0 20px; 
         }}
