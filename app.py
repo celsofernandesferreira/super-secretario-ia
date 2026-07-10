@@ -339,7 +339,7 @@ def guardar_score_bd(nome, pontor):
 
 inicializar_bd()
 
-# --- SISTEMA DE PESQUISA JSON & GEOLOCALIZAÇÃO RÁPIDA (MERGE APP 1) ---
+# --- SISTEMA DE PESQUISA JSON & GEOLOCALIZAÇÃO RÁPIDA ---
 def normalizar_nome_pesquisa(texto):
     if not texto: return ""
     t = texto.lower().strip()
@@ -369,7 +369,7 @@ def calcular_distancia(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 def encontrar_paragem_mais_proxima(local_nome: str):
-    """Encontra a paragem de autocarro mais próxima de qualquer café, rua ou fábrica (App 1)."""
+    """Encontra a paragem de autocarro mais próxima de qualquer café, rua ou fábrica."""
     if not MAPA_LOCAL:
         return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
     chave_pesquisa = normalizar_nome_pesquisa(local_nome)
@@ -471,7 +471,7 @@ except Exception:
     logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
     st.stop()
 
-# --- INTEGRAÇÃO FACEBOOK RSS (AI DRIVEN - MERGE APP 1) ---
+# --- INTEGRAÇÃO FACEBOOK RSS (AI DRIVEN) ---
 @st.cache_data(ttl=3600)
 def obter_avisos_facebook():
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
@@ -500,7 +500,6 @@ def obter_avisos_facebook():
             
             posts.append({"id": i, "titulo": titulo, "texto": texto_limpo, "imagem": img_url})
 
-        # IA para filtragem (App 1)
         prompt = f"""
         Hoje é {data_hoje_str}. Analisa os posts abaixo.
         1. Identifica a data limite de cada aviso.
@@ -1054,10 +1053,8 @@ def gerar_mapa_linha_html(linha_id):
     return caminho_ficheiro
 
 def gerar_link_google_maps(local_nome: str):
-    # MERGE APP 1 E APP 2 (Combinação Json com DB Local)
     chave_pesquisa = normalizar_nome_pesquisa(local_nome)
     
-    # 1º Tentativa via Mapa Estático (App 1)
     if MAPA_LOCAL:
         for chave_mapa, dados_local in MAPA_LOCAL.items():
             if chave_pesquisa in chave_mapa or chave_mapa in chave_pesquisa:
@@ -1067,7 +1064,6 @@ def gerar_link_google_maps(local_nome: str):
                 link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
                 return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir no Google Maps aqui: {link_maps}"
     
-    # 2º Tentativa via DB Geográfica SQLite (App 2)
     nome_norm = _normalizar_nome_paragem(local_nome)
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
@@ -1990,9 +1986,9 @@ if prompt:
                 LANGUAGE_INSTRUCTION = "CRUCIAL LANGUAGE RULE: You MUST respond entirely in European Portuguese (pt-PT)." if st.session_state.language == "PT" else "CRUCIAL LANGUAGE RULE: You MUST respond entirely in English."
 
                 SCHEDULE_INSTRUCTION = (
-                    "MANDATÓRIO: Sempre que te pedirem horários ou linhas, tens de apresentar OBRIGATORIAMENTE as horas de partida/chegada do horário pedido lendo a cache da ferramenta `consultar_cache_horario_linha`. NUNCA mandes apenas o link sem mostrares o horário no texto. No final da tua resposta, tens OBRIGATORIAMENTE de colocar o link: 'Consulta o horário oficial aqui: [LINK DA LINHA]'." 
+                    "MANDATÓRIO: Sempre que o utilizador perguntar como ir de um local para outro, ou pedir horários, tens OBRIGATORIAMENTE de apresentar as horas de partida/chegada lendo a cache da ferramenta `consultar_cache_horario_linha`. NUNCA mandes apenas as linhas ou os links sem mostrar os horários no texto. Após descobrires as linhas (seja rota direta ou transbordo), FAZ SEMPRE query aos horários dessas linhas. No final da resposta, coloca os links oficiais." 
                     if st.session_state.language == "PT" else 
-                    "MANDATORY: Whenever asked about schedules or lines, you MUST present the actual departure/arrival times by reading the cache from the `query_line_schedule_cache` tool. NEVER just send the link without showing the times in your text. At the very end of your response, you MUST include the link: 'Check the official schedule here: [LINE LINK]'."
+                    "MANDATORY: Whenever asked for directions or schedules, you MUST present the departure/arrival times by using the `consultar_cache_horario_linha` tool for the suggested lines. NEVER just output the lines without schedules. Always query the schedules for the lines you find. At the end, include the official links."
                 )
 
                 PROMPT_EXECUTIVO = f"""Tu és o Assistente Executivo de Elite do Celso Ferreira.
@@ -2012,8 +2008,9 @@ if prompt:
                 - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
 
                 MANDATORY PLANNING LOGIC:
-                1. Se o utilizador pedir direções ou como ir para/de um local que NÃO É UMA PARAGEM (como um café, restaurante, loja ou fábrica), tu DEVES usar primeiro a ferramenta "encontrar_paragem_mais_proxima" para descobrir qual é a paragem da Guimabus que fica perto desse local. SÓ DEPOIS de saberes o nome da paragem oficial é que usas o "planear_viagem_com_transbordo" usando o nome dessa paragem.
-                2. {SCHEDULE_INSTRUCTION}
+                1. Se o utilizador pedir direções ou como ir para/de um local que NÃO É UMA PARAGEM (como um café, restaurante, loja ou fábrica), tu DEVES usar primeiro a ferramenta "encontrar_paragem_mais_proxima" para descobrir qual é a paragem da Guimabus que fica perto desse local.
+                2. SÓ DEPOIS de saberes o nome da paragem oficial é que usas o "planear_viagem_com_transbordo" usando o nome exato dessas paragens.
+                3. {SCHEDULE_INSTRUCTION}
 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível."""
