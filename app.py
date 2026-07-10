@@ -2032,13 +2032,14 @@ if prompt:
                 - encontrar_paragem_mais_proxima : procura a paragem mais próxima (geograficamente) de uma freguesia ou local. NUNCA confirma qual linha serve essa paragem — isso tem de ser sempre verificado depois com 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha'. NUNCA inventes o número da linha a partir desta ferramenta sozinha.
 
                 MANDATORY PLANNING LOGIC:
-                1. Prioridade- Use "planear_viagem_com_transbordo" com os nomes exatos das paragens. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
-                2. Prioridade- {SCHEDULE_INSTRUCTION} Se ja tiveres encontrado nestes passos ignorar encontrar_paragem_mais_proxima
+                1. - Use "planear_viagem_com_transbordo" com os nomes exatos das paragens. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
+                2. - {SCHEDULE_INSTRUCTION} Se ja tiveres encontrado nestes passos ignorar encontrar_paragem_mais_proxima
                 4. - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
                 5. Se para um trajecto tiver varias linha, sugerir elas todas e seus horarios
                 6. Sempre que solicitar um horario fornecer todos os horarios para o dia indicado, caso nao indique nenhum dia, os horarios todos do proprio dia
                 7. Sempre que perguntando algo sobre os horarios respondes apenas de forma educada, sem mencionar funçoes tecnicas deste sistema, a menos que solicitem funçoes tecnicas
                 8. Todas as linhas que iniciem por N sao noturnas a nao ser que solicitadas as noturnas ou que seja um horario que apenas elas façam. dar prioridade as diurnas
+                9. Todas a paragens e possivel fazer transbordo seja no centro de guimaraes deslocando entre a pé entre as paragens s.goncalo, central de camionagem, s.damaso norte ou s.damaso sul. Mesmo que tenham de fazer dois ou 3 transbordos tens de arranjar solucao
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível.
                 Se o resultado de uma ferramenta contiver "⚠️ NÃO CONFIRMADO" ou "📍", és OBRIGADO a comunicar essa incerteza ao utilizador nas mesmas palavras (ex: "não tenho confirmação exata, mas..."). NUNCA apresentes uma paragem/linha encontrada apenas por semelhança de nome ou título como se fosse um facto confirmado."""
