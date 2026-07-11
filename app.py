@@ -368,18 +368,71 @@ def calcular_distancia(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c * 1000
 
-def encontrar_paragem_mais_proxima(local_nome: str):
-    """Encontra a paragem de autocarro mais próxima de qualquer café, rua ou fábrica."""
+def _pesquisar_no_mapa_local(local_nome: str):
+    """Procura um local no MAPA_LOCAL (geo_guimaraes.json) com correspondência tolerante por palavras,
+    em vez de exigir uma coincidência quase exata da string toda."""
     if not MAPA_LOCAL:
-        return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
+        return None
     chave_pesquisa = normalizar_nome_pesquisa(local_nome)
-    local_encontrado = None
+    tokens_pesquisa = set(t for t in chave_pesquisa.split("_") if t)
+    if not tokens_pesquisa:
+        return None
+
+    melhor_match, melhor_pontuacao = None, 0.0
     for chave, dados in MAPA_LOCAL.items():
-        if re.search(r'\b' + re.escape(chave_pesquisa) + r'\b', chave) or re.search(r'\b' + re.escape(chave) + r'\b', chave_pesquisa):
-            local_encontrado = dados
-            break
+        tokens_chave = set(t for t in chave.split("_") if t)
+        comuns = tokens_pesquisa & tokens_chave
+        if not comuns:
+            continue
+        pontuacao = len(comuns) / len(tokens_pesquisa)
+        if pontuacao > melhor_pontuacao:
+            melhor_pontuacao, melhor_match = pontuacao, dados
+
+    # Só aceitamos se pelo menos metade das palavras pesquisadas coincidirem,
+    # para não devolver falsos positivos.
+    if melhor_match and melhor_pontuacao >= 0.5:
+        return melhor_match
+    return None
+
+def _geocode_nominatim_local(local_nome: str):
+    """Geocodifica um nome de local em Guimarães em tempo real via OpenStreetMap (Nominatim),
+    usado como fallback quando o local não consta no mapa estático (geo_guimaraes.json)."""
+    headers = {'User-Agent': 'SuperSecretarioIA-Guimaraes/1.0'}
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
+            headers=headers, timeout=8
+        )
+        resp.raise_for_status()
+        resultados = resp.json()
+        if resultados:
+            r = resultados[0]
+            return {
+                "nome_real": r.get("display_name", local_nome).split(",")[0],
+                "lat": float(r["lat"]),
+                "lon": float(r["lon"]),
+            }
+    except Exception as e:
+        logging.error(f"Erro no geocoding Nominatim para '{local_nome}': {e}")
+    return None
+
+def encontrar_paragem_mais_proxima(local_nome: str):
+    """Encontra a paragem de autocarro mais próxima de qualquer café, rua, fábrica ou outro local.
+    Procura primeiro no mapa estático (geo_guimaraes.json); se não encontrar, tenta geocodificação
+    em tempo real via OpenStreetMap antes de desistir."""
+    local_encontrado = _pesquisar_no_mapa_local(local_nome)
+    fonte = "mapa estático"
+
     if not local_encontrado:
-        return f"Não consegui localizar '{local_nome}' no mapa estático de Guimarães."
+        local_encontrado = _geocode_nominatim_local(local_nome)
+        fonte = "OpenStreetMap (tempo real)"
+
+    if not local_encontrado:
+        return f"⚠️ NÃO CONFIRMADO: não consegui localizar '{local_nome}' nem no mapa estático de Guimarães nem por pesquisa em tempo real. Confirma o nome exato ou indica a rua/freguesia onde se situa."
+
+    if not MAPA_LOCAL:
+        return "O mapa estático não está carregado, não é possível calcular a paragem mais próxima."
 
     lat_origem = local_encontrado["lat"]
     lon_origem = local_encontrado["lon"]
@@ -393,12 +446,15 @@ def encontrar_paragem_mais_proxima(local_nome: str):
                 menor_distancia = dist
                 paragem_mais_proxima = dados["nome_real"]
 
+    nota_fonte = " (localização obtida via OpenStreetMap em tempo real, não do mapa oficial da Guimabus)" if fonte == "OpenStreetMap (tempo real)" else ""
+
     if paragem_mais_proxima:
         if menor_distancia > 1500:
-            return f"O local '{local_encontrado['nome_real']}' foi encontrado, mas a paragem mais próxima ('{paragem_mais_proxima}') está a {int(menor_distancia)} metros — distância elevada, pode não ser fiável. Confirma o nome exato do local."
-        return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'. ⚠️ Esta função só indica a paragem mais próxima geograficamente — NÃO confirma que linha passa por ela. Usa 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha' com o nome exato desta paragem para confirmar a linha real."
+            return f"O local '{local_encontrado['nome_real']}'{nota_fonte} foi encontrado, mas a paragem mais próxima ('{paragem_mais_proxima}') está a {int(menor_distancia)} metros — distância elevada, pode não ser fiável. Confirma o nome exato do local."
+        return f"O local '{local_encontrado['nome_real']}'{nota_fonte} fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'. ⚠️ Esta função só indica a paragem mais próxima geograficamente — NÃO confirma que linha passa por ela. Usa 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha' com o nome exato desta paragem para confirmar a linha real."
     else:
         return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
+
 
 def procurar_locais_por_tipo(tipo_local: str, limite: int = 20):
     """Procura no mapa estático de Guimarães (geo_guimaraes.json) todos os locais de um determinado
@@ -1166,17 +1222,14 @@ def gerar_mapa_linha_html(linha_id):
     return caminho_ficheiro
 
 def gerar_link_google_maps(local_nome: str):
-    chave_pesquisa = normalizar_nome_pesquisa(local_nome)
-    
-    if MAPA_LOCAL:
-        for chave_mapa, dados_local in MAPA_LOCAL.items():
-            if re.search(r'\b' + re.escape(chave_pesquisa) + r'\b', chave_mapa) or re.search(r'\b' + re.escape(chave_mapa) + r'\b', chave_pesquisa):
-                nome_real = dados_local["nome_real"]
-                lat = dados_local["lat"]
-                lon = dados_local["lon"]
-                link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-                return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir no Google Maps aqui: {link_maps}"
-    
+    local_encontrado = _pesquisar_no_mapa_local(local_nome)
+    if local_encontrado:
+        nome_real = local_encontrado["nome_real"]
+        lat = local_encontrado["lat"]
+        lon = local_encontrado["lon"]
+        link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        return f"📍 Encontrei a localização de '{nome_real}' no mapa estático. Podes abrir no Google Maps aqui: {link_maps}"
+
     nome_norm = _normalizar_nome_paragem(local_nome)
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
@@ -1190,9 +1243,15 @@ def gerar_link_google_maps(local_nome: str):
     if resultado:
         nome_real, lat, lon = resultado
         link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-        return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir diretamente no Google Maps aqui: {link_maps}"
-    
-    return f"Não consegui encontrar coordenadas GPS em cache para '{local_nome}'."
+        return f"📍 Encontrei a localização de '{nome_real}' na base de dados. Podes abrir diretamente no Google Maps aqui: {link_maps}"
+
+    # Último recurso: geocodificação em tempo real via OpenStreetMap.
+    local_live = _geocode_nominatim_local(local_nome)
+    if local_live:
+        link_maps = f"https://www.google.com/maps/search/?api=1&query={local_live['lat']},{local_live['lon']}"
+        return f"📍 Encontrei '{local_live['nome_real']}' via OpenStreetMap (tempo real, ⚠️ não confirmado pelo mapa oficial). Podes abrir no Google Maps aqui: {link_maps}"
+
+    return f"Não consegui encontrar coordenadas GPS para '{local_nome}'."
 
 # --- SISTEMA BLOQUEANTE DE SINCRONIZAÇÃO NO ARRANQUE ---
 def verificar_necessidade_sync(limite_dias: int = 7):
@@ -1625,7 +1684,64 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
 
     return resumo + aviso_precisao
 
-def consultar_freguesia_paragem_tool(nome: str):
+def _resolver_local_para_paragem(nome_local: str):
+    """Resolve um nome de local qualquer (café, rua, morada, etc.) à paragem de autocarro
+    mais próxima, usando primeiro o mapa estático e depois geocoding em tempo real como fallback.
+    Devolve (nome_paragem, distancia_metros, fonte) ou (None, None, None) se não conseguir."""
+    local = _pesquisar_no_mapa_local(nome_local)
+    fonte = "mapa estático"
+    if not local:
+        local = _geocode_nominatim_local(nome_local)
+        fonte = "OpenStreetMap (tempo real)"
+    if not local or not MAPA_LOCAL:
+        return None, None, None
+
+    paragem_mais_proxima, menor_distancia = None, float('inf')
+    for chave, dados in MAPA_LOCAL.items():
+        if dados.get("tipo") in ["bus_stop", "public_transport"]:
+            dist = calcular_distancia(local["lat"], local["lon"], dados["lat"], dados["lon"])
+            if dist < menor_distancia:
+                menor_distancia = dist
+                paragem_mais_proxima = dados["nome_real"]
+    return paragem_mais_proxima, menor_distancia, fonte
+
+def planear_viagem_desde_local(origem: str, destino: str):
+    """Planeia uma viagem entre DOIS LOCAIS QUAISQUER — cafés, ruas, moradas, fábricas, freguesias, etc.
+    — mesmo que não sejam o nome exato de uma paragem de autocarro. Usa isto sempre que o utilizador
+    pedir um trajeto a partir de um local que não é claramente já uma paragem/freguesia conhecida
+    (ex: 'como vou do café rio até ao hospital?'). Resolve cada local à paragem mais próxima e depois
+    usa a mesma lógica de 'planear_viagem_com_transbordo' para encontrar as linhas."""
+    if not origem or not destino:
+        return "É necessário indicar a localização de origem e de destino."
+
+    # 1) Tentativa direta: pode já ser o nome de uma paragem ou freguesia reconhecida.
+    resultado_direto = planear_viagem_com_transbordo(origem, destino)
+    if not resultado_direto.startswith("Não encontrei origem") and not resultado_direto.startswith("Não encontrei destino"):
+        return resultado_direto
+
+    # 2) Resolver cada local à paragem de autocarro mais próxima (mapa estático ou geocoding ao vivo).
+    paragem_o, dist_o, fonte_o = _resolver_local_para_paragem(origem)
+    paragem_d, dist_d, fonte_d = _resolver_local_para_paragem(destino)
+
+    if not paragem_o:
+        return f"⚠️ NÃO CONFIRMADO: não consegui identificar a origem '{origem}' nem localizar uma paragem de autocarro perto dela. Confirma o nome exato ou indica a rua/freguesia."
+    if not paragem_d:
+        return f"⚠️ NÃO CONFIRMADO: não consegui identificar o destino '{destino}' nem localizar uma paragem de autocarro perto dele. Confirma o nome exato ou indica a rua/freguesia."
+
+    resultado = planear_viagem_com_transbordo(paragem_o, paragem_d)
+
+    aviso = (
+        f"\n\n📍 Nota: '{origem}' foi associado à paragem mais próxima '{paragem_o}'"
+        f" (a {int(dist_o)}m, via {fonte_o})."
+        f"\n📍 Nota: '{destino}' foi associado à paragem mais próxima '{paragem_d}'"
+        f" (a {int(dist_d)}m, via {fonte_d})."
+    )
+    if fonte_o == "OpenStreetMap (tempo real)" or fonte_d == "OpenStreetMap (tempo real)":
+        aviso += "\n⚠️ Uma ou mais localizações vieram de pesquisa em tempo real (OpenStreetMap), não do mapa oficial — confirma o nome exato do local."
+
+    return resultado + aviso
+
+
     if not nome: return "É necessário indicar o nome."
     freguesia = obter_freguesia_de_paragem(nome)
     if freguesia: return f"A paragem '{nome}' fica na freguesia de {freguesia}."
@@ -2139,15 +2255,17 @@ if prompt:
                 - consultar_tipologias_cache_tool: lê as tipologias de passe.
                 - consultar_tarifario_cache: lê a tabela tarifária completa.
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
+                - planear_viagem_desde_local: como a anterior, mas aceita LOCAIS QUAISQUER (cafés, ruas, moradas, fábricas), não só paragens/freguesias — resolve cada local à paragem mais próxima automaticamente e depois planeia o trajeto. USA ESTA em vez de encadeares manualmente 'encontrar_paragem_mais_proxima' + 'planear_viagem_com_transbordo' sempre que a origem ou o destino não seja claramente já uma paragem ou freguesia.
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
-                - encontrar_paragem_mais_proxima : procura a paragem mais próxima (geograficamente) de uma freguesia ou local. NUNCA confirma qual linha serve essa paragem — isso tem de ser sempre verificado depois com 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha'. NUNCA inventes o número da linha a partir desta ferramenta sozinha.
-                - procurar_locais_por_tipo: recebe um tipo/categoria de local (ex: "café", "restaurante", "farmácia", "supermercado") e devolve a lista de locais desse tipo encontrados no mapa estático de Guimarães (geo_guimaraes.json). Usa esta ferramenta sempre que o utilizador pedir para "descobrir"/"listar"/"que opções há" de um tipo de sítio, em vez de inventares nomes de estabelecimentos. Depois de encontrares um nome, podes usar 'encontrar_paragem_mais_proxima' ou 'gerar_link_google_maps' com esse nome exato.
+                - encontrar_paragem_mais_proxima : procura a paragem mais próxima (geograficamente) de uma freguesia ou local. NUNCA confirma qual linha serve essa paragem — isso tem de ser sempre verificado depois com 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha'. NUNCA inventes o número da linha a partir desta ferramenta sozinha. Usa isto só quando só precisas da paragem, não do trajeto completo — para trajetos usa 'planear_viagem_desde_local'.
+                - procurar_locais_por_tipo: recebe um tipo/categoria de local (ex: "café", "restaurante", "farmácia", "supermercado") e devolve a lista de locais desse tipo encontrados no mapa estático de Guimarães (geo_guimaraes.json). Usa esta ferramenta sempre que o utilizador pedir para "descobrir"/"listar"/"que opções há" de um tipo de sítio, em vez de inventares nomes de estabelecimentos. Depois de encontrares um nome, podes usar 'encontrar_paragem_mais_proxima', 'gerar_link_google_maps' ou 'planear_viagem_desde_local' com esse nome exato.
 
                 MANDATORY PLANNING LOGIC:
-                1. - Use "planear_viagem_com_transbordo" com os nomes exatos das paragens. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
-                2. - {SCHEDULE_INSTRUCTION} Se ja tiveres encontrado nestes passos ignorar encontrar_paragem_mais_proxima
-                4. - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias).
+                1. - Se a origem OU o destino for um local qualquer (café, rua, morada, fábrica, ponto de interesse) e não uma paragem/freguesia óbvia, usa "planear_viagem_desde_local" diretamente — não tentes adivinhar a paragem manualmente.
+                2. - Se origem e destino já forem nomes de paragens ou freguesias conhecidas, usa "planear_viagem_com_transbordo" com os nomes exatos. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
+                3. - {SCHEDULE_INSTRUCTION} Se ja tiveres encontrado nestes passos ignorar encontrar_paragem_mais_proxima
+                4. - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias, com fallback para geocoding em tempo real).
                 5. Se para um trajecto tiver varias linha, sugerir elas todas e seus horarios
                 6. Sempre que solicitar um horario fornecer todos os horarios para o dia indicado, caso nao indique nenhum dia, os horarios todos do proprio dia
                 7. Sempre que perguntando algo sobre os horarios respondes apenas de forma educada, sem mencionar funçoes tecnicas deste sistema, a menos que solicitem funçoes tecnicas
@@ -2195,7 +2313,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima, procurar_locais_por_tipo]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, planear_viagem_desde_local, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima, procurar_locais_por_tipo]
                 
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
