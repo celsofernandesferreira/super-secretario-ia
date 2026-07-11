@@ -613,7 +613,7 @@ def obter_avisos_facebook():
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
         
-        for item in itens[:15]: 
+        for item in itens[:30]: 
             title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
@@ -684,8 +684,10 @@ def obter_avisos_facebook():
         # garantimos que mostramos pelo menos os últimos 2 posts da página!
         if not avisos_ativos and todos_avisos:
             return todos_avisos[:2]
-            
-        return avisos_ativos[:4]
+        
+        # Mostra TODOS os avisos ativos (obras/eventos com data futura + posts
+        # da última semana ainda não resolvidos), ordenados por prioridade.
+        return avisos_ativos
             
     except Exception as e:
         logging.error(f"Erro RSS Nativo: {e}")
@@ -1741,7 +1743,7 @@ def planear_viagem_desde_local(origem: str, destino: str):
 
     return resultado + aviso
 
-
+def consultar_freguesia_paragem_tool(nome: str):
     if not nome: return "É necessário indicar o nome."
     freguesia = obter_freguesia_de_paragem(nome)
     if freguesia: return f"A paragem '{nome}' fica na freguesia de {freguesia}."
