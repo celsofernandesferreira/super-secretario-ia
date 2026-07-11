@@ -2195,6 +2195,7 @@ if st.session_state.get("passe_ativo"):
     renderizar_pedido_passe(ui)
 
 avisos_hoje = obter_avisos_facebook()
+st.write(f"DEBUG: {len(avisos_hoje)} avisos encontrados")
 if avisos_hoje:
     renderizar_rodape_anuncios(avisos_hoje, ui)
 
