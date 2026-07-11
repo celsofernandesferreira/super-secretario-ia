@@ -14,7 +14,6 @@ import pdfplumber
 import unicodedata
 import folium
 import email.utils
-import json
 import math
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
@@ -340,6 +339,156 @@ def guardar_score_bd(nome, pontor):
 
 inicializar_bd()
 
+# --- SISTEMA DE PESQUISA JSON & GEOLOCALIZAÇÃO RÁPIDA ---
+def normalizar_nome_pesquisa(texto):
+    if not texto: return ""
+    t = texto.lower().strip()
+    t = unicodedata.normalize('NFKD', t)
+    t = ''.join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r'[^a-z0-9]', '_', t)
+    t = re.sub(r'_+', '_', t).strip('_')
+    return t
+
+@st.cache_data
+def carregar_mapa_estatico():
+    try:
+        with open("geo_guimaraes.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"Erro ao carregar geo_guimaraes.json: {e}")
+        return {}
+
+MAPA_LOCAL = carregar_mapa_estatico()
+
+def calcular_distancia(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c * 1000
+
+def _pesquisar_no_mapa_local(local_nome: str):
+    """Procura um local no MAPA_LOCAL (geo_guimaraes.json) com correspondência tolerante por palavras,
+    em vez de exigir uma coincidência quase exata da string toda."""
+    if not MAPA_LOCAL:
+        return None
+    chave_pesquisa = normalizar_nome_pesquisa(local_nome)
+    tokens_pesquisa = set(t for t in chave_pesquisa.split("_") if t)
+    if not tokens_pesquisa:
+        return None
+
+    melhor_match, melhor_pontuacao = None, 0.0
+    for chave, dados in MAPA_LOCAL.items():
+        tokens_chave = set(t for t in chave.split("_") if t)
+        comuns = tokens_pesquisa & tokens_chave
+        if not comuns:
+            continue
+        pontuacao = len(comuns) / len(tokens_pesquisa)
+        if pontuacao > melhor_pontuacao:
+            melhor_pontuacao, melhor_match = pontuacao, dados
+
+    # Só aceitamos se pelo menos metade das palavras pesquisadas coincidirem,
+    # para não devolver falsos positivos.
+    if melhor_match and melhor_pontuacao >= 0.5:
+        return melhor_match
+    return None
+
+def _geocode_nominatim_local(local_nome: str):
+    """Geocodifica um nome de local em Guimarães em tempo real via OpenStreetMap (Nominatim),
+    usado como fallback quando o local não consta no mapa estático (geo_guimaraes.json)."""
+    headers = {'User-Agent': 'SuperSecretarioIA-Guimaraes/1.0'}
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
+            headers=headers, timeout=8
+        )
+        resp.raise_for_status()
+        resultados = resp.json()
+        if resultados:
+            r = resultados[0]
+            return {
+                "nome_real": r.get("display_name", local_nome).split(",")[0],
+                "lat": float(r["lat"]),
+                "lon": float(r["lon"]),
+            }
+    except Exception as e:
+        logging.error(f"Erro no geocoding Nominatim para '{local_nome}': {e}")
+    return None
+
+def encontrar_paragem_mais_proxima(local_nome: str):
+    """Encontra a paragem de autocarro mais próxima de qualquer café, rua, fábrica ou outro local.
+    Procura primeiro no mapa estático (geo_guimaraes.json); se não encontrar, tenta geocodificação
+    em tempo real via OpenStreetMap antes de desistir."""
+    local_encontrado = _pesquisar_no_mapa_local(local_nome)
+    fonte = "mapa estático"
+
+    if not local_encontrado:
+        local_encontrado = _geocode_nominatim_local(local_nome)
+        fonte = "OpenStreetMap (tempo real)"
+
+    if not local_encontrado:
+        return f"⚠️ NÃO CONFIRMADO: não consegui localizar '{local_nome}' nem no mapa estático de Guimarães nem por pesquisa em tempo real. Confirma o nome exato ou indica a rua/freguesia onde se situa."
+
+    if not MAPA_LOCAL:
+        return "O mapa estático não está carregado, não é possível calcular a paragem mais próxima."
+
+    lat_origem = local_encontrado["lat"]
+    lon_origem = local_encontrado["lon"]
+    paragem_mais_proxima = None
+    menor_distancia = float('inf')
+
+    for chave, dados in MAPA_LOCAL.items():
+        if dados.get("tipo") in ["bus_stop", "public_transport"]:
+            dist = calcular_distancia(lat_origem, lon_origem, dados["lat"], dados["lon"])
+            if dist < menor_distancia:
+                menor_distancia = dist
+                paragem_mais_proxima = dados["nome_real"]
+
+    nota_fonte = " (localização obtida via OpenStreetMap em tempo real, não do mapa oficial da Guimabus)" if fonte == "OpenStreetMap (tempo real)" else ""
+
+    if paragem_mais_proxima:
+        if menor_distancia > 1500:
+            return f"O local '{local_encontrado['nome_real']}'{nota_fonte} foi encontrado, mas a paragem mais próxima ('{paragem_mais_proxima}') está a {int(menor_distancia)} metros — distância elevada, pode não ser fiável. Confirma o nome exato do local."
+        return f"O local '{local_encontrado['nome_real']}'{nota_fonte} fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'. ⚠️ Esta função só indica a paragem mais próxima geograficamente — NÃO confirma que linha passa por ela. Usa 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha' com o nome exato desta paragem para confirmar a linha real."
+    else:
+        return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
+
+
+def procurar_locais_por_tipo(tipo_local: str, limite: int = 20):
+    """Procura no mapa estático de Guimarães (geo_guimaraes.json) todos os locais de um determinado
+    tipo/categoria — por exemplo 'café', 'restaurante', 'farmácia', 'escola', 'supermercado', etc.
+    Útil quando o utilizador pede para listar/descobrir opções de um tipo de sítio (ex: 'que cafés há perto do centro?')."""
+    if not MAPA_LOCAL:
+        return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
+
+    if not tipo_local:
+        return "É necessário indicar o tipo de local a procurar (ex: 'café', 'farmácia', 'restaurante')."
+
+    tipo_norm = normalizar_nome_pesquisa(tipo_local)
+    encontrados = []
+    for chave, dados in MAPA_LOCAL.items():
+        tipo_dado_norm = normalizar_nome_pesquisa(str(dados.get("tipo", "")))
+        if not tipo_dado_norm:
+            continue
+        # Correspondência flexível: "cafe" também encontra "cafe_bar", "cafetaria", etc.
+        if tipo_norm in tipo_dado_norm or tipo_dado_norm in tipo_norm:
+            nome_real = dados.get("nome_real", chave)
+            encontrados.append(nome_real)
+
+    if not encontrados:
+        return f"Não encontrei nenhum local do tipo '{tipo_local}' no mapa estático de Guimarães (geo_guimaraes.json). Pode não existir esse tipo no ficheiro, ou o nome do tipo é diferente do que está guardado."
+
+    encontrados = sorted(set(encontrados))
+    total = len(encontrados)
+    listados = encontrados[:limite]
+    resumo = f"Encontrei {total} local(is) do tipo '{tipo_local}' em Guimarães:\n"
+    resumo += "\n".join(f"- {nome}" for nome in listados)
+    if total > limite:
+        resumo += f"\n... e mais {total - limite} local(is) não mostrados. Pede para refinar a pesquisa se precisares de mais."
+    return resumo
+
 # 3. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 
@@ -347,6 +496,18 @@ st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="
 if "language" not in st.session_state:
     st.session_state.language = "PT"
 ui = UI_TEXT[st.session_state.language]
+
+col1, col2, col3 = st.columns([12, 1, 1])
+with col1:
+    st.title(ui["title"])
+with col2:
+    if st.button("🇵🇹 PT", use_container_width=True):
+        st.session_state.language = "PT"
+        st.rerun()
+with col3:
+    if st.button("🇬🇧 EN", use_container_width=True):
+        st.session_state.language = "EN"
+        st.rerun()
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
@@ -401,6 +562,7 @@ except Exception:
     logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
     st.stop()
 
+
 # --- INTEGRAÇÃO FACEBOOK RSS (LÓGICA NATIVA INTELIGENTE) ---
 def extrair_data_futura(texto):
     PT_MONTHS = {
@@ -441,6 +603,7 @@ def extrair_data_futura(texto):
 def obter_avisos_facebook():
     url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
+    todos_avisos = [] # 🛡️ LISTA DE SEGURANÇA (FALLBACK)
     
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
@@ -450,7 +613,7 @@ def obter_avisos_facebook():
         soup = BeautifulSoup(response.content, "xml") 
         itens = soup.find_all("item")
         
-        for item in itens[:15]: 
+        for item in itens[:30]: 
             title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
@@ -463,17 +626,38 @@ def obter_avisos_facebook():
                 if img_match: img_url = img_match.group(1)
             
             texto_minusculas = clean_text.lower() + " " + title.lower()
+            texto_final = clean_text if len(clean_text) > 5 else title
+            
+            # Guardamos sempre uma cópia para o plano B
+            aviso_temp = {
+                "texto": texto_final, 
+                "imagem": img_url, 
+                "prioridade": 1
+            }
+            todos_avisos.append(aviso_temp)
             
             if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
                 continue
 
             data_fim_texto = extrair_data_futura(texto_minusculas)
             
+            palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
+
             if data_fim_texto:
                 if data_fim_texto < agora_local:
                     continue
-                prioridade_calculada = 30 
+                # 🟢 TIER 1 — Obras/eventos com data de fim ou data futura confirmada.
+                # Mantém-se sempre ativo enquanto a data não passar, e tem SEMPRE
+                # prioridade acima de qualquer post genérico (base 1000).
+                dias_ate_fim = (data_fim_texto - agora_local).days
+                # Quanto mais perto do fim/evento, mais urgente/relevante é.
+                prioridade_calculada = 1000 - max(dias_ate_fim, 0)
+                if any(kw in texto_minusculas for kw in palavras_criticas):
+                    prioridade_calculada += 50
             else:
+                # 🟡 TIER 2 — Posts genéricos sem data explícita.
+                # Só se mantêm ativos durante ~1 semana (antes eram 15 dias).
+                LIMITE_DIAS_GENERICO = 7
                 pub_date_node = item.find("pubDate")
                 dias_passados = 0
                 if pub_date_node:
@@ -482,26 +666,28 @@ def obter_avisos_facebook():
                         dias_passados = (agora_utc - data_post).days
                     except Exception:
                         pass
-                
-                if dias_passados > 7:
+
+                if dias_passados > LIMITE_DIAS_GENERICO:
                     continue
-                    
-                prioridade_calculada = 10 - dias_passados 
-                
-                palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
+
+                prioridade_calculada = LIMITE_DIAS_GENERICO - dias_passados
+
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 20
             
-            texto_final = clean_text if len(clean_text) > 5 else title
-            
-            avisos_ativos.append({
-                "texto": texto_final, 
-                "imagem": img_url, 
-                "prioridade": prioridade_calculada
-            })
+            aviso_temp["prioridade"] = prioridade_calculada
+            avisos_ativos.append(aviso_temp)
             
         avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
-        return avisos_ativos[:4]
+        
+        # 🛑 O TRUQUE ESTÁ AQUI: Se o filtro for agressivo e deitar tudo fora, 
+        # garantimos que mostramos pelo menos os últimos 2 posts da página!
+        if not avisos_ativos and todos_avisos:
+            return todos_avisos[:2]
+        
+        # Mostra TODOS os avisos ativos (obras/eventos com data futura + posts
+        # da última semana ainda não resolvidos), ordenados por prioridade.
+        return avisos_ativos
             
     except Exception as e:
         logging.error(f"Erro RSS Nativo: {e}")
@@ -595,6 +781,7 @@ def renderizar_rodape_anuncios(anuncios_ativos, ui):
     """
     components.html(html_rodape, height=170)
 
+    
 # --- FUNÇÕES DE CONTEXTO / FERRAMENTAS (TOOLS) ---
 def _extrair_lista_veiculos(dados):
     if isinstance(dados, list):
@@ -963,130 +1150,6 @@ def importar_pois_guimaraes():
         return f"Sucesso: {pois_guardados} Pontos de Interesse (Hospitais, Cafés, etc.) guardados na BD local!"
     except Exception as e:
         return f"Erro na extração de POIs: {e}"
-        
-def importar_json_local():
-    caminho_json = "geo_guimaraes.json"
-    if not os.path.exists(caminho_json):
-        caminho_absoluto = os.path.abspath(caminho_json)
-        logging.error(f"ERRO: geo_guimaraes.json não existe. Procurado em: {caminho_absoluto}")
-        return f"Ficheiro não encontrado em: {caminho_absoluto}"
-
-    try:
-        with open(caminho_json, "r", encoding="utf-8") as f:
-            dados_geo = json.load(f)
-    except Exception as e:
-        logging.error(f"ERRO ao ler/parsear geo_guimaraes.json: {e}")
-        return f"Erro ao ler o JSON: {e}"
-
-    conn = sqlite3.connect("agente_memoria.db")
-    cursor = conn.cursor()
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    inseridos, ignorados = 0, 0
-
-    for chave, item in dados_geo.items():
-        if not isinstance(item, dict):
-            ignorados += 1
-            continue
-
-        # Aceita várias variantes de nome da chave, robusto a JSON inconsistente
-        nome_real = (
-            item.get("nome_real") or item.get("nome") or
-            item.get("name") or item.get("designacao") or
-            item.get("nome_local") or chave
-        )
-        lat = item.get("lat") or item.get("latitude")
-        lon = item.get("lon") or item.get("lng") or item.get("longitude")
-        tipo = item.get("tipo", "poi_json")
-
-        if not nome_real or lat is None or lon is None:
-            logging.warning(f"Entrada ignorada por dados incompletos: chave={chave}, item={item}")
-            ignorados += 1
-            continue
-
-        try:
-            lat = float(lat)
-            lon = float(lon)
-        except (ValueError, TypeError):
-            logging.warning(f"Lat/Lon inválidos para '{nome_real}': lat={lat}, lon={lon}")
-            ignorados += 1
-            continue
-
-        cursor.execute("""
-            INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
-            VALUES (?, ?, ?, ?, ?)
-        """, (tipo, nome_real, lat, lon, timestamp))
-        inseridos += 1
-
-    conn.commit()
-    conn.close()
-
-    msg = f"Sucesso: {inseridos} locais importados do JSON ({ignorados} ignorados por dados incompletos)."
-    logging.info(msg)
-    return msg
-
-def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
-    R = 6371.0 # Raio da Terra em km
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
-def encontrar_paragem_mais_proxima_tool(local_nome: str):
-    if not local_nome: return "É necessário indicar o nome do local."
-    
-    # 1. Normaliza o termo de pesquisa do utilizador
-    termo_pesquisa = _normalizar_nome_paragem(local_nome)
-    
-    try:
-        conn = sqlite3.connect("agente_memoria.db")
-        # Registar a função de normalização para o SQLite
-        conn.create_function("_normalizar_nome_paragem", 1, _normalizar_nome_paragem)
-        cursor = conn.cursor()
-        
-        # 2. Pesquisa usando normalização na base de dados e no termo
-        # Isto transforma "Café Rio" -> "cafe rio" e pesquisa em "restaurante_cafe_rio"
-        query = """
-            SELECT nome, latitude, longitude 
-            FROM nos_geograficos 
-            WHERE _normalizar_nome_paragem(nome) LIKE ? 
-            LIMIT 1
-        """
-        cursor.execute(query, (f"%{termo_pesquisa}%",))
-        local = cursor.fetchone()
-        
-        if not local:
-            conn.close()
-            return f"Não encontrei coordenadas para '{local_nome}'. Tenta ser mais específico."
-            
-        nome_real, lat_local, lon_local = local
-        
-        # 2. Vai buscar todas as paragens
-        cursor.execute("""
-            SELECT DISTINCT g.nome, g.latitude, g.longitude 
-            FROM cache_paragens_linha p
-            JOIN nos_geograficos g ON _normalizar_nome_paragem(p.paragem) = _normalizar_nome_paragem(g.nome)
-            WHERE g.latitude IS NOT NULL
-        """)
-        paragens = cursor.fetchall()
-        conn.close()
-        
-        if not paragens: return "Ainda não tenho coordenadas das paragens sincronizadas."
-            
-        # 3. Calcula a distância matemática
-        mais_proxima, menor_distancia = None, float('inf')
-        for p_nome, p_lat, p_lon in paragens:
-            dist = calcular_distancia_haversine(lat_local, lon_local, p_lat, p_lon)
-            if dist < menor_distancia:
-                menor_distancia, mais_proxima = dist, p_nome
-                
-        if mais_proxima:
-            dist_metros = int(menor_distancia * 1000)
-            return f"A paragem mais próxima de '{nome_real}' é **'{mais_proxima}'**, a cerca de {dist_metros} metros."
-            
-    except Exception as e:
-        return f"Erro a calcular proximidade: {e}"
 
 def importar_ruas_freguesia(nome_freguesia):
     url = "https://overpass-api.de/api/interpreter"
@@ -1161,8 +1224,15 @@ def gerar_mapa_linha_html(linha_id):
     return caminho_ficheiro
 
 def gerar_link_google_maps(local_nome: str):
+    local_encontrado = _pesquisar_no_mapa_local(local_nome)
+    if local_encontrado:
+        nome_real = local_encontrado["nome_real"]
+        lat = local_encontrado["lat"]
+        lon = local_encontrado["lon"]
+        link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        return f"📍 Encontrei a localização de '{nome_real}' no mapa estático. Podes abrir no Google Maps aqui: {link_maps}"
+
     nome_norm = _normalizar_nome_paragem(local_nome)
-    
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
     cursor.execute("""
@@ -1175,9 +1245,15 @@ def gerar_link_google_maps(local_nome: str):
     if resultado:
         nome_real, lat, lon = resultado
         link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-        return f"📍 Encontrei a localização exata de '{nome_real}'. Podes abrir diretamente no Google Maps aqui: {link_maps}"
-    
-    return f"Não consegui encontrar coordenadas GPS em cache para '{local_nome}'."
+        return f"📍 Encontrei a localização de '{nome_real}' na base de dados. Podes abrir diretamente no Google Maps aqui: {link_maps}"
+
+    # Último recurso: geocodificação em tempo real via OpenStreetMap.
+    local_live = _geocode_nominatim_local(local_nome)
+    if local_live:
+        link_maps = f"https://www.google.com/maps/search/?api=1&query={local_live['lat']},{local_live['lon']}"
+        return f"📍 Encontrei '{local_live['nome_real']}' via OpenStreetMap (tempo real, ⚠️ não confirmado pelo mapa oficial). Podes abrir no Google Maps aqui: {link_maps}"
+
+    return f"Não consegui encontrar coordenadas GPS para '{local_nome}'."
 
 # --- SISTEMA BLOQUEANTE DE SINCRONIZAÇÃO NO ARRANQUE ---
 def verificar_necessidade_sync(limite_dias: int = 7):
@@ -1419,6 +1495,17 @@ def construir_indice_paragens():
     except Exception as e:
         return f"Falha ao construir índice de paragens: {e}"
 
+def _normalizar_nome_paragem(texto: str):
+    t = texto.lower().strip()
+    t = re.sub(r'\bsão\b', 's.', t)
+    t = re.sub(r'\bsanta\b', 'sta.', t)
+    t = re.sub(r'\bsanto\b', 'sto.', t)
+    t = t.replace('.', '')
+    t = unicodedata.normalize('NFKD', t)
+    t = ''.join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
 def _procurar_linhas_por_titulo(termo_norm: str):
     try:
         conn = sqlite3.connect("agente_memoria.db")
@@ -1598,6 +1685,63 @@ def planear_viagem_com_transbordo(origem: str, destino: str):
         resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
 
     return resumo + aviso_precisao
+
+def _resolver_local_para_paragem(nome_local: str):
+    """Resolve um nome de local qualquer (café, rua, morada, etc.) à paragem de autocarro
+    mais próxima, usando primeiro o mapa estático e depois geocoding em tempo real como fallback.
+    Devolve (nome_paragem, distancia_metros, fonte) ou (None, None, None) se não conseguir."""
+    local = _pesquisar_no_mapa_local(nome_local)
+    fonte = "mapa estático"
+    if not local:
+        local = _geocode_nominatim_local(nome_local)
+        fonte = "OpenStreetMap (tempo real)"
+    if not local or not MAPA_LOCAL:
+        return None, None, None
+
+    paragem_mais_proxima, menor_distancia = None, float('inf')
+    for chave, dados in MAPA_LOCAL.items():
+        if dados.get("tipo") in ["bus_stop", "public_transport"]:
+            dist = calcular_distancia(local["lat"], local["lon"], dados["lat"], dados["lon"])
+            if dist < menor_distancia:
+                menor_distancia = dist
+                paragem_mais_proxima = dados["nome_real"]
+    return paragem_mais_proxima, menor_distancia, fonte
+
+def planear_viagem_desde_local(origem: str, destino: str):
+    """Planeia uma viagem entre DOIS LOCAIS QUAISQUER — cafés, ruas, moradas, fábricas, freguesias, etc.
+    — mesmo que não sejam o nome exato de uma paragem de autocarro. Usa isto sempre que o utilizador
+    pedir um trajeto a partir de um local que não é claramente já uma paragem/freguesia conhecida
+    (ex: 'como vou do café rio até ao hospital?'). Resolve cada local à paragem mais próxima e depois
+    usa a mesma lógica de 'planear_viagem_com_transbordo' para encontrar as linhas."""
+    if not origem or not destino:
+        return "É necessário indicar a localização de origem e de destino."
+
+    # 1) Tentativa direta: pode já ser o nome de uma paragem ou freguesia reconhecida.
+    resultado_direto = planear_viagem_com_transbordo(origem, destino)
+    if not resultado_direto.startswith("Não encontrei origem") and not resultado_direto.startswith("Não encontrei destino"):
+        return resultado_direto
+
+    # 2) Resolver cada local à paragem de autocarro mais próxima (mapa estático ou geocoding ao vivo).
+    paragem_o, dist_o, fonte_o = _resolver_local_para_paragem(origem)
+    paragem_d, dist_d, fonte_d = _resolver_local_para_paragem(destino)
+
+    if not paragem_o:
+        return f"⚠️ NÃO CONFIRMADO: não consegui identificar a origem '{origem}' nem localizar uma paragem de autocarro perto dela. Confirma o nome exato ou indica a rua/freguesia."
+    if not paragem_d:
+        return f"⚠️ NÃO CONFIRMADO: não consegui identificar o destino '{destino}' nem localizar uma paragem de autocarro perto dele. Confirma o nome exato ou indica a rua/freguesia."
+
+    resultado = planear_viagem_com_transbordo(paragem_o, paragem_d)
+
+    aviso = (
+        f"\n\n📍 Nota: '{origem}' foi associado à paragem mais próxima '{paragem_o}'"
+        f" (a {int(dist_o)}m, via {fonte_o})."
+        f"\n📍 Nota: '{destino}' foi associado à paragem mais próxima '{paragem_d}'"
+        f" (a {int(dist_d)}m, via {fonte_d})."
+    )
+    if fonte_o == "OpenStreetMap (tempo real)" or fonte_d == "OpenStreetMap (tempo real)":
+        aviso += "\n⚠️ Uma ou mais localizações vieram de pesquisa em tempo real (OpenStreetMap), não do mapa oficial — confirma o nome exato do local."
+
+    return resultado + aviso
 
 def consultar_freguesia_paragem_tool(nome: str):
     if not nome: return "É necessário indicar o nome."
@@ -1895,7 +2039,8 @@ if len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] 
 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
-# --- EXECUÇÃO BLOQUEANTE E RESILIENTE DE ATUALIZAÇÕES INICIAIS ---
+
+# --- SIDEBAR DE ELITE ---
 is_updating = verificar_necessidade_sync(limite_dias=7)
 
 if is_updating:
@@ -1915,23 +2060,10 @@ if is_updating:
             
         if tasks.get("geo"):
             importar_pois_guimaraes()
-            importar_json_local()
             
     st.session_state.is_updating = False
     st.rerun() # Refresh força a libertação do input box abaixo.
-# ---Language Buttons & Title---
-col1, col2, col3 = st.columns([12, 1, 1])
-with col1:
-    st.title(ui["title"])
-with col2:
-    if st.button("🇵🇹", use_container_width=True):
-        st.session_state.language = "PT"
-        st.rerun()
-with col3:
-    if st.button("🇬🇧", use_container_width=True):
-        st.session_state.language = "EN"
-        st.rerun()
-# --- SIDEBAR DE ELITE ---
+
 with st.sidebar:
     st.header(ui["sidebar_panel"])
     if st.button(ui["clear_history"], use_container_width=True):
@@ -2001,33 +2133,11 @@ with st.sidebar:
         if st.sidebar.button(ui["sync_tickets"], use_container_width=True):
             with st.spinner(ui["robot_reading_tickets"]):
                 st.sidebar.success(sincronizar_titulos_e_tarifario())
-
-        if st.sidebar.button("📥 Importar Ficheiro JSON Local", use_container_width=True):
-            with st.spinner("A ler geo_guimaraes.json..."):
-                st.sidebar.success(importar_json_local())
-# ... (após o botão de importar JSON local)
-
-        # Botão de Inspeção (apenas uma vez, bem indentado)
-        if st.sidebar.button("🔍 Inspecionar Conteúdo Geográfico", use_container_width=True):
-            conn = sqlite3.connect("agente_memoria.db")
-            cursor = conn.cursor()
-            
-            # Total de registos
-            total = cursor.execute("SELECT COUNT(*) FROM nos_geograficos").fetchone()[0]
-            st.sidebar.write(f"Total de locais na BD: {total}")
-            
-            # Amostra
-            amostra = cursor.execute("SELECT nome FROM nos_geograficos LIMIT 5").fetchall()
-            for item in amostra:
-                st.sidebar.caption(f"Exemplo: {item[0]}")
-            conn.close()
                 
-        # Botão de Logout
         if st.sidebar.button(ui["logout_admin"], key="admin_logout_btn"):
             st.session_state.admin_autenticado = False
             st.rerun()
 
-        # Telemetria e Logs
         st.sidebar.subheader(ui["telemetry_db"])
         if os.path.exists("agente_memoria.db"):
             with open("agente_memoria.db", "rb") as f:
@@ -2061,6 +2171,30 @@ for message in st.session_state.messages:
     avatar_tipo = "💼" if message["role"] == "assistant" else "👤"
     with st.chat_message(message["role"], avatar=avatar_tipo):
         st.markdown(message["content"])
+
+# --- EXECUÇÃO BLOQUEANTE E RESILIENTE DE ATUALIZAÇÕES INICIAIS ---
+is_updating = verificar_necessidade_sync(limite_dias=7)
+
+if is_updating:
+    st.error(ui["updating_system"], icon="⏳")
+    
+    with st.spinner(ui["robot_reading"]):
+        tasks = st.session_state.update_tasks
+        
+        if tasks.get("sch"):
+            sincronizar_todos_horarios_guimabus()
+            construir_indice_paragens()
+        elif tasks.get("idx"):
+            construir_indice_paragens()
+        
+        if tasks.get("tkt"):
+            sincronizar_titulos_e_tarifario()
+            
+        if tasks.get("geo"):
+            importar_pois_guimaraes()
+            
+    st.session_state.is_updating = False
+    st.rerun() # Refresh força a libertação do input box abaixo.
 
 # Input só é renderizado de facto depois da função de bloqueio estar livre
 prompt_texto = st.chat_input(ui["chat_input"])
@@ -2106,9 +2240,9 @@ if prompt:
                 LANGUAGE_INSTRUCTION = "CRUCIAL LANGUAGE RULE: You MUST respond entirely in European Portuguese (pt-PT)." if st.session_state.language == "PT" else "CRUCIAL LANGUAGE RULE: You MUST respond entirely in English."
 
                 SCHEDULE_INSTRUCTION = (
-                    "MANDATÓRIO: Sempre que te pedirem horários ou linhas, tens de apresentar OBRIGATORIAMENTE as horas de partida/chegada do horário pedido lendo a cache da ferramenta `consultar_cache_horario_linha`. NUNCA mandes apenas o link sem mostrares o horário no texto. No final da tua resposta, tens OBRIGATORIAMENTE de colocar o link: 'Consulta o horário oficial aqui: [LINK DA LINHA]'." 
+                    "MANDATÓRIO: Sempre que o utilizador perguntar como ir de um local para outro, ou pedir horários, tens OBRIGATORIAMENTE de apresentar as horas de partida/chegada lendo a cache da ferramenta `consultar_cache_horario_linha`. NUNCA mandes apenas as linhas ou os links sem mostrar os horários no texto. Após descobrires as linhas (seja rota direta ou transbordo), FAZ SEMPRE query aos horários dessas linhas. No final da resposta, coloca os links oficiais." 
                     if st.session_state.language == "PT" else 
-                    "MANDATORY: Whenever asked about schedules or lines, you MUST present the actual departure/arrival times by reading the cache from the `query_line_schedule_cache` tool. NEVER just send the link without showing the times in your text. At the very end of your response, you MUST include the link: 'Check the official schedule here: [LINE LINK]'."
+                    "MANDATORY: Whenever asked for directions or schedules, you MUST present the departure/arrival times by using the `consultar_cache_horario_linha` tool for the suggested lines. NEVER just output the lines without schedules. Always query the schedules for the lines you find. At the end, include the official links."
                 )
 
                 PROMPT_EXECUTIVO = f"""Tu és o Assistente Executivo de Elite do Celso Ferreira.
@@ -2123,16 +2257,30 @@ if prompt:
                 - consultar_tipologias_cache_tool: lê as tipologias de passe.
                 - consultar_tarifario_cache: lê a tabela tarifária completa.
                 - planear_viagem_com_transbordo: dado o nome de uma paragem de origem e destino, diz se há linha direta ou sugere transbordo.
+                - planear_viagem_desde_local: como a anterior, mas aceita LOCAIS QUAISQUER (cafés, ruas, moradas, fábricas), não só paragens/freguesias — resolve cada local à paragem mais próxima automaticamente e depois planeia o trajeto. USA ESTA em vez de encadeares manualmente 'encontrar_paragem_mais_proxima' + 'planear_viagem_com_transbordo' sempre que a origem ou o destino não seja claramente já uma paragem ou freguesia.
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
-                - encontrar_paragem_mais_proxima_tool: calcula matematicamente e devolve a paragem de autocarro mais próxima de um determinado local de interesse ou empresa.
+                - encontrar_paragem_mais_proxima : procura a paragem mais próxima (geograficamente) de uma freguesia ou local. NUNCA confirma qual linha serve essa paragem — isso tem de ser sempre verificado depois com 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha'. NUNCA inventes o número da linha a partir desta ferramenta sozinha. Usa isto só quando só precisas da paragem, não do trajeto completo — para trajetos usa 'planear_viagem_desde_local'.
+                - procurar_locais_por_tipo: recebe um tipo/categoria de local (ex: "café", "restaurante", "farmácia", "supermercado") e devolve a lista de locais desse tipo encontrados no mapa estático de Guimarães (geo_guimaraes.json). Usa esta ferramenta sempre que o utilizador pedir para "descobrir"/"listar"/"que opções há" de um tipo de sítio, em vez de inventares nomes de estabelecimentos. Depois de encontrares um nome, podes usar 'encontrar_paragem_mais_proxima', 'gerar_link_google_maps' ou 'planear_viagem_desde_local' com esse nome exato.
 
                 MANDATORY PLANNING LOGIC:
-                1. Use "planear_viagem_com_transbordo" com os nomes exatos das paragens.
-                2. {SCHEDULE_INSTRUCTION}
-
+                1. - Se a origem OU o destino for um local qualquer (café, rua, morada, fábrica, ponto de interesse) e não uma paragem/freguesia óbvia, usa "planear_viagem_desde_local" diretamente — não tentes adivinhar a paragem manualmente.
+                2. - Se origem e destino já forem nomes de paragens ou freguesias conhecidas, usa "planear_viagem_com_transbordo" com os nomes exatos. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
+                3. - {SCHEDULE_INSTRUCTION} Se ja tiveres encontrado nestes passos ignorar encontrar_paragem_mais_proxima
+                4. - encontrar_paragem_mais_proxima: descobre a paragem oficial de autocarro mais próxima de qualquer café, fábrica ou ponto de interesse geográfico (baseado no JSON estático de distâncias, com fallback para geocoding em tempo real).
+                5. Se para um trajecto tiver varias linha, sugerir elas todas e seus horarios
+                6. Sempre que solicitar um horario fornecer todos os horarios para o dia indicado, caso nao indique nenhum dia, os horarios todos do proprio dia
+                7. Sempre que perguntando algo sobre os horarios respondes apenas de forma educada, sem mencionar funçoes tecnicas deste sistema, a menos que solicitem funçoes tecnicas
+                8. Todas as linhas que iniciem por N sao noturnas a nao ser que solicitadas as noturnas ou que seja um horario que apenas elas façam. dar prioridade as diurnas
+                9. Todas a paragens e possivel fazer transbordo seja no centro de guimaraes deslocando entre a pé entre as paragens s.goncalo, central de camionagem, s.damaso norte ou s.damaso sul. Mesmo que tenham de fazer dois ou 3 transbordos tens de arranjar solucao
+                10. Nos horarios apenas se tiver horas em frente a paragem e que significa que passa la nesse horario
+                11. verifica todos os horarios de ida e volta , alguns horarios tem varias paginas
+                12. quando pedem guimaraes significa goncalo, central de camionagem, s.damaso norte ou s.damaso sul
+                13. quando pedem trajecto  tem de verificar ambos os lados de todas as linhas.
+                14. mesmo que ja tenhas encontrado uma solucao tens de verificar todas 
                 REGRA ANTI-ALUCINAÇÃO — A MAIS IMPORTANTE DE TODAS:
-                NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível."""
+                NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível.
+                Se o resultado de uma ferramenta contiver "⚠️ NÃO CONFIRMADO" ou "📍", és OBRIGADO a comunicar essa incerteza ao utilizador nas mesmas palavras (ex: "não tenho confirmação exata, mas..."). NUNCA apresentes uma paragem/linha encontrada apenas por semelhança de nome ou título como se fosse um facto confirmado."""
                 
                 PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
@@ -2167,7 +2315,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima_tool]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, planear_viagem_desde_local, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima, procurar_locais_por_tipo]
                 
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
