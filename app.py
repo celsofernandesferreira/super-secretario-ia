@@ -399,6 +399,40 @@ def encontrar_paragem_mais_proxima(local_nome: str):
         return f"O local '{local_encontrado['nome_real']}' fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'. ⚠️ Esta função só indica a paragem mais próxima geograficamente — NÃO confirma que linha passa por ela. Usa 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha' com o nome exato desta paragem para confirmar a linha real."
     else:
         return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
+
+def procurar_locais_por_tipo(tipo_local: str, limite: int = 20):
+    """Procura no mapa estático de Guimarães (geo_guimaraes.json) todos os locais de um determinado
+    tipo/categoria — por exemplo 'café', 'restaurante', 'farmácia', 'escola', 'supermercado', etc.
+    Útil quando o utilizador pede para listar/descobrir opções de um tipo de sítio (ex: 'que cafés há perto do centro?')."""
+    if not MAPA_LOCAL:
+        return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
+
+    if not tipo_local:
+        return "É necessário indicar o tipo de local a procurar (ex: 'café', 'farmácia', 'restaurante')."
+
+    tipo_norm = normalizar_nome_pesquisa(tipo_local)
+    encontrados = []
+    for chave, dados in MAPA_LOCAL.items():
+        tipo_dado_norm = normalizar_nome_pesquisa(str(dados.get("tipo", "")))
+        if not tipo_dado_norm:
+            continue
+        # Correspondência flexível: "cafe" também encontra "cafe_bar", "cafetaria", etc.
+        if tipo_norm in tipo_dado_norm or tipo_dado_norm in tipo_norm:
+            nome_real = dados.get("nome_real", chave)
+            encontrados.append(nome_real)
+
+    if not encontrados:
+        return f"Não encontrei nenhum local do tipo '{tipo_local}' no mapa estático de Guimarães (geo_guimaraes.json). Pode não existir esse tipo no ficheiro, ou o nome do tipo é diferente do que está guardado."
+
+    encontrados = sorted(set(encontrados))
+    total = len(encontrados)
+    listados = encontrados[:limite]
+    resumo = f"Encontrei {total} local(is) do tipo '{tipo_local}' em Guimarães:\n"
+    resumo += "\n".join(f"- {nome}" for nome in listados)
+    if total > limite:
+        resumo += f"\n... e mais {total - limite} local(is) não mostrados. Pede para refinar a pesquisa se precisares de mais."
+    return resumo
+
 # 3. Configuração da página 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 
@@ -472,199 +506,6 @@ except Exception:
     logging.error("Falha ao inicializar a aplicação: Chave API ausente nos Secrets.")
     st.stop()
 
-# --- INTEGRAÇÃO FACEBOOK RSS (LÓGICA NATIVA INTELIGENTE) ---
-def extrair_data_futura(texto):
-    PT_MONTHS = {
-        "janeiro": 1, "jan": 1, "fevereiro": 2, "fev": 2, "março": 3, "mar": 3,
-        "abril": 4, "abr": 4, "maio": 5, "mai": 5, "junho": 6, "jun": 6,
-        "julho": 7, "jul": 7, "agosto": 8, "ago": 8, "setembro": 9, "set": 9,
-        "outubro": 10, "out": 10, "novembro": 11, "nov": 11, "dezembro": 12, "dez": 12
-    }
-    
-    agora = datetime.now()
-    ano_atual = agora.year
-    datas_encontradas = []
-
-    for m in re.finditer(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b', texto):
-        dia, mes = int(m.group(1)), int(m.group(2))
-        ano = int(m.group(3)) if m.group(3) else ano_atual
-        if ano < 100: ano += 2000
-        try:
-            datas_encontradas.append(datetime(ano, mes, dia))
-        except ValueError:
-            pass
-
-    for m in re.finditer(r'\b(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(\d{4}))?\b', texto.lower()):
-        dia = int(m.group(1))
-        mes_str = m.group(2)
-        ano = int(m.group(3)) if m.group(3) else ano_atual
-        if mes_str in PT_MONTHS:
-            try:
-                datas_encontradas.append(datetime(ano, PT_MONTHS[mes_str], dia))
-            except ValueError:
-                pass
-
-    if datas_encontradas:
-        return max(datas_encontradas)
-    return None
-
-@st.cache_data(ttl=3600)
-def obter_avisos_facebook():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
-    avisos_ativos = []
-    
-    agora_utc = datetime.now(timezone.utc)
-    agora_local = datetime.now()
-
-    try:
-        response = requests.get(url_rss, timeout=10)
-        soup = BeautifulSoup(response.content, "xml") 
-        itens = soup.find_all("item")
-        
-        for item in itens[:15]: 
-            title = item.find("title").text if item.find("title") else "Aviso"
-            content_encoded = item.find("content:encoded")
-            desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
-            
-            enclosure = item.find("enclosure")
-            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
-            if not img_url and desc:
-                img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match: img_url = img_match.group(1)
-            
-            texto_minusculas = clean_text.lower() + " " + title.lower()
-            
-            if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
-                continue
-
-            data_fim_texto = extrair_data_futura(texto_minusculas)
-            
-            if data_fim_texto:
-                if data_fim_texto < agora_local:
-                    continue
-                prioridade_calculada = 30 
-            else:
-                pub_date_node = item.find("pubDate")
-                dias_passados = 0
-                if pub_date_node:
-                    try:
-                        data_post = email.utils.parsedate_to_datetime(pub_date_node.text)
-                        dias_passados = (agora_utc - data_post).days
-                    except Exception:
-                        pass
-                
-                if dias_passados > 7:
-                    continue
-                    
-                prioridade_calculada = 10 - dias_passados 
-                
-                palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
-                if any(kw in texto_minusculas for kw in palavras_criticas):
-                    prioridade_calculada += 20
-            
-            texto_final = clean_text if len(clean_text) > 5 else title
-            
-            avisos_ativos.append({
-                "texto": texto_final, 
-                "imagem": img_url, 
-                "prioridade": prioridade_calculada
-            })
-            
-        avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
-        return avisos_ativos[:4]
-            
-    except Exception as e:
-        logging.error(f"Erro RSS Nativo: {e}")
-        
-    return avisos_ativos
-
-def renderizar_rodape_anuncios(anuncios_ativos, ui):
-    if not anuncios_ativos: return
-    
-    dados_js = json.dumps(anuncios_ativos)
-    
-    html_rodape = f"""
-    <style>
-        .footer-wrapper {{
-            position: fixed; bottom: 0; left: 0; width: 100%; height: 160px;
-            background-color: #1e1e1e; color: white; z-index: 9999;
-            border-top: 4px solid #2ecc71; box-shadow: 0px -4px 20px rgba(0,0,0,0.8);
-            display: flex; flex-direction: column; overflow: hidden;
-        }}
-        .disclaimer {{
-            background: #2a2a2a; color: #eee; font-size: 13px; padding: 6px 20px;
-            text-align: center; font-weight: bold; border-bottom: 1px solid #444;
-        }}
-        .content-area {{ 
-            display: flex; align-items: center; flex: 1; padding: 0 20px; 
-        }}
-        .img-box {{ flex: 0 0 120px; display: flex; align-items: center; justify-content: center; }}
-        #ticker-img {{ max-height: 90px; border-radius: 6px; cursor: pointer; border: 2px solid #555; }}
-        .text-container {{ flex: 1; overflow: hidden; position: relative; height: 100px; }}
-        #ticker-text {{ 
-            position: absolute; white-space: nowrap; font-size: 20px; 
-            font-weight: bold; top: 35px; left: 50%;
-        }}
-    </style>
-    
-    <div class="footer-wrapper">
-        <div class="disclaimer">
-            {ui['ad_disclaimer']}
-        </div>
-        <div class="content-area">
-            <div class="img-box">
-                <img id="ticker-img" src="" onclick="window.open(this.src, '_blank');">
-            </div>
-            <div class="text-container">
-                <div id="ticker-text"></div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const anuncios = {dados_js};
-        let indice = 0;
-        const txt = document.getElementById('ticker-text');
-        const img = document.getElementById('ticker-img');
-        const container = document.querySelector('.text-container');
-
-        async function correrAviso() {{
-            const a = anuncios[indice];
-            
-            txt.innerText = "🚨 " + (a.texto || a.titulo || "{ui['ad_notice']}");
-            
-            if (a.imagem && a.imagem.trim() !== "") {{
-                img.src = a.imagem;
-                img.style.display = "block";
-                img.style.visibility = "visible";
-            }} else {{
-                img.style.display = "none";
-            }}
-            
-            txt.style.animation = 'none';
-            txt.offsetHeight;
-            txt.style.animation = 'scroll-left 25s linear infinite';
-            
-            let pos = container.offsetWidth / 2;
-            txt.style.left = pos + "px";
-            
-            function animar() {{
-                pos -= 2; 
-                txt.style.left = pos + "px";
-                if (pos < -txt.offsetWidth) {{
-                    indice = (indice + 1) % anuncios.length;
-                    setTimeout(correrAviso, 2000); 
-                }} else {{
-                    requestAnimationFrame(animar);
-                }}
-            }}
-            animar();
-        }}
-        correrAviso();
-    </script>
-    """
-    components.html(html_rodape, height=170)
 
 # --- INTEGRAÇÃO FACEBOOK RSS (LÓGICA NATIVA INTELIGENTE) ---
 def extrair_data_futura(texto):
@@ -744,11 +585,23 @@ def obter_avisos_facebook():
 
             data_fim_texto = extrair_data_futura(texto_minusculas)
             
+            palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
+
             if data_fim_texto:
                 if data_fim_texto < agora_local:
                     continue
-                prioridade_calculada = 30 
+                # 🟢 TIER 1 — Obras/eventos com data de fim ou data futura confirmada.
+                # Mantém-se sempre ativo enquanto a data não passar, e tem SEMPRE
+                # prioridade acima de qualquer post genérico (base 1000).
+                dias_ate_fim = (data_fim_texto - agora_local).days
+                # Quanto mais perto do fim/evento, mais urgente/relevante é.
+                prioridade_calculada = 1000 - max(dias_ate_fim, 0)
+                if any(kw in texto_minusculas for kw in palavras_criticas):
+                    prioridade_calculada += 50
             else:
+                # 🟡 TIER 2 — Posts genéricos sem data explícita.
+                # Só se mantêm ativos durante ~1 semana (antes eram 15 dias).
+                LIMITE_DIAS_GENERICO = 7
                 pub_date_node = item.find("pubDate")
                 dias_passados = 0
                 if pub_date_node:
@@ -757,14 +610,12 @@ def obter_avisos_facebook():
                         dias_passados = (agora_utc - data_post).days
                     except Exception:
                         pass
-                
-                # Relaxei o filtro de 7 para 15 dias, para apanhar mais avisos reais
-                if dias_passados > 15:
+
+                if dias_passados > LIMITE_DIAS_GENERICO:
                     continue
-                    
-                prioridade_calculada = 15 - dias_passados 
-                
-                palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
+
+                prioridade_calculada = LIMITE_DIAS_GENERICO - dias_passados
+
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 20
             
@@ -2195,7 +2046,6 @@ if st.session_state.get("passe_ativo"):
     renderizar_pedido_passe(ui)
 
 avisos_hoje = obter_avisos_facebook()
-st.write(f"DEBUG: {len(avisos_hoje)} avisos encontrados")
 if avisos_hoje:
     renderizar_rodape_anuncios(avisos_hoje, ui)
 
@@ -2292,6 +2142,7 @@ if prompt:
                 - consultar_freguesia_paragem_tool: diz em que freguesia fica uma paragem.
                 - gerar_link_google_maps: recebe o nome de um local e devolve um link direto do Google Maps.
                 - encontrar_paragem_mais_proxima : procura a paragem mais próxima (geograficamente) de uma freguesia ou local. NUNCA confirma qual linha serve essa paragem — isso tem de ser sempre verificado depois com 'planear_viagem_com_transbordo' ou 'consultar_cache_horario_linha'. NUNCA inventes o número da linha a partir desta ferramenta sozinha.
+                - procurar_locais_por_tipo: recebe um tipo/categoria de local (ex: "café", "restaurante", "farmácia", "supermercado") e devolve a lista de locais desse tipo encontrados no mapa estático de Guimarães (geo_guimaraes.json). Usa esta ferramenta sempre que o utilizador pedir para "descobrir"/"listar"/"que opções há" de um tipo de sítio, em vez de inventares nomes de estabelecimentos. Depois de encontrares um nome, podes usar 'encontrar_paragem_mais_proxima' ou 'gerar_link_google_maps' com esse nome exato.
 
                 MANDATORY PLANNING LOGIC:
                 1. - Use "planear_viagem_com_transbordo" com os nomes exatos das paragens. Caso seja muito parecido a uma paragem mencionar essa. e caso de duvida questione o utilizador
@@ -2344,7 +2195,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima]
+                ferramentas_agente = [obter_dados_guimabus, obter_horarios_paragem, consultar_cache_horario_linha, consultar_tipologias_cache_tool, consultar_tarifario_cache, planear_viagem_com_transbordo, consultar_freguesia_paragem_tool, gerar_link_google_maps, encontrar_paragem_mais_proxima, procurar_locais_por_tipo]
                 
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
