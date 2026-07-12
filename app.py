@@ -524,13 +524,13 @@ col1, col2, col3 = st.columns([12, 1, 1])
 with col1:
     st.title(ui["title"])
 with col2:
-    if st.button("🇵🇹 PT", use_container_width=True):
-        st.session_state.language = "PT"
-        st.rerun()
+    lang_pt_slot = st.empty()
 with col3:
-    if st.button("🇬🇧 EN", use_container_width=True):
-        st.session_state.language = "EN"
-        st.rerun()
+    lang_en_slot = st.empty()
+# Os botões só são desenhados dentro destes "slots" mais abaixo no código,
+# depois de confirmarmos que o sistema não está em atualização (ver bloco
+# "is_updating"). Enquanto a app estiver bloqueada, estes slots ficam vazios
+# e os botões de idioma não aparecem nem são clicáveis.
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
@@ -2086,6 +2086,18 @@ if is_updating:
             
     st.session_state.is_updating = False
     st.rerun() # Refresh força a libertação do input box abaixo.
+
+# 🔓 Só chegamos aqui se o sistema NÃO estiver a atualizar (ver bloco acima).
+# É aqui que os botões de idioma são finalmente desenhados nos "slots"
+# reservados lá em cima — enquanto a atualização decorre, ficam vazios.
+with lang_pt_slot:
+    if st.button("🇵🇹 PT", use_container_width=True, key="lang_pt_btn"):
+        st.session_state.language = "PT"
+        st.rerun()
+with lang_en_slot:
+    if st.button("🇬🇧 EN", use_container_width=True, key="lang_en_btn"):
+        st.session_state.language = "EN"
+        st.rerun()
 
 with st.sidebar:
     st.header(ui["sidebar_panel"])
