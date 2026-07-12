@@ -349,6 +349,29 @@ def normalizar_nome_pesquisa(texto):
     t = re.sub(r'_+', '_', t).strip('_')
     return t
 
+# Ferramentas que, se chamadas, garantem uma resposta ancorada em dados reais
+# (cache/DB/mapa) em vez de conhecimento genérico do modelo sobre transportes.
+FERRAMENTAS_TRAJETO_NOMES = [
+    "obter_dados_guimabus", "obter_horarios_paragem", "consultar_cache_horario_linha",
+    "planear_viagem_com_transbordo", "planear_viagem_desde_local",
+    "encontrar_paragem_mais_proxima", "consultar_freguesia_paragem_tool",
+]
+
+_PALAVRAS_TRAJETO = [
+    "linha", "horario", "horário", "autocarro", "guimabus", "paragem", "paragens",
+    "viagem", "trajeto", "trajecto", "transporte", " para ", " até ", " ate ",
+    "ir para", "como vou", "como chegar", "que horas passa", "onde fica", "onde e",
+    "onde é", "café", "cafe", "fica"
+]
+
+def parece_pedido_de_trajeto(texto: str) -> bool:
+    """Heurística: deteta se a pergunta do utilizador é sobre horários, linhas ou
+    trajetos — casos em que NUNCA pode haver resposta sem passar por uma ferramenta real."""
+    if not texto:
+        return False
+    t = " " + normalizar_nome_pesquisa(texto).replace("_", " ") + " "
+    return any(normalizar_nome_pesquisa(p).replace("_", " ") in t for p in _PALAVRAS_TRAJETO)
+
 @st.cache_data
 def carregar_mapa_estatico():
     try:
@@ -2320,11 +2343,14 @@ if prompt:
                 candidatos_modelo = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
                 ultimo_erro_modelo = None
+                chat = None
+                historico_len_antes = 0
 
                 for nome_modelo in candidatos_modelo:
                     try:
                         model = genai.GenerativeModel(model_name=nome_modelo, system_instruction=prompt_sistema_ativo, tools=ferramentas_agente)
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
+                        historico_len_antes = len(chat.history)
                         response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
                         break
                     except Exception as e:
@@ -2338,7 +2364,57 @@ if prompt:
                         st.error(ui["model_error"])
                     st.stop()
 
+                def _chamou_ferramenta_real(chat_obj, desde_indice):
+                    """Verifica se, desde 'desde_indice', o histórico do chat contém alguma
+                    chamada real a uma das ferramentas de trajeto/horários (em vez do modelo
+                    ter respondido apenas com o seu conhecimento genérico)."""
+                    try:
+                        for entrada in chat_obj.history[desde_indice:]:
+                            for part in getattr(entrada, "parts", []):
+                                fc = getattr(part, "function_call", None)
+                                if fc and getattr(fc, "name", None) in FERRAMENTAS_TRAJETO_NOMES:
+                                    return True
+                    except Exception:
+                        pass
+                    return False
+
+                # 🛡️ REDE DE SEGURANÇA ANTI-ALUCINAÇÃO
+                # Se a pergunta é claramente sobre trajetos/linhas/horários e o modelo NÃO
+                # chamou nenhuma ferramenta real, ele respondeu de "cabeça" — exatamente
+                # como acontece quando inventa números de linha. Forçamos uma nova tentativa
+                # em que é obrigado a consultar uma ferramenta real antes de responder.
+                if prompt_sistema_ativo == PROMPT_EXECUTIVO and parece_pedido_de_trajeto(prompt) and chat is not None:
+                    if not _chamou_ferramenta_real(chat, historico_len_antes):
+                        logging.error(f"Possível alucinação detetada (resposta sem tool call) para o prompt: {prompt}")
+                        try:
+                            tool_config_forcado = {
+                                "function_calling_config": {
+                                    "mode": "ANY",
+                                    "allowed_function_names": FERRAMENTAS_TRAJETO_NOMES,
+                                }
+                            }
+                            historico_len_antes_retry = len(chat.history)
+                            response_forcada = chat.send_message(
+                                "A tua resposta anterior não usou nenhuma ferramenta de trajeto/horários. "
+                                "Repete a resposta, mas és OBRIGADO a consultar uma ferramenta real "
+                                "(planear_viagem_desde_local, planear_viagem_com_transbordo, "
+                                "consultar_cache_horario_linha, obter_horarios_paragem ou "
+                                "encontrar_paragem_mais_proxima) antes de responderes. "
+                                "NUNCA inventes linhas ou horários que não venham da ferramenta.",
+                                tool_config=tool_config_forcado,
+                                request_options={"timeout": 25}
+                            )
+                            if _chamou_ferramenta_real(chat, historico_len_antes_retry):
+                                response = response_forcada
+                            else:
+                                # Mesmo forçado, não confirmou nada em ferramentas reais — avisa o utilizador.
+                                response = response_forcada
+                                logging.error("Rede de segurança: tentativa forçada também não chamou ferramenta real.")
+                        except Exception as e:
+                            logging.error(f"Falha na rede de segurança anti-alucinação: {e}")
+
                 full_response = response.text
+
                 st.markdown(full_response)
                 
                 guardar_mensagem_bd(st.session_state.session_id, "assistant", full_response)
