@@ -54,7 +54,7 @@ UI_TEXT = {
         "chat_input": "Como posso ajudar hoje?",
         "speak": "Falar",
         "download_txt": "📥 Descarregar Resposta (.txt)",
-        "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Executivo:** Monitorização da frota Guimabus e consulta à Knowledge Base.\n2. **Modo Tech Recruiter:** Diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês.\n3. **Modo Helpdesk Técnico:** Envia-me um problema de IT ou avaria e eu mostro-te como o Celso resolveria a situação.\n\nComo posso ajudar hoje?",
+        "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Guimabus:** Monitorização da frota, horários e trajetos da Guimabus.\n2. **Modo Recrutador:** Informação sobre o teu currículo e percurso profissional para recrutadores — diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês, ou dá-me um problema de IT para eu mostrar como tu o resolverias.\n3. **Modo Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
         "game_title": "🚌 Guimabus Arcade: Cabine de Condução 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
@@ -142,7 +142,7 @@ UI_TEXT = {
         "chat_input": "How can I help you today?",
         "speak": "Speak",
         "download_txt": "📥 Download Response (.txt)",
-        "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Executive Mode:** Guimabus fleet monitoring and Knowledge Base consultation.\n2. **Tech Recruiter Mode:** Tell me *'I want to train for an interview'* to simulate technical tests in English.\n3. **Tech Helpdesk Mode:** Send me an IT problem or failure and I will show you how Celso would solve the situation.\n\nHow can I help you today?",
+        "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus Mode:** Fleet monitoring, schedules and route planning for Guimabus.\n2. **Recruiter Mode:** Information about your CV and professional background for recruiters — tell me *'I want to train for an interview'* to simulate technical tests in English, or give me an IT problem so I can show how you would solve it.\n3. **Project Mode:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
         "game_title": "🚌 Guimabus Arcade: Driving Cabin 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
@@ -2268,7 +2268,7 @@ if prompt:
                     "MANDATORY: Whenever asked for directions or schedules, you MUST present the departure/arrival times by using the `consultar_cache_horario_linha` tool for the suggested lines. NEVER just output the lines without schedules. Always query the schedules for the lines you find. At the end, include the official links."
                 )
 
-                PROMPT_EXECUTIVO = f"""Tu és o Assistente Executivo de Elite do Celso Ferreira.
+                PROMPT_GUIMABUS = f"""Tu és o Assistente Executivo de Elite do Celso Ferreira.
                 És um Agente focado em automação, suporte e infraestrutura IT.
 
                 {LANGUAGE_INSTRUCTION}
@@ -2305,27 +2305,48 @@ if prompt:
                 NUNCA inventes, estimes ou "preenchas" dados que as ferramentas ou a Knowledge Base não te deram. NUNCA assumas ou inventes uma data a partir de memória. Se não encontrares a informação na base de dados, pede desculpa e diz de forma clara que a informação não se encontra disponível.
                 Se o resultado de uma ferramenta contiver "⚠️ NÃO CONFIRMADO" ou "📍", és OBRIGADO a comunicar essa incerteza ao utilizador nas mesmas palavras (ex: "não tenho confirmação exata, mas..."). NUNCA apresentes uma paragem/linha encontrada apenas por semelhança de nome ou título como se fosse um facto confirmado."""
                 
-                PROMPT_RECRUITER = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
+                PROMPT_ENTREVISTA = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
                 Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
-                
-                PROMPT_HELPDESK_TUTOR = f"""Tu és um Tutor Técnico de Helpdesk e Suporte de IT.
-                O teu objetivo é atuar como uma fonte interminável de resolução de problemas de IT.
-                
+
+                PROMPT_RECRUTADOR = f"""Tu és o Agente de Apresentação Profissional do Celso Ferreira, dirigido a recrutadores e a quem queira conhecer o percurso dele.
+
                 {LANGUAGE_INSTRUCTION}
 
-                Independentemente do problema de suporte, deves começar a tua resposta OBRIGATORIAMENTE com a seguinte frase padrão: 
-                'O Celso faria desta maneira para resolver este problema de IT:' (if PT) ou 'Celso would solve this IT problem like this:' (if EN)."""
+                O teu objetivo é:
+                1. Responder a perguntas sobre o currículo, competências, experiência profissional e percurso do Celso, usando SEMPRE a informação disponível na Knowledge Base fornecida no contexto (ficheiros .md). NUNCA inventes datas, empresas, cargos, tecnologias ou factos sobre o Celso que não estejam na Knowledge Base — se a informação não estiver lá, diz claramente que não tens essa informação disponível, em vez de a inventar.
+                2. Se o utilizador disser algo como "quero treinar para uma entrevista" ou "I want to train for an interview", informa-o de que vais iniciar uma simulação de entrevista técnica em inglês (a mudança de papel é feita automaticamente pelo sistema no próximo passo).
+                3. Se o utilizador apresentar um problema técnico/de IT (ex: "o servidor caiu", "erro de rede", uma avaria qualquer), demonstra como o Celso o resolveria — começa a resposta OBRIGATORIAMENTE com a frase 'O Celso resolveria este problema desta forma:' (ou, em inglês, 'Celso would solve this problem like this:') e explica o raciocínio passo a passo, com boas práticas de IT. Isto serve para mostrar a um recrutador como o Celso pensa e trabalha na prática.
+
+                Mantém sempre um tom profissional, confiante e claro — estás a representar o Celso perante potenciais empregadores. NUNCA inventes informação sobre o Celso fora da Knowledge Base."""
+
+                PROMPT_PROJETO = f"""Tu és o Agente que explica este projeto a quem pergunta sobre ele — recrutadores, curiosos ou o próprio Celso.
+
+                {LANGUAGE_INSTRUCTION}
+
+                Este projeto é uma aplicação de agente de IA construída pelo Celso Ferreira, em Streamlit (Python), com estas componentes principais:
+                - Um assistente conversacional (Modo Guimabus) que usa a API do Gemini com function calling para consultar em tempo real o estado da frota, horários e tarifários (guardados em cache local SQLite), planear trajetos com transbordo, e resolver localizações (cafés, ruas, moradas) através de um mapa estático (geo_guimaraes.json) com fallback de geocoding em tempo real via OpenStreetMap/Nominatim.
+                - Uma rede de segurança anti-alucinação que obriga o modelo a usar ferramentas reais antes de responder a perguntas sobre trajetos/horários, em vez de inventar dados a partir do conhecimento genérico do modelo.
+                - Um rodapé de avisos que lê um feed RSS da página de Facebook da Guimabus, filtra e prioriza avisos (obras/eventos com data de fim confirmada vs. posts genéricos recentes) e mostra-os a rodar no rodapé da aplicação.
+                - Um sistema de verificação de documentos (para pedidos de passe) que usa o Gemini para analisar imagens/PDFs enviados.
+                - Transcrição de áudio para permitir input por voz.
+                - Uma Knowledge Base baseada em ficheiros Markdown, injetada no contexto do modelo, para responder com factos verificados em vez de conhecimento genérico.
+                - Três modos de conversa (Guimabus, Recrutador, Projeto) que partilham a mesma interface de chat, com deteção automática de qual prompt/persona usar consoante palavras-chave na pergunta.
+
+                Quando alguém perguntar sobre o projeto, explica-o de forma clara e concisa, adaptando o nível de detalhe ao que for perguntado (ex: "que tecnologias usa" foca-se no stack; "porque fizeste isto" foca-se no propósito/objetivo do projeto). NUNCA inventes funcionalidades que não existem no sistema."""
 
                 prompt_normalizado = prompt.lower()
-                gatilhos_helpdesk = ["problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
-                
-                if "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
-                    prompt_sistema_ativo = PROMPT_RECRUITER
-                elif any(word in prompt_normalizado for word in gatilhos_helpdesk):
-                    prompt_sistema_ativo = PROMPT_HELPDESK_TUTOR
+                gatilhos_projeto = ["este projeto", "sobre o projeto", "sobre este projeto", "como foi feito", "como foi construido", "que tecnologias", "stack", "arquitetura", "arquitectura", "this project", "how was this built", "tech stack"]
+                gatilhos_recrutador = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+
+                if any(word in prompt_normalizado for word in gatilhos_projeto):
+                    prompt_sistema_ativo = PROMPT_PROJETO
+                elif "entrevista" in prompt_normalizado or "interview" in prompt_normalizado:
+                    prompt_sistema_ativo = PROMPT_ENTREVISTA
+                elif any(word in prompt_normalizado for word in gatilhos_recrutador):
+                    prompt_sistema_ativo = PROMPT_RECRUTADOR
                 else:
-                    prompt_sistema_ativo = PROMPT_EXECUTIVO
+                    prompt_sistema_ativo = PROMPT_GUIMABUS
 
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
@@ -2383,7 +2404,7 @@ if prompt:
                 # chamou nenhuma ferramenta real, ele respondeu de "cabeça" — exatamente
                 # como acontece quando inventa números de linha. Forçamos uma nova tentativa
                 # em que é obrigado a consultar uma ferramenta real antes de responder.
-                if prompt_sistema_ativo == PROMPT_EXECUTIVO and parece_pedido_de_trajeto(prompt) and chat is not None:
+                if prompt_sistema_ativo == PROMPT_GUIMABUS and parece_pedido_de_trajeto(prompt) and chat is not None:
                     if not _chamou_ferramenta_real(chat, historico_len_antes):
                         logging.error(f"Possível alucinação detetada (resposta sem tool call) para o prompt: {prompt}")
                         try:
