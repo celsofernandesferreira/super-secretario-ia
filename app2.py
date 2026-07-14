@@ -2028,22 +2028,28 @@ def render_game(ui):
             estadoInicial();
             
             function drawScene() {{
-ctx.font = '16px Arial';
-ctx.fillText('🧍', apple.x + 2, apple.y + 15);
+                // 1. DESENHAR O FUNDO
+                ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
+                ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
+                
+                // 2. DESENHAR A PESSOA
+                ctx.font = '16px Arial';
+                ctx.fillText('🧍', apple.x + 2, apple.y + 15);
 
-for(var i=0; i<snake.length; i++) {{
-    if(i === 0) {{
-        // A cabeça é o emoji de um autocarro
-        ctx.font = '16px Arial';
-        ctx.fillText('🚌', snake[i].x + 1, snake[i].y + 15);
-    }} else {{
-        // O corpo do autocarro (com janelas)
-        ctx.fillStyle = '#f39c12'; // Laranja/Amarelo tipo "Guimabus/Escolar"
-        ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-2, tnt-2);
-        ctx.fillStyle = '#34495e'; // Janela escura
-        ctx.fillRect(snake[i].x + 4, snake[i].y + 4, tnt-8, tnt-8);
-    }}
+                // 3. DESENHAR O AUTOCARRO
+                for(var i=0; i<snake.length; i++) {{
+                    if(i === 0) {{
+                        ctx.font = '16px Arial';
+                        ctx.fillText('🚌', snake[i].x + 1, snake[i].y + 15);
+                    }} else {{
+                        ctx.fillStyle = '#f39c12'; 
+                        ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-2, tnt-2);
+                        ctx.fillStyle = '#34495e'; 
+                        ctx.fillRect(snake[i].x + 4, snake[i].y + 4, tnt-8, tnt-8);
+                    }}
+                }}
 
+                // 4. DESENHAR A INTERFACE (Pontuação e Top 10)
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('{ui['game_pax']}: ' + (score / 10), 15, 25);
                 ctx.fillStyle = '#151515'; ctx.fillRect(gameWidth + 3, 0, canvas.width - gameWidth - 3, canvas.height);
@@ -2060,6 +2066,7 @@ for(var i=0; i<snake.length; i++) {{
                     }} else {{ ctx.fillStyle = '#444'; ctx.fillText((k+1) + 'º ------', gameWidth + 15, yPos); }}
                 }}
                 
+                // 5. DESENHAR ECRÃ DE GAME OVER
                 if (gameOver) {{
                     ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                     ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center';
