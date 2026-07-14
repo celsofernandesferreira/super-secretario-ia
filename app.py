@@ -1644,6 +1644,16 @@ def search_stops_by_parish(nome_freguesia: str):
     freguesia_norm = _normalize_stop_name(nome_freguesia)
     return [paragem for paragem, freguesia in todas if re.search(r'\b' + re.escape(freguesia_norm) + r'\b', _normalize_stop_name(freguesia))]
 
+# Paragens centrais de Guimarães entre as quais é sempre possível fazer transbordo
+# a pé (a poucos minutos de distância umas das outras), mesmo que não sejam
+# literalmente a mesma paragem. Usadas como fallback quando não há nenhuma
+# paragem exatamente em comum entre a rede de origem e a de destino.
+_HUB_KEYWORDS_NORM = ["s goncalo", "central de camionagem", "s damaso norte", "s damaso sul", "s damaso"]
+
+def _e_paragem_hub(nome_paragem: str) -> bool:
+    n = _normalize_stop_name(nome_paragem)
+    return any(kw in n for kw in _HUB_KEYWORDS_NORM)
+
 def plan_trip_with_transfer(origem: str, destino: str):
     if not origem or not destino: return "É necessário indicar a paragem de origem e a paragem de destino."
     origem_norm, destino_norm = _normalize_stop_name(origem), _normalize_stop_name(destino)
@@ -1714,15 +1724,45 @@ def plan_trip_with_transfer(origem: str, destino: str):
     for l in linhas_destino: stops_d |= mapa_linha_paragens.get(l, set())
 
     transbordos = (stops_o & stops_d) - paragens_origem_encontradas - paragens_destino_encontradas
-    if not transbordos: return f"I could not find an obvious transfer between '{origem}' and '{destino}'."
+    if transbordos:
+        resumo = f"Não há linha direta. Sugestão de transbordo:\n\n"
+        for t in sorted(transbordos):
+            l_to = [l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())]
+            l_from = [l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())]
+            resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
+        return resumo + aviso_precisao
 
-    resumo = f"Não há linha direta. Sugestão de transbordo:\n\n"
-    for t in sorted(transbordos):
-        l_to = [l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())]
-        l_from = [l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())]
-        resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
+    # Não há nenhuma paragem literalmente em comum — antes de desistir, verifica se
+    # a origem e o destino têm cada uma acesso a alguma das paragens centrais de
+    # Guimarães (S. Gonçalo, Central de Camionagem, S. Dâmaso Norte/Sul). Essas
+    # paragens ficam a poucos minutos a pé umas das outras, por isso um transbordo
+    # entre elas é sempre viável mesmo que não seja literalmente o mesmo poste.
+    hubs_o = sorted({p for p in stops_o if _e_paragem_hub(p)})
+    hubs_d = sorted({p for p in stops_d if _e_paragem_hub(p)})
+    if hubs_o and hubs_d:
+        resumo = (
+            "Não há transbordo na mesma paragem, mas é possível fazer transbordo a pé "
+            "pelo centro de Guimarães (as paragens S. Gonçalo, Central de Camionagem e "
+            "S. Dâmaso Norte/Sul ficam a poucos minutos a pé umas das outras):\n\n"
+        )
+        combinacoes_mostradas = 0
+        for stop_o in hubs_o:
+            l_to = [l for l in linhas_origem if stop_o in mapa_linha_paragens.get(l, set())]
+            for stop_d in hubs_d:
+                l_from = [l for l in linhas_destino if stop_d in mapa_linha_paragens.get(l, set())]
+                if stop_o == stop_d:
+                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}' e depois linha {'/'.join(l_from)} — mesma paragem.\n"
+                else:
+                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}', caminha até '{stop_d}', e apanha linha {'/'.join(l_from)}.\n"
+                combinacoes_mostradas += 1
+                if combinacoes_mostradas >= 4:
+                    break
+            if combinacoes_mostradas >= 4:
+                break
+        resumo += "\n⚠️ Este transbordo envolve caminhar entre paragens diferentes no centro de Guimarães, não é o mesmo poste."
+        return resumo + aviso_precisao
 
-    return resumo + aviso_precisao
+    return f"I could not find an obvious transfer between '{origem}' and '{destino}'."
 
 def _resolve_place_to_stop(nome_local: str):
     """Resolves any place name (café, street, address, etc.) to the nearest bus stop,
@@ -2039,13 +2079,22 @@ def render_game(ui):
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) {{ alert("{ui['game_alert']}"); return; }}
                 btnGravar.disabled = true; btnGravar.innerText = "💾...";
+                // Não lemos window.parent.location (isso é bloqueado como leitura
+                // entre origens diferentes, ex: no Streamlit Cloud). Em vez disso,
+                // criamos um link normal com target="_parent" e simulamos um clique —
+                // a navegação por clique num link é sempre permitida pelo browser,
+                // mesmo que o iframe seja tratado como uma origem diferente.
                 try {{
-                    var url = new URL(window.parent.location.href);
-                    url.searchParams.set("save_nome", nome);
-                    url.searchParams.set("save_pontos", (score / 10));
-                    window.parent.location.href = url.toString();
+                    var novaQuery = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + encodeURIComponent(score / 10);
+                    var link = document.createElement("a");
+                    link.href = novaQuery;
+                    link.target = "_parent";
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
                 }} catch(e) {{
-                    alert("Erro de segurança ao tentar gravar o score.");
+                    alert("Não foi possível gravar o recorde: " + e.message);
+                    btnGravar.disabled = false; btnGravar.innerText = "{ui['game_save']}";
                 }}
             }}
             function mudarDirecao(dir) {{
@@ -2343,17 +2392,16 @@ if prompt:
                 2. - If origin and destination are already names of known stops or parishes, use "plan_trip_with_transfer" with the exact names. If it closely resembles a stop, mention that. When in doubt, ask the user.
                 3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
                 4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
-                5. If a route has several lines, always suggest all of them and their schedules. Any route even if its stop, place that you know of you need to try to make a connection.
-                6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day, highligh the soonest by the asked time.
+                5. If a route has several lines, suggest all of them and their schedules.
+                6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day.
                 7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
                 8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
                 9. From any stop it is possible to transfer in the centre of Guimarães by walking between the stops s.goncalo, central de camionagem, s.damaso norte or s.damaso sul. Even if it takes two or three transfers, you must find a solution.
                 10. In the schedules, only a time listed directly opposite the stop means it passes there at that time.
                 11. Check all outbound and return schedules — some schedules span several pages.
-                12. When "guimaraes" is requested, it means S.goncalo, central de camionagem, s.damaso norte or s.damaso sul.
+                12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
-                15. If asked for a local to other place, if you need to get multiple buses to get to that location you must say which buses, based on the nearest stop of that place.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
