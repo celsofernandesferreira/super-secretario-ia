@@ -2344,7 +2344,7 @@ if prompt:
                 3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
                 4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
                 5. If a route has several lines, suggest all of them and their schedules.
-                6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day and also give the nearest schedule.
+                6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day, highligh the soonest by the asked time.
                 7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
                 8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
                 9. From any stop it is possible to transfer in the centre of Guimarães by walking between the stops s.goncalo, central de camionagem, s.damaso norte or s.damaso sul. Even if it takes two or three transfers, you must find a solution.
