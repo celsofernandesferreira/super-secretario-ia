@@ -2032,7 +2032,6 @@ def render_game(ui):
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
                 ctx.font = '16px Arial';
                 ctx.fillText('🧍', apple.x + 2, apple.y + 15);
-                // Desenhar o Autocarro (antiga cobra)
                 for(var i=0; i<snake.length; i++) {
                     if(i === 0) {
                         ctx.font = '16px Arial';
