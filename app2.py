@@ -2030,13 +2030,21 @@ def render_game(ui):
             function drawScene() {{
                 ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, gameWidth, canvas.height);
                 ctx.fillStyle = '#2ecc71'; ctx.fillRect(gameWidth, 0, 3, canvas.height);
-                ctx.fillStyle = '#3498db'; ctx.beginPath();
-                ctx.arc(apple.x + tnt/2, apple.y + tnt/2, (tnt-4)/2, 0, 2 * Math.PI); ctx.fill();
-                
-                for(var i=0; i<snake.length; i++) {{
-                    ctx.fillStyle = (i===0) ? '#27ae60' : '#2ecc71';
-                    ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-2, tnt-2);
-                }}
+                ctx.font = '16px Arial';
+                ctx.fillText('🧍', apple.x + 2, apple.y + 15);
+                // Desenhar o Autocarro (antiga cobra)
+                for(var i=0; i<snake.length; i++) {
+                    if(i === 0) {
+                        ctx.font = '16px Arial';
+                        ctx.fillText('🚌', snake[i].x + 1, snake[i].y + 15);
+                    } else {
+                        // O corpo do autocarro (com janelas)
+                        ctx.fillStyle = '#f39c12'; // Laranja/Amarelo tipo "Guimabus/Escolar"
+                        ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-2, tnt-2);
+                        ctx.fillStyle = '#34495e'; // Janela escura
+                        ctx.fillRect(snake[i].x + 4, snake[i].y + 4, tnt-8, tnt-8);
+                    }
+                }
 
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'start';
                 ctx.fillText('{ui['game_pax']}: ' + (score / 10), 15, 25);
