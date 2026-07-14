@@ -24,17 +24,17 @@ from bs4 import BeautifulSoup
 UI_TEXT = {
     "PT": {
         "title": "💼 O Teu Super Secretário de Produtividade",
-        "toast_score": "💾 Recorde de {name} ({score} pas.) guardado com sucesso!",
+        "toast_score": "💾 Recorde de {name} ({score} pessoa(s)) guardado com sucesso!",
         "sidebar_panel": "⚙️ Painel do Agente",
         "clear_history": "🗑️ Limpar O Meu Histórico",
         "entertainment": "🕹️ Entretenimento",
-        "close_game": "Fechar Jogo X",
-        "open_game": "Abrir Mini-Game 👾",
+        "close_game": "Fechar Crazy Bus Driver X",
+        "open_game": "Abrir Crazy Bus Driver Mini-Game 👾",
         "transport_tickets": "🎫 Títulos de Transporte",
         "close_ticket": "Fechar Pedido de Passe X",
         "request_ticket": "Pedir Passe 🎫",
         "developer": "👨‍💻 Desenvolvedor",
-        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n📞 Contacto: **917 486 683**",
+        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
         "status": "Estado: **Online**\nModelo Nativo: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Área de Administrador",
         "login_admin": "Entrar como administrador",
@@ -56,13 +56,14 @@ UI_TEXT = {
         "speak": "Falar",
         "download_txt": "📥 Descarregar Resposta (.txt)",
         "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Guimabus:** Monitorização da frota, horários e trajetos da Guimabus.\n2. **Modo Recrutador:** Informação sobre o teu currículo e percurso profissional para recrutadores — diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês, ou dá-me um problema de IT para eu mostrar como tu o resolverias.\n3. **Modo Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
-        "game_title": "🚌 Guimabus Arcade: Cabine de Condução 🚌",
+        "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Gravar 💾",
         "game_name": "Teu Nome",
-        "game_pax": "Passageiros",
+        "game_pax": "Pessoa",
+        "game_unit": "pessoa(s)",
         "game_top10": "🏆 TOP 10 MOTORISTAS",
         "game_gameover": "FIM DA LINHA",
         "game_transported": "Transportaste",
@@ -112,17 +113,17 @@ UI_TEXT = {
     },
     "EN": {
         "title": "💼 Your Super Productivity Secretary",
-        "toast_score": "💾 Score for {name} ({score} pax) saved successfully!",
+        "toast_score": "💾 Score for {name} ({score} person(s)) saved successfully!",
         "sidebar_panel": "⚙️ Agent Panel",
         "clear_history": "🗑️ Clear My History",
         "entertainment": "🕹️ Entertainment",
-        "close_game": "Close Game X",
-        "open_game": "Open Mini-Game 👾",
+        "close_game": "Close Crazy Bus Driver X",
+        "open_game": "Open Crazy Bus Driver Mini-Game 👾",
         "transport_tickets": "🎫 Transport Tickets",
         "close_ticket": "Close Ticket Request X",
         "request_ticket": "Request Ticket 🎫",
         "developer": "👨‍💻 Developer",
-        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n📞 Contact: **917 486 683**",
+        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
         "status": "Status: **Online**\nNative Model: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Administrator Area",
         "login_admin": "Login as Administrator",
@@ -144,13 +145,14 @@ UI_TEXT = {
         "speak": "Speak",
         "download_txt": "📥 Download Response (.txt)",
         "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus Mode:** Fleet monitoring, schedules and route planning for Guimabus.\n2. **Recruiter Mode:** Information about your CV and professional background for recruiters — tell me *'I want to train for an interview'* to simulate technical tests in English, or give me an IT problem so I can show how you would solve it.\n3. **Project Mode:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
-        "game_title": "🚌 Guimabus Arcade: Driving Cabin 🚌",
+        "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Save 💾",
         "game_name": "Your Name",
-        "game_pax": "Passengers",
+        "game_pax": "Person",
+        "game_unit": "person(s)",
         "game_top10": "🏆 TOP 10 DRIVERS",
         "game_gameover": "END OF THE LINE",
         "game_transported": "You transported",
@@ -1654,6 +1656,10 @@ def _e_paragem_hub(nome_paragem: str) -> bool:
     n = _normalize_stop_name(nome_paragem)
     return any(kw in n for kw in _HUB_KEYWORDS_NORM)
 
+def _e_linha_noturna(linha_id: str) -> bool:
+    # Regra 8 do prompt: linhas cujo identificador começa por "N" são noturnas.
+    return str(linha_id).strip().upper().startswith("N")
+
 def plan_trip_with_transfer(origem: str, destino: str):
     if not origem or not destino: return "É necessário indicar a paragem de origem e a paragem de destino."
     origem_norm, destino_norm = _normalize_stop_name(origem), _normalize_stop_name(destino)
@@ -1673,12 +1679,22 @@ def plan_trip_with_transfer(origem: str, destino: str):
     paragens_origem_encontradas, paragens_destino_encontradas = set(), set()
     mapa_linha_paragens = {}
 
+    # "Guimarães" sozinho não é o nome de nenhuma paragem real — significa
+    # genericamente qualquer uma das paragens centrais (regra 12 do prompt).
+    # Em vez de depender do modelo se lembrar de substituir isto manualmente,
+    # tratamos aqui: se a origem/destino normalizar para "guimaraes", uma
+    # paragem conta como correspondência se for uma das paragens centrais.
+    origem_e_guimaraes_generico = origem_norm == "guimaraes"
+    destino_e_guimaraes_generico = destino_norm == "guimaraes"
+
     for linha_id, paragem in todas:
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
         paragem_norm = _normalize_stop_name(paragem)
-        if re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm):
+        match_origem = _e_paragem_hub(paragem) if origem_e_guimaraes_generico else re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm)
+        match_destino = _e_paragem_hub(paragem) if destino_e_guimaraes_generico else re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm)
+        if match_origem:
             linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem)
-        if re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm):
+        if match_destino:
             linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem)
 
     aviso_o, aviso_d = False, False
@@ -1715,8 +1731,16 @@ def plan_trip_with_transfer(origem: str, destino: str):
 
     linhas_diretas = linhas_origem & linhas_destino
     if linhas_diretas:
+        # Regra 8 do prompt: dar prioridade às linhas diurnas — as noturnas (prefixo "N")
+        # só aparecem primeiro se forem mesmo a única opção disponível.
+        diurnas = sorted(l for l in linhas_diretas if not _e_linha_noturna(l))
+        noturnas = sorted(l for l in linhas_diretas if _e_linha_noturna(l))
+        linhas_ordenadas = diurnas + noturnas
+
         resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}':\n"
-        for l in linhas_diretas: resumo += f"- Linha {l}\n"
+        for l in linhas_ordenadas: resumo += f"- Linha {l}\n"
+        if not diurnas and noturnas:
+            resumo += "\n🌙 Nota: só encontrei linha(s) noturna(s) para este trajeto — não há alternativa diurna direta."
         return resumo + aviso_precisao
 
     stops_o, stops_d = set(), set()
@@ -2026,7 +2050,7 @@ def render_game(ui):
                     ctx.fillStyle = (k===0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
                     if (leaderboard[k]) {{
                         ctx.fillText((k+1) + "º " + leaderboard[k][0], gameWidth + 15, yPos);
-                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' pas.', canvas.width - 15, yPos); ctx.textAlign = 'start';
+                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' {ui['game_unit']}', canvas.width - 15, yPos); ctx.textAlign = 'start';
                     }} else {{ ctx.fillStyle = '#444'; ctx.fillText((k+1) + 'º ------', gameWidth + 15, yPos); }}
                 }}
                 
@@ -2505,7 +2529,24 @@ if prompt:
                 # call any real tool, it answered "off the top of its head" — exactly
                 # what happens when it invents line numbers. We force a new attempt
                 # in which it is required to consult a real tool before answering.
-                if active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt) and chat is not None:
+                #
+                # Important exception: if the model already answered with honest uncertainty
+                # (e.g. "I could not find...", "not confirmed"), it did NOT hallucinate — it
+                # correctly admitted it doesn't know. Forcing a retry in that case only adds
+                # latency (a second full API call, up to +25s) and risks the model being
+                # forced to call a tool with made-up arguments just to satisfy the rule,
+                # producing a worse answer than the honest one it already gave. So we skip
+                # the retry whenever the response already shows that honesty.
+                _FRASES_INCERTEZA_HONESTA = [
+                    "não encontrei", "nao encontrei", "não consegui", "nao consegui",
+                    "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
+                    "não tenho informação", "peço desculpa", "i'm sorry", "i am sorry",
+                    "não disponho", "não existem linhas", "sem transbordo", "sem informação",
+                ]
+                resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
+
+                if (active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt)
+                        and chat is not None and not resposta_ja_e_honesta):
                     if not _called_real_tool(chat, history_len_before):
                         logging.error(f"Possible hallucination detected (response without a tool call) for the prompt: {prompt}")
                         try:
