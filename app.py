@@ -15,6 +15,7 @@ import unicodedata
 import folium
 import email.utils
 import math
+import hmac
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
@@ -293,6 +294,18 @@ def initialize_db():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
+
+    # Remove any duplicate rows that may already exist (safe for a pre-existing database
+    # that was populated before this UNIQUE constraint existed), keeping the earliest row
+    # of each (tipo, nome) pair, then enforce real uniqueness going forward so that
+    # INSERT OR IGNORE actually prevents duplicates instead of silently doing nothing.
+    cursor.execute("""
+        DELETE FROM nos_geograficos
+        WHERE id NOT IN (
+            SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
+        )
+    """)
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
 
     conn.commit()
     conn.close()
@@ -1214,6 +1227,7 @@ def import_parish_streets(nome_freguesia):
 def generate_line_map_html(linha_id):
     os.makedirs("maps", exist_ok=True)
     conn = sqlite3.connect("agente_memoria.db")
+    conn.create_function("_normalize_stop_name", 1, _normalize_stop_name)
     cursor = conn.cursor()
     cursor.execute("""
         SELECT p.paragem, g.latitude, g.longitude, g.freguesia 
@@ -1257,6 +1271,7 @@ def generate_google_maps_link(local_nome: str):
 
     nome_norm = _normalize_stop_name(local_nome)
     conn = sqlite3.connect("agente_memoria.db")
+    conn.create_function("_normalize_stop_name", 1, _normalize_stop_name)
     cursor = conn.cursor()
     cursor.execute("""
         SELECT nome, latitude, longitude FROM nos_geograficos 
@@ -1789,7 +1804,7 @@ def get_pass_types_cache():
         resultado = {}
         for tip, desc, preco, cartao, prazo, docs_json in linhas:
             try: docs = json.loads(docs_json)
-            except: docs = [docs_json]
+            except (json.JSONDecodeError, TypeError): docs = [docs_json]
             resultado[tip] = {"descricao": desc, "preco": preco, "custo_cartao": cartao, "prazo": prazo, "documentos": docs}
         return resultado, ultima_atualizacao
     except Exception:
@@ -2133,16 +2148,41 @@ with st.sidebar:
     st.sidebar.subheader(ui["admin_area"])
     if "admin_autenticado" not in st.session_state:
         st.session_state.admin_autenticado = False
+    if "admin_falhas" not in st.session_state:
+        st.session_state.admin_falhas = 0
+    if "admin_bloqueado_ate" not in st.session_state:
+        st.session_state.admin_bloqueado_ate = None
 
     if not st.session_state.admin_autenticado:
+        agora = datetime.now()
+        bloqueado = st.session_state.admin_bloqueado_ate and agora < st.session_state.admin_bloqueado_ate
         with st.sidebar.expander(ui["login_admin"]):
-            password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
-            if st.button(ui["login_btn"], key="admin_login_btn"):
-                if password_input and password_input == st.secrets.get("ADMIN_PASSWORD", None):
-                    st.session_state.admin_autenticado = True
-                    st.rerun()
-                else:
-                    st.sidebar.error(ui["wrong_pass"])
+            if bloqueado:
+                segundos_restantes = int((st.session_state.admin_bloqueado_ate - agora).total_seconds())
+                aviso_bloqueio = (
+                    f"Demasiadas tentativas falhadas. Tenta novamente daqui a {segundos_restantes}s."
+                    if st.session_state.language == "PT"
+                    else f"Too many failed attempts. Try again in {segundos_restantes}s."
+                )
+                st.warning(aviso_bloqueio)
+            else:
+                password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
+                if st.button(ui["login_btn"], key="admin_login_btn"):
+                    admin_pass_real = st.secrets.get("ADMIN_PASSWORD", None)
+                    # Constant-time comparison (hmac.compare_digest) instead of "==",
+                    # to avoid leaking timing information about how much of the password matched.
+                    if admin_pass_real and password_input and hmac.compare_digest(password_input, admin_pass_real):
+                        st.session_state.admin_autenticado = True
+                        st.session_state.admin_falhas = 0
+                        st.session_state.admin_bloqueado_ate = None
+                        st.rerun()
+                    else:
+                        st.session_state.admin_falhas += 1
+                        # After 5 failed attempts, lock the login for 5 minutes.
+                        if st.session_state.admin_falhas >= 5:
+                            st.session_state.admin_bloqueado_ate = agora + timedelta(minutes=5)
+                            st.session_state.admin_falhas = 0
+                        st.sidebar.error(ui["wrong_pass"])
     else:
         st.sidebar.success(ui["admin_active"])
         
