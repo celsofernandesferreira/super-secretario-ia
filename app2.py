@@ -23,7 +23,7 @@ from bs4 import BeautifulSoup
 # --- LANGUAGE DICTIONARY ---
 UI_TEXT = {
     "PT": {
-        "title": "💼 O Teu Super Secretário de Produtividade",
+        "title": "🕵️‍♀️ Super Agente de Celso Ferreira ",
         "toast_score": "💾 Recorde de {name} ({score} pessoa(s)) guardado com sucesso!",
         "sidebar_panel": "⚙️ Painel do Agente",
         "clear_history": "🗑️ Limpar O Meu Histórico",
