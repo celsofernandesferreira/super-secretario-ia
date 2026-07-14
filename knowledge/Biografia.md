@@ -27,7 +27,6 @@ Competências Complementares Idiomas: Domínio profissional de Inglês (foco em 
 Finanças: Interesse em literacia financeira, plataformas de investimento e conformidade fiscal.
 
 # CV
-917486683
 
 Guimarães
 celso.fernandes.ferreira@gmail.com
@@ -96,9 +95,9 @@ Kerberos e DNS.
 
 Português
 
-Linkedin Celso Ferreira
+Linkedin Celso Ferreira - https://www.linkedin.com/in/celso-ferreira-ab0830134/
 
-GitHub Celso Ferreira
+GitHub Celso Ferreira - https://github.com/celsofernandesferreira
 
 EXPERIÊNCIA
 
