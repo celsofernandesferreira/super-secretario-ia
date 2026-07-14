@@ -2040,7 +2040,7 @@ def render_game(ui):
                 for(var i=0; i<snake.length; i++) {{
                     if(i === 0) {{
                         ctx.font = '16px Arial';
-                        ctx.fillText('🚌', snake[i].x + 1, snake[i].y + 15);
+                        ctx.fillText('🚍', snake[i].x + 1, snake[i].y + 15);
                     }} else {{
                         ctx.fillStyle = '#f39c12'; 
                         ctx.fillRect(snake[i].x + 1, snake[i].y + 1, tnt-2, tnt-2);
