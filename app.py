@@ -2343,7 +2343,7 @@ if prompt:
                 2. - If origin and destination are already names of known stops or parishes, use "plan_trip_with_transfer" with the exact names. If it closely resembles a stop, mention that. When in doubt, ask the user.
                 3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
                 4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
-                5. If a route has several lines, suggest all of them and their schedules.
+                5. If a route has several lines, always suggest all of them and their schedules. Any route even if its stop, place that you know of you need to try to make a connection
                 6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day, highligh the soonest by the asked time.
                 7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
                 8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
