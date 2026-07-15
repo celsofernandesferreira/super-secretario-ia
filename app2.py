@@ -16,6 +16,7 @@ import folium
 import email.utils
 import math
 import hmac
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
@@ -30,12 +31,6 @@ UI_TEXT = {
         "entertainment": "🕹️ Entretenimento",
         "close_game": "Fechar Crazy Bus Driver X",
         "open_game": "Abrir Crazy Bus Driver Mini-Game 👾",
-        "toast_score": "💾 Recorde de {name} ({score} pas.) guardado com sucesso!",
-        "sidebar_panel": "⚙️ Painel do Agente",
-        "clear_history": "🗑️ Limpar O Meu Histórico",
-        "entertainment": "🕹️ Entretenimento",
-        "close_game": "Fechar Jogo X",
-        "open_game": "Abrir Mini-Game 👾",
         "transport_tickets": "🎫 Títulos de Transporte",
         "close_ticket": "Fechar Pedido de Passe X",
         "request_ticket": "Pedir Passe 🎫",
@@ -598,12 +593,78 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def _load_dotenv_file(file_path: str | Path | None = None):
+    """Load simple KEY=VALUE pairs from a dotenv-style file without adding a new dependency."""
+    candidates = []
+    if file_path:
+        candidates.append(Path(file_path))
+
+    base_dir = Path(__file__).resolve().parent
+    candidates.extend([
+        base_dir / "Secrets.env",
+        base_dir / ".env",
+        base_dir / "secrets.env",
+        Path.cwd() / "Secrets.env",
+        Path.cwd() / ".env",
+        Path.cwd() / "secrets.env",
+    ])
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        try:
+            values = {}
+            for raw_line in resolved.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip("\"'")
+            return values
+        except Exception as exc:
+            logging.warning(f"Unable to read secrets file {resolved}: {exc}")
+    return {}
+
+
+DOTENV_VALUES = _load_dotenv_file()
+
+
+def _get_secret(key: str, default=None):
+    """Reads a configuration secret, preferring environment variables, then
+    Streamlit secrets, and finally a local dotenv-style file so the same app
+    behaves correctly in Docker and in local development."""
+    valor = os.getenv(key)
+    if valor:
+        return valor
+
+    try:
+        if st.secrets.get(key, None):
+            return st.secrets.get(key, default)
+    except Exception:
+        pass
+
+    if key in DOTENV_VALUES:
+        return DOTENV_VALUES[key]
+
+    return default
+
 # 5. Gemini API initialization
 try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    chave_api = _get_secret("GOOGLE_API_KEY")
+    if not chave_api:
+        raise ValueError("GOOGLE_API_KEY not set (checked environment variable and st.secrets).")
+    genai.configure(api_key=chave_api)
 except Exception:
-    st.error("Error: API key missing from Streamlit Secrets.")
-    logging.error("Failed to initialize the application: API key missing from Secrets.")
+    st.error("Error: API key missing from environment variables, Streamlit secrets, or Secrets.env.")
+    logging.error("Failed to initialize the application: API key missing from environment/secrets files.")
     st.stop()
 
 
@@ -2246,7 +2307,7 @@ with st.sidebar:
             else:
                 password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
                 if st.button(ui["login_btn"], key="admin_login_btn"):
-                    admin_pass_real = st.secrets.get("ADMIN_PASSWORD", None)
+                    admin_pass_real = _get_secret("ADMIN_PASSWORD")
                     # Constant-time comparison (hmac.compare_digest) instead of "==",
                     # to avoid leaking timing information about how much of the password matched.
                     if admin_pass_real and password_input and hmac.compare_digest(password_input, admin_pass_real):
@@ -2534,7 +2595,24 @@ if prompt:
                 # call any real tool, it answered "off the top of its head" — exactly
                 # what happens when it invents line numbers. We force a new attempt
                 # in which it is required to consult a real tool before answering.
-                if active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt) and chat is not None:
+                #
+                # Important exception: if the model already answered with honest uncertainty
+                # (e.g. "I could not find...", "not confirmed"), it did NOT hallucinate — it
+                # correctly admitted it doesn't know. Forcing a retry in that case only adds
+                # latency (a second full API call, up to +25s) and risks the model being
+                # forced to call a tool with made-up arguments just to satisfy the rule,
+                # producing a worse answer than the honest one it already gave. So we skip
+                # the retry whenever the response already shows that honesty.
+                _FRASES_INCERTEZA_HONESTA = [
+                    "não encontrei", "nao encontrei", "não consegui", "nao consegui",
+                    "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
+                    "não tenho informação", "peço desculpa", "i'm sorry", "i am sorry",
+                    "não disponho", "não existem linhas", "sem transbordo", "sem informação",
+                ]
+                resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
+
+                if (active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt)
+                        and chat is not None and not resposta_ja_e_honesta):
                     if not _called_real_tool(chat, history_len_before):
                         logging.error(f"Possible hallucination detected (response without a tool call) for the prompt: {prompt}")
                         try:
