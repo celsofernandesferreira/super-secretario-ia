@@ -747,12 +747,7 @@ def get_facebook_notices():
         logging.error(f"Native RSS error: {e}")
         
     return avisos_ativos
-            
-    except Exception as e:
-        logging.error(f"Native RSS error: {e}")
-        
-    return avisos_ativos
-
+    
 def render_notices_footer(anuncios_ativos, ui):
     if not anuncios_ativos: return
     
