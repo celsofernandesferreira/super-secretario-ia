@@ -656,7 +656,7 @@ def extract_future_date(texto):
 
 @st.cache_data(ttl=3600)
 def get_facebook_notices():
-    url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.rss"
+    url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.atom"
     avisos_ativos = []
     todos_avisos = [] # 🛡️ LISTA DE SEGURANÇA (FALLBACK)
     
