@@ -592,9 +592,26 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def _get_secret(key: str, default=None):
+    """Reads a configuration secret, preferring an environment variable (the
+    native, idiomatic way to pass secrets into a Docker/cloud container — no
+    extra startup script needed) and falling back to st.secrets (used for
+    local development via .streamlit/secrets.toml). This way the exact same
+    code works unmodified both locally and in any Docker/cloud deployment."""
+    valor = os.getenv(key)
+    if valor:
+        return valor
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
 # 5. Gemini API initialization
 try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    chave_api = _get_secret("GOOGLE_API_KEY")
+    if not chave_api:
+        raise ValueError("GOOGLE_API_KEY not set (checked environment variable and st.secrets).")
+    genai.configure(api_key=chave_api)
 except Exception:
     st.error("Error: API key missing from Streamlit Secrets.")
     logging.error("Failed to initialize the application: API key missing from Secrets.")
@@ -2241,7 +2258,7 @@ with st.sidebar:
             else:
                 password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
                 if st.button(ui["login_btn"], key="admin_login_btn"):
-                    admin_pass_real = st.secrets.get("ADMIN_PASSWORD", None)
+                    admin_pass_real = _get_secret("ADMIN_PASSWORD")
                     # Constant-time comparison (hmac.compare_digest) instead of "==",
                     # to avoid leaking timing information about how much of the password matched.
                     if admin_pass_real and password_input and hmac.compare_digest(password_input, admin_pass_real):
