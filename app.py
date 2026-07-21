@@ -433,7 +433,6 @@ def _search_local_map(local_nome: str):
         return melhor_match
     return None
 
-@st.cache_data(ttl=86400)
 def _geocode_nominatim_place(local_nome: str):
     """Geocodes a place name in Guimarães live via OpenStreetMap (Nominatim),
     used as a fallback when the place is not in the static map (geo_guimaraes.json)."""
