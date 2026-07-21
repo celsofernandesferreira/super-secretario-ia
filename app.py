@@ -16,6 +16,7 @@ import folium
 import email.utils
 import math
 import hmac
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
@@ -23,7 +24,7 @@ from bs4 import BeautifulSoup
 # --- LANGUAGE DICTIONARY ---
 UI_TEXT = {
     "PT": {
-        "title": "💼 O Teu Super Secretário de Produtividade",
+        "title": "🚌 Agente Sobre Rodas😎",
         "toast_score": "💾 Recorde de {name} ({score} pessoa(s)) guardado com sucesso!",
         "sidebar_panel": "⚙️ Painel do Agente",
         "clear_history": "🗑️ Limpar O Meu Histórico",
@@ -55,15 +56,15 @@ UI_TEXT = {
         "chat_input": "Como posso ajudar hoje?",
         "speak": "Falar",
         "download_txt": "📥 Descarregar Resposta (.txt)",
-        "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Guimabus:** Monitorização da frota, horários e trajetos da Guimabus.\n2. **Modo Recrutador:** Informação sobre o teu currículo e percurso profissional para recrutadores — diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês, ou dá-me um problema de IT para eu mostrar como tu o resolverias.\n3. **Modo Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
+        "initial_msg": "Olá! Sou o **Agente de Produtividade de Elite do Celso**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Guimabus:** Monitorização da frota, horários e trajetos da Guimabus e informações .\n2. **Secretario do Celso:** Informação sobre o Perfil do Celso e percurso profissional para recrutadores — dá-me um problema de IT para eu mostrar como o Celso Resolveria.\n3. **Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
         "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Gravar 💾",
         "game_name": "Teu Nome",
-        "game_pax": "Pessoa",
-        "game_unit": "pessoa(s)",
+        "game_pax": "Passageiros",
+        "game_unit": "passageiros(s)",
         "game_top10": "🏆 TOP 10 MOTORISTAS",
         "game_gameover": "FIM DA LINHA",
         "game_transported": "Transportaste",
@@ -71,7 +72,7 @@ UI_TEXT = {
         "game_alert": "Por favor introduz o teu nome!",
         "ad_disclaimer": "⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.",
         "ad_notice": "Aviso",
-        "ticket_title": "🎫 Pedido de Passe — Guimabus",
+        "ticket_title": "🎫 Titulos de Transporte — Guimabus",
         "ticket_warning": "⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão.**",
         "ticket_updated": "📅 Dados atualizados em:",
         "ticket_wizard": "🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas",
@@ -112,7 +113,7 @@ UI_TEXT = {
         "updating_system": "**SISTEMA EM ATUALIZAÇÃO:** A descarregar novos horários e pacotes de dados. O agente está temporariamente bloqueado para evitar falhas. Por favor, aguarda (pode demorar 1-2 minutos)..."
     },
     "EN": {
-        "title": "💼 Your Super Productivity Secretary",
+        "title": "🚌 Agent on Wheels😎",
         "toast_score": "💾 Score for {name} ({score} person(s)) saved successfully!",
         "sidebar_panel": "⚙️ Agent Panel",
         "clear_history": "🗑️ Clear My History",
@@ -144,15 +145,15 @@ UI_TEXT = {
         "chat_input": "How can I help you today?",
         "speak": "Speak",
         "download_txt": "📥 Download Response (.txt)",
-        "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus Mode:** Fleet monitoring, schedules and route planning for Guimabus.\n2. **Recruiter Mode:** Information about your CV and professional background for recruiters — tell me *'I want to train for an interview'* to simulate technical tests in English, or give me an IT problem so I can show how you would solve it.\n3. **Project Mode:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
+        "initial_msg": "Hello! I am **Celso's Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus:** Fleet monitoring, schedules and routes for Guimabus, plus general information.\n2. **Celso's Assistant:** Information about Celso's profile and career for recruiters — give me an IT problem and I'll show you how Celso would solve it.\n3. **Project:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
         "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Save 💾",
         "game_name": "Your Name",
-        "game_pax": "Person",
-        "game_unit": "person(s)",
+        "game_pax": "Passengers",
+        "game_unit": "passenger(s)",
         "game_top10": "🏆 TOP 10 DRIVERS",
         "game_gameover": "END OF THE LINE",
         "game_transported": "You transported",
@@ -592,19 +593,68 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def _load_dotenv_file(file_path: str | Path | None = None):
+    """Load simple KEY=VALUE pairs from a dotenv-style file without adding a new dependency."""
+    candidates = []
+    if file_path:
+        candidates.append(Path(file_path))
+
+    base_dir = Path(__file__).resolve().parent
+    candidates.extend([
+        base_dir / "Secrets.env",
+        base_dir / ".env",
+        base_dir / "secrets.env",
+        Path.cwd() / "Secrets.env",
+        Path.cwd() / ".env",
+        Path.cwd() / "secrets.env",
+    ])
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        try:
+            values = {}
+            for raw_line in resolved.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip("\"'")
+            return values
+        except Exception as exc:
+            logging.warning(f"Unable to read secrets file {resolved}: {exc}")
+    return {}
+
+
+DOTENV_VALUES = _load_dotenv_file()
+
+
 def _get_secret(key: str, default=None):
-    """Reads a configuration secret, preferring an environment variable (the
-    native, idiomatic way to pass secrets into a Docker/cloud container — no
-    extra startup script needed) and falling back to st.secrets (used for
-    local development via .streamlit/secrets.toml). This way the exact same
-    code works unmodified both locally and in any Docker/cloud deployment."""
+    """Reads a configuration secret, preferring environment variables, then
+    Streamlit secrets, and finally a local dotenv-style file so the same app
+    behaves correctly in Docker and in local development."""
     valor = os.getenv(key)
     if valor:
         return valor
+
     try:
-        return st.secrets.get(key, default)
+        if st.secrets.get(key, None):
+            return st.secrets.get(key, default)
     except Exception:
-        return default
+        pass
+
+    if key in DOTENV_VALUES:
+        return DOTENV_VALUES[key]
+
+    return default
 
 # 5. Gemini API initialization
 try:
@@ -613,8 +663,8 @@ try:
         raise ValueError("GOOGLE_API_KEY not set (checked environment variable and st.secrets).")
     genai.configure(api_key=chave_api)
 except Exception:
-    st.error("Error: API key missing from Streamlit Secrets.")
-    logging.error("Failed to initialize the application: API key missing from Secrets.")
+    st.error("Error: API key missing from environment variables, Streamlit secrets, or Secrets.env.")
+    logging.error("Failed to initialize the application: API key missing from environment/secrets files.")
     st.stop()
 
 
@@ -747,7 +797,7 @@ def get_facebook_notices():
         logging.error(f"Native RSS error: {e}")
         
     return avisos_ativos
-    
+
 def render_notices_footer(anuncios_ativos, ui):
     if not anuncios_ativos: return
     
