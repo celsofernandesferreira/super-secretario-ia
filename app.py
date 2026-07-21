@@ -2492,7 +2492,7 @@ if prompt:
                 11. Check all outbound and return schedules — some schedules span several pages.
                 12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
                 13. When a route is requested, you must check both directions of every line.
-                14. Even if you've already found a solution, you must check all of them.
+                14. EXHAUSTIVE OPTIONS: You must present ALL route alternatives and transfer combinations returned by the tools. Do not stop at the first valid option. If the tool provides multiple lines, you MUST query the schedules for EVERY single line involved using query_line_schedule_cache and present a full comparison.
                 15. Check all relevant lines from beginning to end to determine if a transfer is actually possible. If the transfer requires moving to a different stop, you must specify the walking distance required."
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
