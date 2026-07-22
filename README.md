@@ -1,6 +1,6 @@
 # Super Secretário IA — Assistente de Elite (Guimabus / Recrutador / Projeto)
 
-*Read this in English: [jump to the English version](english-version) below.*
+*Read this in English: [jump to the English version](#english-version) below.*
 
 ---
 
