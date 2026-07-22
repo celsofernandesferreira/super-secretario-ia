@@ -2521,7 +2521,7 @@ if prompt:
                 2. - If origin and destination are already names of known stops or parishes, use "plan_trip_with_transfer" with the exact names. If it closely resembles a stop, mention that. When in doubt, ask the user.
                 3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
                 4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
-                5. If a route has several lines, suggest all of them and their schedules.
+                5. If a route has several lines (direct or for either leg of a transfer), you MUST list ALL of them, not just one or two examples — never summarise with "e.g." or pick just one when the tool returned several.
                 6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day.
                 7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
                 8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
@@ -2531,6 +2531,7 @@ if prompt:
                 12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
+                15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
@@ -2567,16 +2568,38 @@ if prompt:
 
                 normalized_prompt = prompt.lower()
                 project_triggers = ["este projeto", "sobre o projeto", "sobre este projeto", "como foi feito", "como foi construido", "que tecnologias", "stack", "arquitetura", "arquitectura", "this project", "how was this built", "tech stack"]
-                recruiter_triggers = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+                # Split into two tiers: "strong" recruiter signals are unambiguous (CV,
+                # hiring, skills) and should always switch mode. The "IT problem" words
+                # are intentionally generic (so a recruiter can say "give me a problem")
+                # but the same words show up naturally in transport questions (e.g. "há
+                # algum problema na linha 170?"), so they only switch mode when the
+                # message doesn't otherwise look like a route/schedule question.
+                recruiter_triggers_strong = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "helpdesk", "ticket"]
+                recruiter_triggers_it_problem = ["problema", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
 
                 if any(word in normalized_prompt for word in project_triggers):
                     active_system_prompt = PROMPT_PROJECT
+                    st.session_state.modo_ativo = "project"
                 elif "entrevista" in normalized_prompt or "interview" in normalized_prompt:
                     active_system_prompt = PROMPT_INTERVIEW
-                elif any(word in normalized_prompt for word in recruiter_triggers):
+                    st.session_state.modo_ativo = "interview"
+                elif any(word in normalized_prompt for word in recruiter_triggers_strong):
                     active_system_prompt = PROMPT_RECRUITER
-                else:
+                    st.session_state.modo_ativo = "recruiter"
+                elif looks_like_route_request(prompt):
                     active_system_prompt = PROMPT_GUIMABUS
+                    st.session_state.modo_ativo = "guimabus"
+                elif any(word in normalized_prompt for word in recruiter_triggers_it_problem):
+                    active_system_prompt = PROMPT_RECRUITER
+                    st.session_state.modo_ativo = "recruiter"
+                else:
+                    # No clear signal in this specific message — instead of silently
+                    # resetting to Guimabus (which used to break the thread of an
+                    # ongoing Recruiter/Project conversation on any generic follow-up
+                    # like "e no fim de semana?" or "podes explicar melhor?"), keep
+                    # whatever mode the conversation was already in.
+                    _mapa_modos = {"project": PROMPT_PROJECT, "interview": PROMPT_INTERVIEW, "recruiter": PROMPT_RECRUITER, "guimabus": PROMPT_GUIMABUS}
+                    active_system_prompt = _mapa_modos.get(st.session_state.get("modo_ativo", "guimabus"), PROMPT_GUIMABUS)
 
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
@@ -2599,7 +2622,18 @@ if prompt:
 
                 for model_name in candidate_models:
                     try:
-                        model = genai.GenerativeModel(model_name=model_name, system_instruction=active_system_prompt, tools=agent_tools)
+                        model = genai.GenerativeModel(
+                            model_name=model_name,
+                            system_instruction=active_system_prompt,
+                            tools=agent_tools,
+                            # A low, fixed temperature makes tool-calling decisions far
+                            # more consistent: with the provider's default sampling, the
+                            # exact same question could sometimes trigger a real tool
+                            # call and sometimes get an "I don't know" answer purely by
+                            # chance. Factual/route questions should behave the same way
+                            # every time they're asked.
+                            generation_config={"temperature": 0.2},
+                        )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         history_len_before = len(chat.history)
                         response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
