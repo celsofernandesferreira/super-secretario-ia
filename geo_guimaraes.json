@@ -22126,5 +22126,179 @@
     "lat": 41.4420482,
     "lon": -8.3999039,
     "tipo": "rua"
+  },
+  "bugalho": {
+    "nome_real": "Bugalho",
+    "lat": 41.4416908,
+    "lon": -8.3015923,
+    "tipo": "restaurant"
+  },
+  "ginasio": {
+    "nome_real": "Ginásio",
+    "lat": 41.4346365,
+    "lon": -8.3028284,
+    "tipo": "fitness_centre"
+  },
+  "ginasio_corpo_activo": {
+    "nome_real": "Ginásio Corpo Activo",
+    "lat": 41.4497123,
+    "lon": -8.2967441,
+    "tipo": "fitness_centre"
+  },
+  "pavilhao_desportivo_de_fermentoes": {
+    "nome_real": "Pavilhão desportivo de Fermentões",
+    "lat": 41.4580884,
+    "lon": -8.3128695,
+    "tipo": "sports_centre"
+  },
+  "academia_nokaute": {
+    "nome_real": "Academia Nokaute",
+    "lat": 41.4865291,
+    "lon": -8.3511658,
+    "tipo": "fitness_centre"
+  },
+  "parque_de_lazer_de_moreira_de_conegos": {
+    "nome_real": "Parque de Lazer de Moreira de Cónegos",
+    "lat": 41.3870884,
+    "lon": -8.3403276,
+    "tipo": "park"
+  },
+  "parque_infantil_de_ronfe": {
+    "nome_real": "parque infantil de Ronfe",
+    "lat": 41.4351623,
+    "lon": -8.3962089,
+    "tipo": "park"
+  },
+  "parque_de_lazer_nossa_senhora_da_saude": {
+    "nome_real": "Parque de Lazer Nossa Senhora da Saúde",
+    "lat": 41.4928261,
+    "lon": -8.38826,
+    "tipo": "park"
+  },
+  "cidade_berco": {
+    "nome_real": "Cidade berço",
+    "lat": 41.4436477,
+    "lon": -8.3005725,
+    "tipo": "fitness_centre"
+  },
+  "parque_da_colina_verde": {
+    "nome_real": "Parque da Colina Verde",
+    "lat": 41.4865864,
+    "lon": -8.2590212,
+    "tipo": "park"
+  },
+  "fitness_hut": {
+    "nome_real": "Fitness Hut",
+    "lat": 41.4483834,
+    "lon": -8.3416866,
+    "tipo": "fitness_centre"
+  },
+  "train4you": {
+    "nome_real": "Train4You",
+    "lat": 41.4545094,
+    "lon": -8.2811217,
+    "tipo": "fitness_centre"
+  },
+  "physical": {
+    "nome_real": "Physical",
+    "lat": 41.4420278,
+    "lon": -8.285971,
+    "tipo": "fitness_centre"
+  },
+  "solinca_classic": {
+    "nome_real": "Solinca Classic",
+    "lat": 41.4460275,
+    "lon": -8.2998983,
+    "tipo": "fitness_centre"
+  },
+  "activus": {
+    "nome_real": "Activus",
+    "lat": 41.4684466,
+    "lon": -8.2761738,
+    "tipo": "fitness_centre"
+  },
+  "nails_beauty": {
+    "nome_real": "Nails & Beauty",
+    "lat": 41.4425171,
+    "lon": -8.2940097,
+    "tipo": "beauty"
+  },
+  "talho_da_rainha": {
+    "nome_real": "Talho da Rainha",
+    "lat": 41.4425126,
+    "lon": -8.2940945,
+    "tipo": "butcher"
+  },
+  "elisabete_henriques_hairdressing": {
+    "nome_real": "Elisabete Henriques Hairdressing",
+    "lat": 41.4424672,
+    "lon": -8.2951093,
+    "tipo": "hairdresser"
+  },
+  "perfil_cabeleireiro": {
+    "nome_real": "Perfil Cabeleireiro",
+    "lat": 41.4425108,
+    "lon": -8.2950878,
+    "tipo": "hairdresser"
+  },
+  "ideal": {
+    "nome_real": "Ideal",
+    "lat": 41.4423606,
+    "lon": -8.2950345,
+    "tipo": "stationery"
+  },
+  "esmeralda_cabeleireira": {
+    "nome_real": "Esmeralda Cabeleireira",
+    "lat": 41.4424958,
+    "lon": -8.2907684,
+    "tipo": "hairdresser"
+  },
+  "my_mini_spa": {
+    "nome_real": "my mini spa",
+    "lat": 41.4424859,
+    "lon": -8.2910412,
+    "tipo": "beauty"
+  },
+  "talho_sao_mamede": {
+    "nome_real": "Talho São Mamede",
+    "lat": 41.442647,
+    "lon": -8.2905525,
+    "tipo": "butcher"
+  },
+  "brow_studio": {
+    "nome_real": "brow studio",
+    "lat": 41.4424772,
+    "lon": -8.2912166,
+    "tipo": "beauty"
+  },
+  "optica_muralha": {
+    "nome_real": "Óptica Muralha",
+    "lat": 41.4424682,
+    "lon": -8.2911536,
+    "tipo": "optician"
+  },
+  "susana_bettencourt": {
+    "nome_real": "Susana Bettencourt",
+    "lat": 41.4415978,
+    "lon": -8.294926,
+    "tipo": "clothes"
+  },
+  "medeiros_studio_hair": {
+    "nome_real": "Medeiros Studio Hair",
+    "lat": 41.4415612,
+    "lon": -8.2950332,
+    "tipo": "hairdresser"
+  },
+  "cantinho_do_fadista": {
+    "nome_real": "Cantinho do Fadista",
+    "lat": 41.4418948,
+    "lon": -8.2990506,
+    "tipo": "restaurant"
+  },
+  "arca_velha": {
+    "nome_real": "Arca Velha",
+    "lat": 41.4416532,
+    "lon": -8.2998445,
+    "tipo": "restaurant"
   }
 }
