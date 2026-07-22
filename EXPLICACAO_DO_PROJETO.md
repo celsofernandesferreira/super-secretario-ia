@@ -19,18 +19,17 @@ alto nível. A ordem segue a ordem do próprio ficheiro.
 6. Configuração da página, idiomas e Gemini
 7. Rodapé de avisos via RSS do Facebook
 8. Ferramentas de frota em tempo real
-9. Scraping de PDFs de horários + cache
-10. Knowledge Base e diagnósticos de cache
-11. Funções geográficas (Overpass, Folium, Google Maps) — **inclui um bug já corrigido**
-12. Bloqueio de sincronização no arranque
-13. Scraping de tipologias de passe e tarifário
-14. Índice paragem ↔ linha
-15. Planeamento de viagens (motor de transbordos)
-16. Passes, tarifário e verificação de documentos
-17. Jogo escondido
-18. Sidebar administrativa
-19. Loop principal do chat e rede anti-alucinação
-20. Bugs e limitações conhecidas (resumo)
+9. Scraping de PDFs de horários + cache (inclui Knowledge Base e diagnósticos de cache)
+10. Funções geográficas (Overpass, Folium, Google Maps)
+11. Bloqueio de sincronização no arranque
+12. Scraping de tipologias de passe e tarifário
+13. Índice paragem ↔ linha
+14. Planeamento de viagens (motor de transbordos)
+15. Passes, tarifário e verificação de documentos
+16. Jogo escondido
+17. Sidebar administrativa
+18. Loop principal do chat e rede anti-alucinação
+19. Notas técnicas e possíveis extensões futuras
 
 ---
 
@@ -166,7 +165,8 @@ datas numéricas (`dd/mm` ou `dd-mm`, opcionalmente com ano). Percorre todas as 
 e devolve a **mais tardia**, já como `datetime`. Devolve `None` se não encontrar nenhuma.
 
 **`get_facebook_notices()`** — decorada com `@st.cache_data(ttl=3600)` (só faz o pedido HTTP real uma vez
-por hora). Faz `requests.get` ao feed RSS (`rss.app`), usa `BeautifulSoup(response.content, "xml")` para
+por hora). Faz `requests.get` ao feed RSS (`FetchRSS`, o serviço que transforma a página de Facebook da
+Guimabus num feed RSS), usa `BeautifulSoup(response.content, "xml")` para
 percorrer até 30 `<item>`. Para cada item:
 1. Extrai `title`, `description`/`content:encoded`, limpa tags HTML e junta título+descrição em
    `texto_minusculas` (tudo em minúsculas, para comparação).
@@ -284,18 +284,16 @@ Desenha um `folium.Map` centrado na primeira paragem, com um marcador por parage
 uma `PolyLine` a ligar todas as coordenadas por ordem, gravando o resultado como
 `maps/linha_{linha_id}.html`.
 
-> ✅ **Bug corrigido:** esta query SQL chama `_normalize_stop_name(...)` **diretamente dentro do texto
-> SQL**, como se fosse uma função nativa do SQLite. Isso só funciona se a função Python
-> `_normalize_stop_name` for registada explicitamente no SQLite via
-> `conn.create_function("_normalize_stop_name", 1, _normalize_stop_name)`. Uma versão anterior desta
-> documentação assinalava que essa chamada estava em falta (o que causaria
-> `sqlite3.OperationalError: no such function: _normalize_stop_name`) — **isso já foi corrigido**: tanto
-> `generate_line_map_html` como `generate_google_maps_link` chamam agora `conn.create_function(...)` logo
-> a seguir a cada `sqlite3.connect(...)` que usa a função, antes de executar a query.
+> **Nota de implementação:** esta query SQL chama `_normalize_stop_name(...)` diretamente dentro do texto
+> SQL, como se fosse uma função nativa do SQLite. Para isso funcionar, a função Python
+> `_normalize_stop_name` é registada explicitamente no SQLite via
+> `conn.create_function("_normalize_stop_name", 1, _normalize_stop_name)` logo a seguir a cada
+> `sqlite3.connect(...)` que a usa, antes de executar a query — tanto em `generate_line_map_html` como em
+> `generate_google_maps_link`.
 
 **`generate_google_maps_link(local_nome)`** — cadeia de fallback em 3 níveis: (1) `_search_local_map`
 (mapa estático); (2) query SQL a `nos_geograficos` com o mesmo padrão `_normalize_stop_name(...)` dentro
-do SQL (mesmo bug referido acima); (3) `_geocode_nominatim_place` (tempo real). Devolve sempre um link no
+do SQL (mesma técnica referida acima); (3) `_geocode_nominatim_place` (tempo real). Devolve sempre um link no
 formato `https://www.google.com/maps/search/?api=1&query={lat},{lon}`, com uma nota indicando a fonte
 usada — e um aviso explícito de "não confirmado" quando a fonte é o Nominatim em tempo real.
 
@@ -509,32 +507,20 @@ Fluxo completo desde o *input* do utilizador até à resposta final:
 10. Qualquer exceção não apanhada nos passos anteriores é capturada no `except` mais exterior e mostrada
     como `"Erro detetado no pipeline do agente: {e}"`.
 
-### 20. Bugs e limitações conhecidas (resumo)
+### 19. Notas técnicas e possíveis extensões futuras
 
-**Já corrigidos** (documentados aqui só para memória histórica — não precisam de ação):
-- ~~Bug de SQL não registado em `generate_line_map_html`/`generate_google_maps_link`~~ — ambas as funções
-  já chamam `conn.create_function("_normalize_stop_name", ...)` antes da query. Ver secção 10.
-- ~~Password de administrador sem hashing nem limite de tentativas~~ — agora usa
-  `hmac.compare_digest` (comparação em tempo constante) e bloqueia o login por 5 minutos ao fim de 5
-  tentativas falhadas. A password em si continua sem *hash* (guardada em texto simples nos secrets), o
-  que é aceitável para um projeto pessoal com um único administrador.
-- ~~`INSERT OR IGNORE` em `nos_geograficos` não impedia duplicados reais~~ — `initialize_db()` já remove
-  duplicados existentes e cria um `UNIQUE INDEX` em `(tipo, nome)`, pelo que `INSERT OR IGNORE` agora
-  funciona como esperado.
-
-**Ainda em aberto:**
-- **Bloco de arranque duplicado:** a verificação `is_updating = check_sync_needed(...)` e o bloco de
-  sincronização inicial aparecem **duas vezes** no ficheiro (perto da secção da sidebar e novamente perto
-  do loop principal do chat). Não causa um bug funcional — `check_sync_needed` tem uma guarda
-  (`sync_checked`) que faz a segunda chamada devolver `False` sem repetir trabalho — mas é código
-  duplicado que pode ser removido/consolidado.
-- **Geocoding em tempo real (Nominatim)** está sujeito ao *rate limit* de 1 pedido/segundo do serviço
-  público, e pode devolver resultados incorretos para nomes ambíguos. Além disso,
-  `_geocode_nominatim_place` não tem `@st.cache_data`, ao contrário de `get_guimabus_data`/
-  `get_stop_schedule` — pedir a mesma morada duas vezes na mesma sessão dispara sempre uma nova chamada
-  de rede.
-- **Deteção de modo por palavras-chave** pode falhar em perguntas ambíguas que mencionem, por exemplo,
-  "problema" num contexto de transporte (cairia em Modo Recrutador em vez de Guimabus).
+- O login de administrador usa `hmac.compare_digest` (comparação em tempo constante) e bloqueia o acesso
+  por 5 minutos ao fim de 5 tentativas falhadas. A password em si é guardada em texto simples nos
+  secrets, o que é adequado para um projeto pessoal com um único administrador.
+- O índice paragem↔linha (`cache_paragens_linha`) inclui uma verificação de consistência: qualquer linha
+  associada a menos de 2 paragens distintas é automaticamente descartada, uma vez que uma linha de
+  autocarro real liga sempre pelo menos duas paragens.
+- O geocoding em tempo real (Nominatim) só aceita um resultado se este partilhar pelo menos uma palavra
+  significativa com o termo pesquisado, e fica em cache por 24h para reduzir pedidos repetidos ao serviço
+  público (que tem um *rate limit* de 1 pedido/segundo).
+- Possíveis extensões futuras: testes automatizados (`pytest`) para o motor de recomendação de passes
+  (`recommend_pass_types`), que é lógica pura sem dependência de rede; e um indicador na UI mostrando há
+  quanto tempo a cache de horários/tarifário foi sincronizada pela última vez.
 
 ---
 ---
@@ -554,18 +540,17 @@ summary. The order follows the order of the file itself.
 6. Page configuration, languages and Gemini
 7. Facebook RSS notices footer
 8. Real-time fleet tools
-9. Schedule PDF scraping + cache
-10. Knowledge Base and cache diagnostics
-11. Geographic functions (Overpass, Folium, Google Maps) — **includes a bug that was fixed**
-12. Startup sync lock
-13. Pass type and fare table scraping
-14. Stop ↔ line index
-15. Trip planning (transfer engine)
-16. Passes, fares and document verification
-17. Hidden game
-18. Admin sidebar
-19. Main chat loop and anti-hallucination safety net
-20. Known bugs and limitations (summary)
+9. Schedule PDF scraping + cache (includes Knowledge Base and cache diagnostics)
+10. Geographic functions (Overpass, Folium, Google Maps)
+11. Startup sync lock
+12. Pass type and fare table scraping
+13. Stop ↔ line index
+14. Trip planning (transfer engine)
+15. Passes, fares and document verification
+16. Hidden game
+17. Admin sidebar
+18. Main chat loop and anti-hallucination safety net
+19. Technical notes and possible future extensions
 
 ---
 
@@ -698,7 +683,8 @@ numeric dates (`dd/mm` or `dd-mm`, optionally with a year). It scans every date 
 returns the **latest** one, already as a `datetime`. Returns `None` if none is found.
 
 **`get_facebook_notices()`** — decorated with `@st.cache_data(ttl=3600)` (the real HTTP request only
-happens once per hour). Calls `requests.get` on the RSS feed (`rss.app`), uses
+happens once per hour). Calls `requests.get` on the RSS feed (`FetchRSS`, the service that turns the
+Guimabus Facebook page into an RSS feed), uses
 `BeautifulSoup(response.content, "xml")` to walk up to 30 `<item>` elements. For each item:
 1. Extracts `title`, `description`/`content:encoded`, strips HTML tags and joins title+description into
    `texto_minusculas` (all lowercase, for comparison).
@@ -817,18 +803,15 @@ WHERE p.linha = ? AND g.latitude IS NOT NULL
 Draws a `folium.Map` centred on the first stop, with one marker per stop (bus icon) and a `PolyLine`
 connecting all coordinates in order, saving the result as `maps/linha_{linha_id}.html`.
 
-> ✅ **Bug fixed:** this SQL query calls `_normalize_stop_name(...)` **directly inside the SQL text**, as
-> if it were a native SQLite function. This only works if the Python function `_normalize_stop_name` is
-> explicitly registered with SQLite via `conn.create_function("_normalize_stop_name", 1,
-> _normalize_stop_name)`. An earlier version of this document flagged that this call was missing (which
-> would cause `sqlite3.OperationalError: no such function: _normalize_stop_name`) — **this has since been
-> fixed**: both `generate_line_map_html` and `generate_google_maps_link` now call
-> `conn.create_function(...)` right after every `sqlite3.connect(...)` that uses the function, before
-> running the query.
+> **Implementation note:** this SQL query calls `_normalize_stop_name(...)` directly inside the SQL text,
+> as if it were a native SQLite function. For this to work, the Python function `_normalize_stop_name`
+> is explicitly registered with SQLite via `conn.create_function("_normalize_stop_name", 1,
+> _normalize_stop_name)` right after every `sqlite3.connect(...)` that uses it, before running the query
+> — in both `generate_line_map_html` and `generate_google_maps_link`.
 
 **`generate_google_maps_link(local_nome)`** — a 3-level fallback chain: (1) `_search_local_map` (static
 map); (2) a SQL query against `nos_geograficos` with the same `_normalize_stop_name(...)`-inside-SQL
-pattern (same bug referenced above); (3) `_geocode_nominatim_place` (live). Always returns a link in the
+pattern (same technique referenced above); (3) `_geocode_nominatim_place` (live). Always returns a link in the
 format `https://www.google.com/maps/search/?api=1&query={lat},{lon}`, with a note indicating which
 source was used — and an explicit "not confirmed" warning when the source was live Nominatim geocoding.
 
@@ -1039,28 +1022,17 @@ Full flow from user input to the final answer:
 10. Any exception not caught in the previous steps is captured by the outermost `except` and shown as
     `"Erro detetado no pipeline do agente: {e}"`.
 
-### 20. Known bugs and limitations (summary)
+### 19. Technical notes and possible future extensions
 
-**Already fixed** (documented here only for historical record — no action needed):
-- ~~Unregistered SQL function bug in `generate_line_map_html`/`generate_google_maps_link`~~ — both
-  functions now call `conn.create_function("_normalize_stop_name", ...)` before running the query. See
-  section 10.
-- ~~Admin password with no hashing and no attempt limiting~~ — now uses `hmac.compare_digest` (constant-
-  time comparison) and locks the login for 5 minutes after 5 failed attempts. The password itself still
-  isn't hashed (stored in plain text in secrets), which is acceptable for a personal project with a
-  single administrator.
-- ~~`INSERT OR IGNORE` on `nos_geograficos` didn't actually prevent real duplicates~~ —
-  `initialize_db()` now removes existing duplicates and creates a `UNIQUE INDEX` on `(tipo, nome)`, so
-  `INSERT OR IGNORE` now works as intended.
-
-**Still open:**
-- **Duplicated startup block:** the `is_updating = check_sync_needed(...)` check and initial-sync block
-  appear **twice** in the file (once near the sidebar section, once again near the main chat loop). This
-  isn't a functional bug — `check_sync_needed` has a guard (`sync_checked`) so the second call just
-  returns `False` without repeating work — but it's duplicated code that could be removed/consolidated.
-- **Live geocoding (Nominatim)** is subject to the public service's 1 request/second rate limit, and can
-  return incorrect results for ambiguous names. It's also not decorated with `@st.cache_data`, unlike
-  `get_guimabus_data`/`get_stop_schedule` — asking about the same address twice in the same session
-  always triggers a fresh network call.
-- **Keyword-based mode detection** can fail on ambiguous questions that, for example, mention "problema"
-  in a transport context (it would fall into Recruiter Mode instead of Guimabus Mode).
+- Admin login uses `hmac.compare_digest` (constant-time comparison) and locks access for 5 minutes after
+  5 failed attempts. The password itself is stored in plain text in secrets, which is appropriate for a
+  personal project with a single administrator.
+- The stop↔line index (`cache_paragens_linha`) includes a consistency check: any line associated with
+  fewer than 2 distinct stops is automatically discarded, since a real bus line always connects at least
+  two stops.
+- Live geocoding (Nominatim) only accepts a result if it shares at least one meaningful word with the
+  search term, and is cached for 24h to reduce repeated calls to the public service (which has a 1
+  request/second rate limit).
+- Possible future extensions: automated tests (`pytest`) for the pass-recommendation engine
+  (`recommend_pass_types`), which is pure logic with no network dependency; and a UI indicator showing
+  how long ago the schedule/fare cache was last synced.
