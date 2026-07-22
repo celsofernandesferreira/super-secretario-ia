@@ -1,6 +1,6 @@
 # Explicação Completa do Projeto — `app.py`
 
-*Read this in English: [jump to the English version]([#english-version](https://github.com/celsofernandesferreira/super-secretario-ia/blob/main/EXPLICACAO_DO_PROJETO.md#-english-version) below.*
+*Read this in English: [jump to the English version](https://github.com/celsofernandesferreira/super-secretario-ia/blob/main/EXPLICACAO_DO_PROJETO.md#-english-version) below.*
 
 ---
 
