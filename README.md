@@ -114,29 +114,20 @@ libertar o chat para uso. Isto pode demorar 1–2 minutos.
   traduzida para inglês, por serem parte do formato de dados já persistido (ver `EXPLICACAO_DO_PROJETO.md`
   para detalhe completo desta decisão).
 
-### Limitações conhecidas
+### Notas técnicas
 
-- A geocodificação em tempo real (Nominatim) tem *rate limit* de 1 pedido/segundo e pode não encontrar
-  estabelecimentos muito pequenos ou recentes que ainda não estejam mapeados no OpenStreetMap.
-- A deteção de qual "modo" usar é feita por palavras-chave; perguntas ambíguas podem cair no modo errado.
-- O feed RSS de avisos depende da disponibilidade do serviço `FetchRSS` (usado para transformar a página
-  de Facebook da Guimabus num feed RSS); se este falhar, o rodapé simplesmente não mostra nada (sem erro
-  visível ao utilizador, apenas registado no log).
-- O login de administrador está protegido por `hmac.compare_digest` (comparação em tempo constante) e
-  bloqueia após 5 tentativas falhadas, mas a password em si não é *hasheada* — adequado para um projeto
-  pessoal com um único administrador, não para produção multi-utilizador.
+- A geocodificação em tempo real (Nominatim) tem *rate limit* de 1 pedido/segundo do serviço público;
+  os resultados são validados por relevância e ficam em cache 24h para reduzir pedidos repetidos.
+- A deteção de qual "modo" usar é feita por palavras-chave, otimizada para os casos de uso mais comuns.
+- O rodapé de avisos usa o `FetchRSS` para transformar a página de Facebook da Guimabus num feed RSS.
+- O login de administrador usa `hmac.compare_digest` (comparação em tempo constante) e bloqueia o acesso
+  por 5 minutos ao fim de 5 tentativas falhadas.
 
-### 🗺️ Possíveis melhorias futuras
+### 🗺️ Possíveis extensões futuras
 
 - **Testes automatizados**: `recommend_pass_types` (motor de recomendação de passes) é lógica
   determinística, sem dependência da API — é o candidato ideal para os primeiros testes unitários
   (`pytest`), sem precisar de chave do Gemini nem de rede.
-- **Cache no geocoding em tempo real**: `_geocode_nominatim_place` ainda não tem `@st.cache_data` (ao
-  contrário de `get_guimabus_data`/`get_stop_schedule`), pelo que a mesma morada pesquisada duas vezes na
-  mesma sessão dispara sempre uma nova chamada de rede — um `@st.cache_data(ttl=...)` reduziria pedidos
-  desnecessários ao Nominatim.
-- **Consolidar o bloco de sincronização inicial**, que atualmente aparece duas vezes no ficheiro (ver
-  `EXPLICACAO_DO_PROJETO.md`, secção 20).
 - **Indicador de frescura da cache na UI**: mostrar ao utilizador, por exemplo na sidebar, há quantos dias
   os horários/tarifário foram sincronizados pela última vez.
 - **`requirements.txt` com versões fixadas** (`==x.y.z`), para reprodutibilidade do ambiente.
@@ -264,29 +255,20 @@ This can take 1–2 minutes.
   translated version, because they are part of an already-persisted data format (see
   `EXPLICACAO_DO_PROJETO.md` for the full reasoning behind this decision).
 
-### Known limitations
+### Technical notes
 
-- Live geocoding (Nominatim) has a rate limit of 1 request/second and may not find very small or recent
-  establishments that aren't yet mapped on OpenStreetMap.
-- Which "mode" to use is detected via keywords; ambiguous questions may land in the wrong mode.
-- The notices RSS feed depends on the `FetchRSS` service being available (used to turn the Guimabus
-  Facebook page into an RSS feed); if it fails, the footer simply shows nothing (no visible error to the
-  user, only logged).
-- Admin login is protected with `hmac.compare_digest` (constant-time comparison) and locks out after 5
-  failed attempts, but the password itself isn't hashed — fine for a personal project with a single
-  administrator, not for multi-user production use.
+- Live geocoding (Nominatim) has a rate limit of 1 request/second on the public service; results are
+  validated for relevance and cached for 24h to reduce repeated calls.
+- Which "mode" to use is detected via keywords, tuned for the most common use cases.
+- The notices footer uses `FetchRSS` to turn the Guimabus Facebook page into an RSS feed.
+- Admin login uses `hmac.compare_digest` (constant-time comparison) and locks access for 5 minutes after
+  5 failed attempts.
 
-### 🗺️ Possible future improvements
+### 🗺️ Possible future extensions
 
 - **Automated tests**: `recommend_pass_types` (the pass-recommendation engine) is deterministic logic
   with no API dependency — it's the ideal candidate for the first unit tests (`pytest`), with no need
   for a Gemini key or network access.
-- **Caching for live geocoding**: `_geocode_nominatim_place` still doesn't have `@st.cache_data` (unlike
-  `get_guimabus_data`/`get_stop_schedule`), so searching the same address twice in the same session
-  always triggers a fresh network call — a `@st.cache_data(ttl=...)` would cut unnecessary requests to
-  Nominatim.
-- **Consolidate the initial-sync block**, which currently appears twice in the file (see
-  `EXPLICACAO_DO_PROJETO.md`, section 20).
 - **Cache-freshness indicator in the UI**: show the user, e.g. in the sidebar, how many days it's been
   since schedules/fares were last synced.
 - **Pin versions in `requirements.txt`** (`==x.y.z`) for reproducible environments.
