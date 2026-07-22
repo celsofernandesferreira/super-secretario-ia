@@ -1,3 +1,80 @@
+Super Secretário IA — Assistente de Elite (Guimabus / Recrutador / Projeto)
+Read this in English: jump to the English version below.
+
+🇵🇹 Versão em Português
+Visão geral
+Aplicação em Streamlit que funciona como agente de IA multi-modo, construída pelo Celso Ferreira, usando a API do Google Gemini com function calling (chamadas de ferramentas em tempo real). O objetivo é servir três públicos diferentes a partir da mesma interface de chat: utilizadores da rede de transportes Guimabus, recrutadores interessados no percurso profissional do Celso, e qualquer pessoa curiosa sobre como o próprio projeto foi construído.
+
+A app deteta automaticamente, a partir das palavras da pergunta, qual dos três "modos" (personas/prompts de sistema) deve responder — não há um menu de seleção manual.
+
+Os três modos
+1. Modo Guimabus (transportes)
+Foco em automação e infraestrutura à volta da rede de autocarros da Guimabus, em Guimarães:
+
+Estado da frota em tempo real.
+Consulta de horários (com cache local, para não sobrecarregar os servidores oficiais a cada pedido).
+Planeamento de trajetos com transbordo — incluindo a partir de qualquer local (café, rua, morada), não só nomes exatos de paragens, resolvendo a localização primeiro pelo mapa estático e depois, em último recurso, por geocodificação em tempo real (OpenStreetMap/Nominatim).
+Consulta de tarifário e tipologias de passe, e verificação de documentos para pedidos de passe (usando o Gemini para analisar imagens/PDFs enviados).
+Uma rede de segurança anti-alucinação: perguntas sobre trajetos/horários passam por uma verificação que confirma se o modelo realmente chamou uma ferramenta real (em vez de responder "de cabeça"); se não chamou, o sistema força uma segunda tentativa em que é obrigado a consultar dados reais antes de responder. Isto existe porque, sem esta rede, o modelo por vezes inventava linhas e horários inteiros que não existiam.
+2. Modo Recrutador
+Dirigido a quem quer conhecer o Celso profissionalmente:
+
+Responde sobre CV, competências e percurso, sempre a partir da Knowledge Base (ficheiros .md na pasta knowledge/) — nunca inventa datas, empresas ou tecnologias que não estejam documentadas.
+Se lhe disserem "quero treinar para uma entrevista", muda de papel e conduz uma simulação de entrevista técnica em inglês, uma pergunta de cada vez.
+Se lhe derem um problema técnico/de IT, demonstra como o Celso o resolveria, passo a passo — uma forma de um recrutador "ver" o raciocínio técnico do Celso em ação, sem precisar de o entrevistar ao vivo.
+3. Modo Projeto
+Explica esta própria aplicação a quem perguntar — arquitetura, tecnologias usadas, propósito.
+
+Outras funcionalidades
+Rodapé de avisos: lê o feed RSS da página de Facebook da Guimabus, filtra e prioriza avisos — obras/eventos com data de fim conhecida mantêm-se ativos até essa data passar; posts genéricos ficam ativos ~1 semana. Tudo corre a rodar no rodapé via JavaScript, sem custo de API adicional.
+Painel de administração (sidebar, protegido por password) — força sincronizações manuais, consulta logs de auditoria, limpa o histórico da sessão.
+Suporte bilingue (PT/EN) — a interface e as respostas do agente adaptam-se ao idioma escolhido nos botões do topo.
+Jogo escondido com tabela de recordes — um extra lúdico incluído na app.
+Estrutura de ficheiros esperada
+.
+├── app.py                  # A aplicação (este ficheiro)
+├── requirements.txt
+├── geo_guimaraes.json      # Mapa estático de paragens e locais (lat/lon/tipo)
+├── knowledge/              # Ficheiros .md com informação de referência (ex: CV do Celso)
+│   └── *.md
+├── agente_memoria.db       # Base de dados SQLite (criada/gerida automaticamente em runtime)
+└── auditoria_agente.log    # Log de erros/auditoria (criado automaticamente)
+Configuração (Secrets)
+No .streamlit/secrets.toml (ou nas Secrets do Streamlit Cloud):
+
+GOOGLE_API_KEY = "a-tua-chave-da-api-do-gemini"
+ADMIN_PASSWORD = "password-do-painel-de-admin"   # opcional, mas necessária para o painel de admin
+Instalação e execução local
+pip install -r requirements.txt
+streamlit run app.py
+Na primeira execução (ou sempre que a cache tiver mais de 7 dias), a app entra automaticamente num modo de "sincronização inicial" — descarrega e processa horários, tarifário e o índice de paragens antes de libertar o chat para uso. Isto pode demorar 1–2 minutos.
+
+Arquitetura técnica (resumo)
+Componente	Tecnologia	Função
+Interface	Streamlit	Chat, sidebar, formulários, rodapé
+Modelo de IA	Google Gemini (function calling)	Conversação, decisão de qual ferramenta chamar. Cascata de resiliência: se gemini-3.5-flash falhar (ex: limite de rate), tenta automaticamente gemini-3.1-flash-lite e depois gemini-2.5-flash
+Base de dados	SQLite (agente_memoria.db)	Cache de horários, tarifário, índice de paragens, histórico, high scores
+Geolocalização	geo_guimaraes.json + OpenStreetMap/Nominatim	Localizar paragens e pontos de interesse
+Scraping	requests + pdfplumber + BeautifulSoup	Ler PDFs oficiais de horários e o feed RSS do Facebook
+Mapas	folium	Gerar mapas HTML de trajetos
+Verificação de documentos	Gemini (visão)	Validar imagens/PDFs de pedidos de passe
+Notas técnicas importantes
+Anti-alucinação: ver secção do Modo Guimabus acima — é o mecanismo mais importante da app do ponto de vista de fiabilidade.
+Cache local: horários, tarifários e índice de paragens ficam em cache no SQLite, sincronizados automaticamente a cada 7 dias (configurável em check_sync_needed(limite_dias=7)).
+Localização de sítios: usa primeiro o mapa estático (geo_guimaraes.json); se não encontrar, recorre a geocodificação em tempo real via OpenStreetMap/Nominatim como fallback.
+Nomes de colunas SQL e chaves JSON permanecem em português no código-fonte, mesmo na versão traduzida para inglês, por serem parte do formato de dados já persistido (ver EXPLICACAO_DO_PROJETO.md para detalhe completo desta decisão).
+Notas técnicas
+A geocodificação em tempo real (Nominatim) tem rate limit de 1 pedido/segundo do serviço público; os resultados são validados por relevância e ficam em cache 24h para reduzir pedidos repetidos.
+A deteção de qual "modo" usar é feita por palavras-chave, otimizada para os casos de uso mais comuns.
+O rodapé de avisos usa o FetchRSS para transformar a página de Facebook da Guimabus num feed RSS.
+O login de administrador usa hmac.compare_digest (comparação em tempo constante) e bloqueia o acesso por 5 minutos ao fim de 5 tentativas falhadas.
+🗺️ Possíveis extensões futuras
+Testes automatizados: recommend_pass_types (motor de recomendação de passes) é lógica determinística, sem dependência da API — é o candidato ideal para os primeiros testes unitários (pytest), sem precisar de chave do Gemini nem de rede.
+Indicador de frescura da cache na UI: mostrar ao utilizador, por exemplo na sidebar, há quantos dias os horários/tarifário foram sincronizados pela última vez.
+requirements.txt com versões fixadas (==x.y.z), para reprodutibilidade do ambiente.
+Ficheiro LICENSE — ainda não definido; para um projeto de portefólio open-source, MIT é uma opção comum e permissiva.
+👨‍💻 Autor
+
 Explicação Completa do Projeto — app.py
 Read this in English: jump to the English version below.
 
