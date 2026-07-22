@@ -427,12 +427,18 @@ def _search_local_map(local_nome: str):
         if pontuacao > melhor_pontuacao:
             melhor_pontuacao, melhor_match = pontuacao, dados
 
-    # We only accept it if at least half of the searched words match,
-    # to avoid returning false positives.
-    if melhor_match and melhor_pontuacao >= 0.5:
+    # Stricter matching than before: for short queries (<=2 words) we now require
+    # EVERY word to match, not just half. A 50% threshold meant a 2-word query like
+    # "cafe areal" could match an entry for just "areal" (a neighbourhood/zone) and be
+    # reported back with full confidence as if it were the specific business "Café
+    # Areal" — a real source of invented/incorrect locations. Longer queries keep a
+    # high (but not perfect) bar, since extra descriptive words are more tolerable.
+    limite_minimo = 1.0 if len(tokens_pesquisa) <= 2 else 0.75
+    if melhor_match and melhor_pontuacao >= limite_minimo:
         return melhor_match
     return None
 
+@st.cache_data(ttl=86400)
 def _geocode_nominatim_place(local_nome: str):
     """Geocodes a place name in Guimarães live via OpenStreetMap (Nominatim),
     used as a fallback when the place is not in the static map (geo_guimaraes.json)."""
@@ -440,18 +446,31 @@ def _geocode_nominatim_place(local_nome: str):
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 5},
             headers=headers, timeout=8
         )
         resp.raise_for_status()
         resultados = resp.json()
-        if resultados:
-            r = resultados[0]
-            return {
-                "nome_real": r.get("display_name", local_nome).split(",")[0],
-                "lat": float(r["lat"]),
-                "lon": float(r["lon"]),
-            }
+        if not resultados:
+            return None
+
+        # Nominatim's free-text search almost always returns *something*, even when no
+        # real match exists for the specific place asked about — it silently drops the
+        # words it can't match and geocodes whatever remains (e.g. a street or a
+        # neighbourhood). Blindly trusting result[0] was a real source of confidently
+        # reported, incorrect locations. We now only accept a candidate whose own name
+        # actually shares a meaningful word with the query.
+        tokens_pesquisa = set(t for t in normalize_search_name(local_nome).split("_") if t)
+        for r in resultados:
+            nome_resultado = r.get("display_name", "").split(",")[0]
+            tokens_resultado = set(t for t in normalize_search_name(nome_resultado).split("_") if t)
+            if tokens_pesquisa & tokens_resultado:
+                return {
+                    "nome_real": nome_resultado or local_nome,
+                    "lat": float(r["lat"]),
+                    "lon": float(r["lon"]),
+                }
+        return None
     except Exception as e:
         logging.error(f"Error geocoding via Nominatim for '{local_nome}': {e}")
     return None
@@ -1572,7 +1591,13 @@ def _extract_stops_from_text(texto: str):
         m = padrao.match(linha_texto)
         if m:
             nome = m.group("nome").strip(" -\t")
-            if len(nome) >= 3:
+            horarios_str = m.group("horarios")
+            # Dashes ("-") are used in the official PDFs as a placeholder for "no
+            # service" and were previously accepted on their own as valid "times", so a
+            # row made entirely of dashes (or a coincidental legend/note line) could be
+            # wrongly registered as a real stop. Require at least one genuine HH:MM time
+            # in the row before treating it as an actual stop with a schedule.
+            if len(nome) >= 3 and re.search(r'\d{1,2}:\d{2}', horarios_str):
                 paragens.add(nome)
     return paragens
 
@@ -1595,6 +1620,20 @@ def build_stop_index():
                     (linha_id, paragem)
                 )
                 total_paragens += 1
+        conn.commit()
+
+        # Sanity cleanup: a real bus line always serves several stops. If a line ended
+        # up associated with only a single stop, that's almost certainly leftover noise
+        # from PDF text extraction (e.g. a stray legend/note line), not a genuine route
+        # — and offering it as a transfer option would be misleading. Drop those.
+        cursor.execute("""
+            DELETE FROM cache_paragens_linha
+            WHERE linha IN (
+                SELECT linha FROM cache_paragens_linha
+                GROUP BY linha
+                HAVING COUNT(DISTINCT paragem) < 2
+            )
+        """)
         conn.commit()
         conn.close()
         return f"Índice de paragens reconstruído: {total_paragens} associações linha-paragem."
@@ -2492,7 +2531,6 @@ if prompt:
                 12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
-                15. Check all relevant lines from beginning to end to determine if a transfer is actually possible. If the transfer requires moving to a different stop, you must specify the walking distance required.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
