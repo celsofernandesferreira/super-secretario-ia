@@ -16,6 +16,7 @@ import folium
 import email.utils
 import math
 import hmac
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
@@ -23,18 +24,18 @@ from bs4 import BeautifulSoup
 # --- LANGUAGE DICTIONARY ---
 UI_TEXT = {
     "PT": {
-        "title": "💼 O Teu Super Secretário de Produtividade",
-        "toast_score": "💾 Recorde de {name} ({score} pas.) guardado com sucesso!",
+        "title": "🚌 Agente Sobre Rodas😎",
+        "toast_score": "💾 Recorde de {name} ({score} pessoa(s)) guardado com sucesso!",
         "sidebar_panel": "⚙️ Painel do Agente",
         "clear_history": "🗑️ Limpar O Meu Histórico",
         "entertainment": "🕹️ Entretenimento",
-        "close_game": "Fechar Jogo X",
-        "open_game": "Abrir Mini-Game 👾",
+        "close_game": "Fechar Crazy Bus Driver X",
+        "open_game": "Abrir Crazy Bus Driver Mini-Game 👾",
         "transport_tickets": "🎫 Títulos de Transporte",
         "close_ticket": "Fechar Pedido de Passe X",
         "request_ticket": "Pedir Passe 🎫",
         "developer": "👨‍💻 Desenvolvedor",
-        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n📞 Contacto: **917 486 683**",
+        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
         "status": "Estado: **Online**\nModelo Nativo: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Área de Administrador",
         "login_admin": "Entrar como administrador",
@@ -55,14 +56,15 @@ UI_TEXT = {
         "chat_input": "Como posso ajudar hoje?",
         "speak": "Falar",
         "download_txt": "📥 Descarregar Resposta (.txt)",
-        "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Guimabus:** Monitorização da frota, horários e trajetos da Guimabus.\n2. **Modo Recrutador:** Informação sobre o teu currículo e percurso profissional para recrutadores — diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês, ou dá-me um problema de IT para eu mostrar como tu o resolverias.\n3. **Modo Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
-        "game_title": "🚌 Guimabus Arcade: Cabine de Condução 🚌",
+        "initial_msg": "Olá! Sou o **Agente de Produtividade de Elite do Celso**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Guimabus:** Monitorização da frota, horários e trajetos da Guimabus e informações .\n2. **Secretario do Celso:** Informação sobre o Perfil do Celso e percurso profissional para recrutadores — dá-me um problema de IT para eu mostrar como o Celso Resolveria.\n3. **Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
+        "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Gravar 💾",
         "game_name": "Teu Nome",
         "game_pax": "Passageiros",
+        "game_unit": "passageiros(s)",
         "game_top10": "🏆 TOP 10 MOTORISTAS",
         "game_gameover": "FIM DA LINHA",
         "game_transported": "Transportaste",
@@ -70,7 +72,7 @@ UI_TEXT = {
         "game_alert": "Por favor introduz o teu nome!",
         "ad_disclaimer": "⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.",
         "ad_notice": "Aviso",
-        "ticket_title": "🎫 Pedido de Passe — Guimabus",
+        "ticket_title": "🎫 Titulos de Transporte — Guimabus",
         "ticket_warning": "⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão.**",
         "ticket_updated": "📅 Dados atualizados em:",
         "ticket_wizard": "🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas",
@@ -111,18 +113,18 @@ UI_TEXT = {
         "updating_system": "**SISTEMA EM ATUALIZAÇÃO:** A descarregar novos horários e pacotes de dados. O agente está temporariamente bloqueado para evitar falhas. Por favor, aguarda (pode demorar 1-2 minutos)..."
     },
     "EN": {
-        "title": "💼 Your Super Productivity Secretary",
-        "toast_score": "💾 Score for {name} ({score} pax) saved successfully!",
+        "title": "🚌 Agent on Wheels😎",
+        "toast_score": "💾 Score for {name} ({score} person(s)) saved successfully!",
         "sidebar_panel": "⚙️ Agent Panel",
         "clear_history": "🗑️ Clear My History",
         "entertainment": "🕹️ Entertainment",
-        "close_game": "Close Game X",
-        "open_game": "Open Mini-Game 👾",
+        "close_game": "Close Crazy Bus Driver X",
+        "open_game": "Open Crazy Bus Driver Mini-Game 👾",
         "transport_tickets": "🎫 Transport Tickets",
         "close_ticket": "Close Ticket Request X",
         "request_ticket": "Request Ticket 🎫",
         "developer": "👨‍💻 Developer",
-        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n📞 Contact: **917 486 683**",
+        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
         "status": "Status: **Online**\nNative Model: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Administrator Area",
         "login_admin": "Login as Administrator",
@@ -143,14 +145,15 @@ UI_TEXT = {
         "chat_input": "How can I help you today?",
         "speak": "Speak",
         "download_txt": "📥 Download Response (.txt)",
-        "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus Mode:** Fleet monitoring, schedules and route planning for Guimabus.\n2. **Recruiter Mode:** Information about your CV and professional background for recruiters — tell me *'I want to train for an interview'* to simulate technical tests in English, or give me an IT problem so I can show how you would solve it.\n3. **Project Mode:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
-        "game_title": "🚌 Guimabus Arcade: Driving Cabin 🚌",
+        "initial_msg": "Hello! I am **Celso's Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus:** Fleet monitoring, schedules and routes for Guimabus, plus general information.\n2. **Celso's Assistant:** Information about Celso's profile and career for recruiters — give me an IT problem and I'll show you how Celso would solve it.\n3. **Project:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
+        "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Save 💾",
         "game_name": "Your Name",
         "game_pax": "Passengers",
+        "game_unit": "passenger(s)",
         "game_top10": "🏆 TOP 10 DRIVERS",
         "game_gameover": "END OF THE LINE",
         "game_transported": "You transported",
@@ -209,7 +212,7 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-# 2. DATABASE CONFIGURATION (Persistent SQLite)
+# 2. DATABASE CONFIGURATION (Persistent SQLite with High Scores and Schedule Cache)
 def initialize_db():
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
@@ -295,18 +298,37 @@ def initialize_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
 
-    # Remove duplicados que possam já existir, mantendo a linha mais antiga, 
-    # depois impõe unicidade real
     try:
-        cursor.execute("""
-            DELETE FROM nos_geograficos
-            WHERE id NOT IN (
-                SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
-            )
-        """)
-        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
-    except Exception:
-        pass
+        colunas_existentes = {row[1] for row in cursor.execute("PRAGMA table_info(nos_geograficos)").fetchall()}
+        colunas_necessarias = {"id", "tipo", "nome"}
+
+        if colunas_necessarias.issubset(colunas_existentes):
+            cursor.execute("""
+                DELETE FROM nos_geograficos
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
+                )
+            """)
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+        else:
+            logging.warning(f"Schema antigo detetado em nos_geograficos (colunas: {colunas_existentes}). A recriar a tabela.")
+            cursor.execute("DROP TABLE nos_geograficos")
+            cursor.execute("""
+                CREATE TABLE nos_geograficos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tipo TEXT,
+                    nome TEXT,
+                    freguesia TEXT,
+                    latitude REAL,
+                    longitude REAL,
+                    linhas_associadas TEXT,
+                    ultima_atualizacao TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+    except Exception as e:
+        logging.error(f"Erro ao normalizar o schema de nos_geograficos: {e}")
 
     conn.commit()
     conn.close()
@@ -402,23 +424,27 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 def _search_local_map(local_nome: str):
-    """Searches for a place in LOCAL_MAP with word-tolerant matching."""
-    if not LOCAL_MAP: return None
+    """Searches for a place in LOCAL_MAP (geo_guimaraes.json) with word-tolerant matching."""
+    if not LOCAL_MAP:
+        return None
     chave_pesquisa = normalize_search_name(local_nome)
     tokens_pesquisa = set(t for t in chave_pesquisa.split("_") if t)
-    if not tokens_pesquisa: return None
+    if not tokens_pesquisa:
+        return None
 
     melhor_match, melhor_pontuacao = None, 0.0
     for chave, dados in LOCAL_MAP.items():
         tokens_chave = set(t for t in chave.split("_") if t)
         comuns = tokens_pesquisa & tokens_chave
-        if not comuns: continue
+        if not comuns:
+            continue
         pontuacao = len(comuns) / len(tokens_pesquisa)
         if pontuacao > melhor_pontuacao:
             melhor_pontuacao, melhor_match = pontuacao, dados
 
-    # 50% de correspondência resolve o bloqueio da Moto Espinha e locais com nomes parciais
-    if melhor_match and melhor_pontuacao >= 0.5:
+    # 🟢 LIMITE REDUZIDO: 50% de correspondência resolve o bloqueio de sítios com nomes curtos/parciais
+    limite_minimo = 0.5 
+    if melhor_match and melhor_pontuacao >= limite_minimo:
         return melhor_match
     return None
 
@@ -428,13 +454,13 @@ def _geocode_nominatim_place(local_nome: str):
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 5},
             headers=headers, timeout=8
         )
         resp.raise_for_status()
         resultados = resp.json()
         
-        # Confiar no 1º resultado devolvido sem restrições de texto
+        # 🟢 CONFIANÇA DIRETA NO OSM: Retorna logo o primeiro resultado encontrado, evitando falsos negativos 
         if resultados:
             r = resultados[0]
             return {
@@ -442,6 +468,7 @@ def _geocode_nominatim_place(local_nome: str):
                 "lat": float(r["lat"]),
                 "lon": float(r["lon"]),
             }
+        return None
     except Exception as e:
         logging.error(f"Error geocoding via Nominatim for '{local_nome}': {e}")
     return None
@@ -481,6 +508,7 @@ def find_nearest_stop(local_nome: str):
     else:
         return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
 
+
 def search_places_by_type(tipo_local: str, limite: int = 20):
     if not LOCAL_MAP:
         return "O mapa estático não está carregado. Verifica o ficheiro geo_guimaraes.json."
@@ -513,7 +541,6 @@ def search_places_by_type(tipo_local: str, limite: int = 20):
 # 3. Page configuration 
 st.set_page_config(page_title="Super Secretário IA", page_icon="💼", layout="wide")
 
-# Dictionary and toggle initialization
 if "language" not in st.session_state:
     st.session_state.language = "PT"
 ui = UI_TEXT[st.session_state.language]
@@ -529,7 +556,6 @@ with col3:
 if "session_id" not in st.session_state:
     st.session_state.session_id = datetime.now().strftime("%H%M%S%f")
 
-# --- CAPTURING HIGH SCORES VIA URL ---
 query_params = st.query_params
 if "save_nome" in query_params and "save_pontos" in query_params:
     nome_recorde = query_params["save_nome"].upper()
@@ -541,7 +567,6 @@ if "save_nome" in query_params and "save_pontos" in query_params:
     st.query_params.clear()
     st.rerun()
 
-# 4. Advanced CSS injection
 st.markdown("""
     <style>
         .stChatInputContainer {
@@ -571,16 +596,74 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 5. Gemini API initialization
+def _load_dotenv_file(file_path: str | Path | None = None):
+    candidates = []
+    if file_path:
+        candidates.append(Path(file_path))
+
+    base_dir = Path(__file__).resolve().parent
+    candidates.extend([
+        base_dir / "Secrets.env",
+        base_dir / ".env",
+        base_dir / "secrets.env",
+        Path.cwd() / "Secrets.env",
+        Path.cwd() / ".env",
+        Path.cwd() / "secrets.env",
+    ])
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        try:
+            values = {}
+            for raw_line in resolved.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip("\"'")
+            return values
+        except Exception as exc:
+            logging.warning(f"Unable to read secrets file {resolved}: {exc}")
+    return {}
+
+DOTENV_VALUES = _load_dotenv_file()
+
+def _get_secret(key: str, default=None):
+    valor = os.getenv(key)
+    if valor:
+        return valor
+
+    try:
+        if st.secrets.get(key, None):
+            return st.secrets.get(key, default)
+    except Exception:
+        pass
+
+    if key in DOTENV_VALUES:
+        return DOTENV_VALUES[key]
+
+    return default
+
 try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    chave_api = _get_secret("GOOGLE_API_KEY")
+    if not chave_api:
+        raise ValueError("GOOGLE_API_KEY not set (checked environment variable and st.secrets).")
+    genai.configure(api_key=chave_api)
 except Exception:
-    st.error("Error: API key missing from Streamlit Secrets.")
-    logging.error("Failed to initialize the application: API key missing from Secrets.")
+    st.error("Error: API key missing from environment variables, Streamlit secrets, or Secrets.env.")
+    logging.error("Failed to initialize the application: API key missing from environment/secrets files.")
     st.stop()
 
 
-# --- FACEBOOK RSS INTEGRATION (SMART NATIVE LOGIC) ---
 def extract_future_date(texto):
     PT_MONTHS = {
         "janeiro": 1, "jan": 1, "fevereiro": 2, "fev": 2, "março": 3, "mar": 3,
@@ -618,7 +701,7 @@ def extract_future_date(texto):
 
 @st.cache_data(ttl=3600)
 def get_facebook_notices():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.rss"
     avisos_ativos = []
     todos_avisos = [] 
     
@@ -634,13 +717,21 @@ def get_facebook_notices():
             title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
-            enclosure = item.find("enclosure")
-            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
-            if not img_url and desc:
-                img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match: img_url = img_match.group(1)
+            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            clean_text = re.sub(r'\s+', ' ', clean_text)
+            title = re.sub(r'\s+', ' ', title).strip()
+            
+            img_url = ""
+            media_content = item.find("media:content")
+            if media_content and media_content.get("url"):
+                img_url = media_content.get("url")
+            elif item.find("enclosure") and item.find("enclosure").get("url"):
+                img_url = item.find("enclosure").get("url")
+            else:
+                img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc, re.IGNORECASE)
+                if img_match: 
+                    img_url = img_match.group(1)
             
             texto_minusculas = clean_text.lower() + " " + title.lower()
             texto_final = clean_text if len(clean_text) > 5 else title
@@ -656,7 +747,6 @@ def get_facebook_notices():
                 continue
 
             data_fim_texto = extract_future_date(texto_minusculas)
-            
             palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
 
             if data_fim_texto:
@@ -787,8 +877,6 @@ def render_notices_footer(anuncios_ativos, ui):
     """
     components.html(html_rodape, height=170)
 
-    
-# --- CONTEXT FUNCTIONS / TOOLS ---
 def _extract_vehicle_list(dados):
     if isinstance(dados, list):
         return dados
@@ -937,7 +1025,6 @@ def get_stop_schedule(stop_id: str):
 
     return f"Não foi possível obter informação em tempo real nem encontrar registos em cache para a localização '{stop_id}'."
 
-# --- TOOL: FULL PDF SCRAPING AUTOMATION ---
 def sync_all_guimabus_schedules():
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     url_principal = "https://guimabus.pt/horarios-linhas/"
@@ -1115,7 +1202,6 @@ def get_stop_index_count():
         logging.error(f"Error counting stop index: {e}")
         return 0
 
-# --- NEW GEOGRAPHIC FUNCTIONS (OVERPASS, FOLIUM, MAPS) ---
 def import_guimaraes_pois():
     query = """
     [out:json][timeout:25];
@@ -1255,7 +1341,6 @@ def generate_google_maps_link(local_nome: str):
         link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
         return f"📍 Encontrei a localização de '{nome_real}' na base de dados. Podes abrir diretamente no Google Maps aqui: {link_maps}"
 
-    # Last resort: live geocoding via OpenStreetMap.
     local_live = _geocode_nominatim_place(local_nome)
     if local_live:
         link_maps = f"https://www.google.com/maps/search/?api=1&query={local_live['lat']},{local_live['lon']}"
@@ -1263,7 +1348,6 @@ def generate_google_maps_link(local_nome: str):
 
     return f"Não consegui encontrar coordenadas GPS para '{local_nome}'."
 
-# --- BLOCKING STARTUP SYNC SYSTEM ---
 def check_sync_needed(limite_dias: int = 7):
     if st.session_state.get("sync_checked"): return False
 
@@ -1293,7 +1377,6 @@ def check_sync_needed(limite_dias: int = 7):
     st.session_state.sync_checked = True
     return st.session_state.is_updating
 
-# --- DYNAMIC SCRAPING: PASS TYPES AND FARE TABLE ---
 TIPOLOGIAS_PASSE_FALLBACK = {
     "Mensal": {
         "descricao": "Válido para o mês e Origem/Destino para o qual foi adquirido, com nº de viagens ilimitado.",
@@ -1463,7 +1546,6 @@ def sync_pass_types_and_fares():
     resultado_tarifario = sync_guimabus_fare_table()
     return f"{resultado_titulos}\n{resultado_tarifario}"
 
-# --- STOP <-> LINE INDEX (to suggest transfers) ---
 def _extract_stops_from_text(texto: str):
     paragens = set()
     padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2})){2,})\s*$')
@@ -1626,22 +1708,11 @@ def search_stops_by_parish(nome_freguesia: str):
     return [paragem for paragem, freguesia in todas if re.search(r'\b' + re.escape(freguesia_norm) + r'\b', _normalize_stop_name(freguesia))]
 
 
-# Paragens centrais de Guimarães entre as quais é sempre possível fazer transbordo
-_HUB_KEYWORDS_NORM = ["s goncalo", "central", "central de camionagem", "s damaso norte", "s damaso sul", "s damaso"]
+_HUB_KEYWORDS_NORM = ["s goncalo", "central de camionagem", "s damaso norte", "s damaso sul", "s damaso"]
 
 def _e_paragem_hub(nome_paragem: str) -> bool:
     n = _normalize_stop_name(nome_paragem)
     return any(kw in n for kw in _HUB_KEYWORDS_NORM)
-
-def _match_stop_name(pesquisa_norm: str, paragem_norm: str) -> bool:
-    if pesquisa_norm == paragem_norm: return True
-    if len(pesquisa_norm) >= 4 and pesquisa_norm in paragem_norm: return True
-    if len(paragem_norm) >= 4 and paragem_norm in pesquisa_norm: return True
-    # Match via tokens (garante que "Hospital" liga a "Hospital Guimarães")
-    t1 = set(pesquisa_norm.split())
-    t2 = set(paragem_norm.split())
-    if t1 and t1.issubset(t2): return True
-    return False
 
 def _e_linha_noturna(linha_id: str) -> bool:
     return str(linha_id).strip().upper().startswith("N")
@@ -1672,8 +1743,8 @@ def plan_trip_with_transfer(origem: str, destino: str):
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
         paragem_norm = _normalize_stop_name(paragem)
         
-        match_origem = _e_paragem_hub(paragem) if origem_e_guimaraes_generico else _match_stop_name(origem_norm, paragem_norm)
-        match_destino = _e_paragem_hub(paragem) if destino_e_guimaraes_generico else _match_stop_name(destino_norm, paragem_norm)
+        match_origem = _e_paragem_hub(paragem) if origem_e_guimaraes_generico else re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm)
+        match_destino = _e_paragem_hub(paragem) if destino_e_guimaraes_generico else re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm)
         
         if match_origem:
             linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem)
@@ -1681,12 +1752,8 @@ def plan_trip_with_transfer(origem: str, destino: str):
             linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem)
 
     aviso_o, aviso_d = False, False
-    if not linhas_origem: 
-        linhas_origem, titulos_o = _search_lines_by_title(origem_norm)
-        aviso_o = bool(linhas_origem)
-    if not linhas_destino: 
-        linhas_destino, titulos_d = _search_lines_by_title(destino_norm)
-        aviso_d = bool(linhas_destino)
+    if not linhas_origem: linhas_origem, titulos_o = _search_lines_by_title(origem_norm); aviso_o = bool(linhas_origem)
+    if not linhas_destino: linhas_destino, titulos_d = _search_lines_by_title(destino_norm); aviso_d = bool(linhas_destino)
 
     aviso_o_freg, aviso_d_freg = None, None
     if not linhas_origem:
@@ -1707,8 +1774,8 @@ def plan_trip_with_transfer(origem: str, destino: str):
                         linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem_indice)
             if linhas_destino: aviso_d_freg = paragens_da_freguesia
 
-    if not linhas_origem: return f"Não encontrei a origem '{origem}' na rede."
-    if not linhas_destino: return f"Não encontrei o destino '{destino}' na rede."
+    if not linhas_origem: return f"I could not find the origin '{origem}'."
+    if not linhas_destino: return f"I could not find the destination '{destino}'."
 
     aviso_precisao = ""
     if aviso_o: aviso_precisao += f"\n⚠️ Nota: '{origem}' encontrada pelo TÍTULO da linha."
@@ -1721,6 +1788,7 @@ def plan_trip_with_transfer(origem: str, destino: str):
         diurnas = sorted(l for l in linhas_diretas if not _e_linha_noturna(l))
         noturnas = sorted(l for l in linhas_diretas if _e_linha_noturna(l))
         linhas_ordenadas = diurnas + noturnas
+
         resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}':\n"
         for l in linhas_ordenadas: resumo += f"- Linha {l}\n"
         if not diurnas and noturnas:
@@ -1734,36 +1802,38 @@ def plan_trip_with_transfer(origem: str, destino: str):
     transbordos = (stops_o & stops_d) - paragens_origem_encontradas - paragens_destino_encontradas
     if transbordos:
         resumo = f"Não há linha direta. Sugestão de transbordo:\n\n"
-        comb = 0
         for t in sorted(transbordos):
             l_to = [l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())]
             l_from = [l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())]
             resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
-            comb += 1
-            if comb >= 4:
-                resumo += "- (Mostradas as principais opções de transbordo).\n"
-                break
         return resumo + aviso_precisao
 
     hubs_o = sorted({p for p in stops_o if _e_paragem_hub(p)})
     hubs_d = sorted({p for p in stops_d if _e_paragem_hub(p)})
     if hubs_o and hubs_d:
-        resumo = "Possível transbordo a pé no centro de Guimarães (as paragens centrais ficam a poucos minutos de distância):\n\n"
-        comb = 0
+        resumo = (
+            "Não há transbordo na mesma paragem, mas é possível fazer transbordo a pé "
+            "pelo centro de Guimarães (as paragens S. Gonçalo, Central de Camionagem e "
+            "S. Dâmaso Norte/Sul ficam a poucos minutos a pé umas das outras):\n\n"
+        )
+        combinacoes_mostradas = 0
         for stop_o in hubs_o:
             l_to = [l for l in linhas_origem if stop_o in mapa_linha_paragens.get(l, set())]
             for stop_d in hubs_d:
                 l_from = [l for l in linhas_destino if stop_d in mapa_linha_paragens.get(l, set())]
                 if stop_o == stop_d:
-                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}' e apanha linha {'/'.join(l_from)} (mesma paragem).\n"
+                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}' e depois linha {'/'.join(l_from)} — mesma paragem.\n"
                 else:
-                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}', caminha para '{stop_d}' e apanha linha {'/'.join(l_from)}.\n"
-                comb += 1
-                if comb >= 4: break
-            if comb >= 4: break
+                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}', caminha até '{stop_d}', e apanha linha {'/'.join(l_from)}.\n"
+                combinacoes_mostradas += 1
+                if combinacoes_mostradas >= 4:
+                    break
+            if combinacoes_mostradas >= 4:
+                break
+        resumo += "\n⚠️ Este transbordo envolve caminhar entre paragens diferentes no centro de Guimarães, não é o mesmo poste."
         return resumo + aviso_precisao
 
-    return f"Não encontrei um transbordo óbvio entre '{origem}' e '{destino}'."
+    return f"I could not find an obvious transfer between '{origem}' and '{destino}'."
 
 def _resolve_place_to_stop(nome_local: str):
     """Resolves any place name (café, street, address, etc.) to the nearest bus stop,
@@ -1791,7 +1861,6 @@ def _resolve_place_to_stop(nome_local: str):
                     paragem_mais_proxima = dados["nome_real"]
 
     # 2. 🛡️ BACKUP INFALÍVEL: Procurar na Base de Dados SQLite
-    # Essencial para garantir que não perde paragens válidas do OpenStreetMap.
     try:
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -1814,10 +1883,12 @@ def plan_trip_from_place(origem: str, destino: str):
     if not origem or not destino:
         return "É necessário indicar a localização de origem e de destino."
 
+    # 1) Direct attempt
     resultado_direto = plan_trip_with_transfer(origem, destino)
-    if not resultado_direto.startswith("Não encontrei a origem") and not resultado_direto.startswith("Não encontrei o destino"):
+    if not resultado_direto.startswith("I could not find the origin") and not resultado_direto.startswith("I could not find the destination"):
         return resultado_direto
 
+    # 2) Resolve each place to the nearest bus stop
     paragem_o, dist_o, fonte_o = _resolve_place_to_stop(origem)
     paragem_d, dist_d, fonte_d = _resolve_place_to_stop(destino)
 
@@ -2044,7 +2115,7 @@ def render_game(ui):
                     ctx.fillStyle = (k===0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
                     if (leaderboard[k]) {{
                         ctx.fillText((k+1) + "º " + leaderboard[k][0], gameWidth + 15, yPos);
-                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' pas.', canvas.width - 15, yPos); ctx.textAlign = 'start';
+                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' {ui['game_unit']}', canvas.width - 15, yPos); ctx.textAlign = 'start';
                     }} else {{ ctx.fillStyle = '#444'; ctx.fillText((k+1) + 'º ------', gameWidth + 15, yPos); }}
                 }}
                 
@@ -2235,7 +2306,7 @@ with st.sidebar:
             else:
                 password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
                 if st.button(ui["login_btn"], key="admin_login_btn"):
-                    admin_pass_real = st.secrets.get("ADMIN_PASSWORD", None)
+                    admin_pass_real = _get_secret("ADMIN_PASSWORD")
                     # Constant-time comparison (hmac.compare_digest) instead of "==",
                     # to avoid leaking timing information about how much of the password matched.
                     if admin_pass_real and password_input and hmac.compare_digest(password_input, admin_pass_real):
@@ -2384,13 +2455,15 @@ if prompt:
                 SCHEDULE_INSTRUCTION = (
                     "MANDATÓRIO: Sempre que o utilizador perguntar por uma viagem, usa 'plan_trip_from_place'. "
                     "Se a ferramenta devolver um TRANSBORDO (ex: 'apanha linha A e depois linha B'), "
-                    "É ESTRITAMENTE OBRIGATÓRIO chamares a ferramenta `query_line_schedule_cache` DUAS VEZES (uma para a linha A e outra para a linha B). "
+                    "É ESTRITAMENTE OBRIGATÓRIO chamares a ferramenta `query_line_schedule_cache` DUAS VEZES (uma vez para a linha A e outra vez para a linha B). "
                     "Cruza a hora de chegada da 1ª linha com a hora de partida da 2ª linha para teres a certeza que o passageiro consegue fazer o transbordo. "
-                    "NUNCA dês a resposta sem mostrares as horas exatas de AMBAS as linhas."
+                    "NUNCA dês a resposta sem mostrares as horas exatas de AMBAS as linhas na mesma resposta. "
+                    "FORMATAÇÃO: Apresenta os horários de forma bem visível. Usa tabelas em formato Markdown com cabeçalhos como 'Partida' e 'Chegada' sempre que apresentares horários ou opções múltiplas, pois é muito mais fácil de ler."
                 ) if st.session_state.language == "PT" else (
                     "MANDATORY: When asked for a trip, use 'plan_trip_from_place'. If a transfer is suggested (e.g., 'take line A then line B'), "
                     "you MUST call `query_line_schedule_cache` TWICE (once for line A, once for line B) to verify connecting times. "
-                    "NEVER answer without presenting the exact times for BOTH lines."
+                    "NEVER answer without presenting the exact times for BOTH lines in the same response. "
+                    "FORMATTING: Always present schedules using clear Markdown tables with columns like 'Departure' and 'Arrival'."
                 )
 
                 PROMPT_GUIMABUS = f"""You are Celso Ferreira's Elite Executive Assistant.
@@ -2426,6 +2499,7 @@ if prompt:
                 12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
+                15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
