@@ -16,6 +16,7 @@ import folium
 import email.utils
 import math
 import hmac
+import difflib
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
@@ -410,7 +411,9 @@ _ROUTE_KEYWORDS_PT = [
     "linha", "horario", "horário", "autocarro", "guimabus", "paragem", "paragens",
     "viagem", "trajeto", "trajecto", "transporte", " para ", " até ", " ate ",
     "ir para", "como vou", "como chegar", "que horas passa", "onde fica", "onde e",
-    "onde é", "café", "cafe", "fica"
+    "onde é", "café", "cafe", "fica",
+    "obra", "obras", "greve", "corte de", "condicionamento", "trânsito", "transito",
+    "aviso", "interrupção", "interrupcao", "avarias", "serviço especial", "servico especial"
 ]
 
 def looks_like_route_request(texto: str) -> bool:
@@ -936,6 +939,25 @@ def render_notices_footer(anuncios_ativos, ui):
     </script>
     """
     components.html(html_rodape, height=170)
+
+
+def query_transit_notices_tool():
+    """Reads the SAME live notices feed shown in the scrolling footer ticker —
+    sourced from the official Guimabus Facebook page via an RSS proxy (fetchrss.com)
+    — and returns the currently active notices: roadworks, strikes, traffic
+    conditioning, service changes, special/holiday schedules, etc. Use this
+    whenever the user asks about disruptions, roadworks ('obras'), strikes
+    ('greve'), service changes, or any 'is there anything going on with the
+    buses' style question, instead of guessing or saying you have no way to
+    check. If there is nothing directly relevant, say so honestly — never
+    invent a notice that isn't in this list."""
+    avisos = get_facebook_notices()
+    if not avisos:
+        return "Não há avisos ativos de momento (ou não foi possível ler o feed de avisos da página de Facebook da Guimabus)."
+    resumo = "Avisos atualmente ativos (fonte: página de Facebook da Guimabus, via feed RSS):\n\n"
+    for a in avisos[:10]:
+        resumo += f"- {a['texto']}\n"
+    return resumo
 
     
 # --- CONTEXT FUNCTIONS / TOOLS ---
@@ -1684,6 +1706,15 @@ def _normalize_stop_name(texto: str):
     t = re.sub(r'\s+', ' ', t).strip()
     return t
 
+def _fuzzy_find_stop_matches(nome_norm: str, universo_paragens_norm: set, cutoff: float = 0.72):
+    """Fallback fuzzy match: finds stop names in 'universo_paragens_norm' (already
+    normalized) that are similar enough to 'nome_norm', to cope with small spelling
+    differences, missing/extra accents, abbreviations, or parenthetical suffixes
+    (e.g. 'Brito (Sequito)') that a user's typed text may not reproduce exactly."""
+    if not nome_norm or not universo_paragens_norm:
+        return set()
+    return set(difflib.get_close_matches(nome_norm, universo_paragens_norm, n=5, cutoff=cutoff))
+
 def _search_lines_by_title(termo_norm: str):
     try:
         conn = sqlite3.connect("agente_memoria.db")
@@ -1858,6 +1889,31 @@ def plan_trip_with_transfer(origem: str, destino: str):
                         linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem_indice)
             if linhas_destino: aviso_d_freg = paragens_da_freguesia
 
+    # Última tentativa antes de desistir: correspondência aproximada de nomes.
+    # Cobre pequenas diferenças de escrita, acentos em falta, abreviaturas, ou
+    # sufixos entre parêntesis no nome oficial da paragem (ex: "Brito (Sequito)")
+    # que o utilizador não escreveu literalmente.
+    aviso_o_fuzzy, aviso_d_fuzzy = None, None
+    universo_norm = {_normalize_stop_name(p): p for _, p in todas}
+
+    if not linhas_origem:
+        candidatos = _fuzzy_find_stop_matches(origem_norm, set(universo_norm.keys()))
+        if candidatos:
+            for cand_norm in candidatos:
+                for linha_id, paragem_indice in todas:
+                    if _normalize_stop_name(paragem_indice) == cand_norm:
+                        linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem_indice)
+            if linhas_origem: aviso_o_fuzzy = sorted({universo_norm[c] for c in candidatos})
+
+    if not linhas_destino:
+        candidatos = _fuzzy_find_stop_matches(destino_norm, set(universo_norm.keys()))
+        if candidatos:
+            for cand_norm in candidatos:
+                for linha_id, paragem_indice in todas:
+                    if _normalize_stop_name(paragem_indice) == cand_norm:
+                        linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem_indice)
+            if linhas_destino: aviso_d_fuzzy = sorted({universo_norm[c] for c in candidatos})
+
     if not linhas_origem: return f"I could not find the origin '{origem}'."
     if not linhas_destino: return f"I could not find the destination '{destino}'."
 
@@ -1866,6 +1922,8 @@ def plan_trip_with_transfer(origem: str, destino: str):
     if aviso_d: aviso_precisao += f"\n⚠️ Nota: '{destino}' encontrada pelo TÍTULO da linha."
     if aviso_o_freg: aviso_precisao += f"\n📍 '{origem}' é freguesia."
     if aviso_d_freg: aviso_precisao += f"\n📍 '{destino}' é freguesia."
+    if aviso_o_fuzzy: aviso_precisao += f"\n🔎 Nota: '{origem}' associada por semelhança de nome a: {', '.join(aviso_o_fuzzy)}. Confirma se é a paragem certa."
+    if aviso_d_fuzzy: aviso_precisao += f"\n🔎 Nota: '{destino}' associada por semelhança de nome a: {', '.join(aviso_d_fuzzy)}. Confirma se é a paragem certa."
 
     linhas_diretas = linhas_origem & linhas_destino
     if linhas_diretas:
@@ -1956,32 +2014,49 @@ def plan_trip_from_place(origem: str, destino: str):
     if not origem or not destino:
         return "É necessário indicar a localização de origem e de destino."
 
-    # 1) Direct attempt: it might already be the name of a known stop or parish.
+    # 1) Direct attempt: it might already be the name of a known stop, parish, or
+    # generic term (e.g. "Guimarães" -> central hub stops, handled inside
+    # plan_trip_with_transfer). This must run first and its result for whichever
+    # leg succeeded must be PRESERVED — see the bug note below.
     resultado_direto = plan_trip_with_transfer(origem, destino)
-    if not resultado_direto.startswith("I could not find the origin") and not resultado_direto.startswith("I could not find the destination"):
+    origem_falhou = resultado_direto.startswith("I could not find the origin")
+    destino_falhou = resultado_direto.startswith("I could not find the destination")
+    if not origem_falhou and not destino_falhou:
         return resultado_direto
 
-    # 2) Resolve each place to the nearest bus stop (static map or live geocoding).
-    paragem_o, dist_o, fonte_o = _resolve_place_to_stop(origem)
-    paragem_d, dist_d, fonte_d = _resolve_place_to_stop(destino)
+    # 2) Resolve to the nearest bus stop ONLY the leg that actually failed above.
+    # BUG FIX: previously both origem and destino were re-resolved via
+    # _resolve_place_to_stop whenever EITHER leg failed. This silently discarded a
+    # perfectly correct match for the leg that HAD succeeded — most visibly for
+    # generic terms like "Guimarães" (which plan_trip_with_transfer correctly maps
+    # to the central hub stops S. Gonçalo / Central de Camionagem / S. Dâmaso), but
+    # which _resolve_place_to_stop would instead geocode literally and match to
+    # whatever single stop happens to be nearest (e.g. "Estação CP Guimarães"),
+    # producing wrong or unnecessarily failed routes even when only the OTHER leg
+    # (the actual unknown place) needed resolving.
+    origem_final, destino_final = origem, destino
+    notas = []
 
-    if not paragem_o:
-        return f"⚠️ NOT CONFIRMED: I could not identify the origin '{origem}' nor find a bus stop near it. Confirm the exact name or indicate the street/parish."
-    if not paragem_d:
-        return f"⚠️ NOT CONFIRMED: I could not identify the destination '{destino}' nor find a bus stop near it. Confirm the exact name or indicate the street/parish."
+    if origem_falhou:
+        paragem_o, dist_o, fonte_o = _resolve_place_to_stop(origem)
+        if not paragem_o:
+            return f"⚠️ NOT CONFIRMED: I could not identify the origin '{origem}' nor find a bus stop near it. Confirm the exact name or indicate the street/parish."
+        origem_final = paragem_o
+        notas.append(f"\n📍 Nota: '{origem}' foi associado à paragem mais próxima '{paragem_o}' (a {int(dist_o)}m, via {fonte_o}).")
+        if fonte_o == "OpenStreetMap (tempo real)":
+            notas.append("⚠️ A localização da origem veio de pesquisa em tempo real (OpenStreetMap), não do mapa oficial — confirma o nome exato do local.")
 
-    resultado = plan_trip_with_transfer(paragem_o, paragem_d)
+    if destino_falhou:
+        paragem_d, dist_d, fonte_d = _resolve_place_to_stop(destino)
+        if not paragem_d:
+            return f"⚠️ NOT CONFIRMED: I could not identify the destination '{destino}' nor find a bus stop near it. Confirm the exact name or indicate the street/parish."
+        destino_final = paragem_d
+        notas.append(f"\n📍 Nota: '{destino}' foi associado à paragem mais próxima '{paragem_d}' (a {int(dist_d)}m, via {fonte_d}).")
+        if fonte_d == "OpenStreetMap (tempo real)":
+            notas.append("⚠️ A localização do destino veio de pesquisa em tempo real (OpenStreetMap), não do mapa oficial — confirma o nome exato do local.")
 
-    aviso = (
-        f"\n\n📍 Nota: '{origem}' foi associado à paragem mais próxima '{paragem_o}'"
-        f" (a {int(dist_o)}m, via {fonte_o})."
-        f"\n📍 Nota: '{destino}' foi associado à paragem mais próxima '{paragem_d}'"
-        f" (a {int(dist_d)}m, via {fonte_d})."
-    )
-    if fonte_o == "OpenStreetMap (tempo real)" or fonte_d == "OpenStreetMap (tempo real)":
-        aviso += "\n⚠️ Uma ou mais localizações vieram de pesquisa em tempo real (OpenStreetMap), não do mapa oficial — confirma o nome exato do local."
-
-    return resultado + aviso
+    resultado = plan_trip_with_transfer(origem_final, destino_final)
+    return resultado + "".join(notas)
 
 def query_stop_parish_tool(nome: str):
     if not nome: return "É necessário indicar o nome."
@@ -2548,6 +2623,7 @@ if prompt:
                 - generate_google_maps_link: takes the name of a place and returns a direct Google Maps link.
                 - find_nearest_stop: finds the nearest stop (geographically) to a parish or place. It NEVER confirms which line serves that stop — that must always be verified afterwards with 'plan_trip_with_transfer' or 'query_line_schedule_cache'. NEVER invent the line number from this tool alone. Use this only when you just need the stop, not the full route — for routes use 'plan_trip_from_place'.
                 - search_places_by_type: takes a type/category of place (e.g. "café", "restaurant", "pharmacy", "supermarket") and returns the list of places of that type found on the static map of Guimarães (geo_guimaraes.json). Use this tool whenever the user asks to "discover"/"list"/"what options are there" for a type of place, instead of inventing establishment names. Once you find a name, you can use 'find_nearest_stop', 'generate_google_maps_link' or 'plan_trip_from_place' with that exact name.
+                - query_transit_notices_tool: reads the live notices feed (Guimabus's official Facebook page, via an RSS proxy) for roadworks, strikes, traffic conditioning, service changes, or special/holiday schedules. ALWAYS use this when asked about disruptions, "obras", "greve", service changes, or anything currently affecting the service — never guess or claim you have no way to check.
 
                 MANDATORY PLANNING LOGIC:
                 1. - If the origin OR the destination is any place (café, street, address, factory, point of interest) and not an obvious stop/parish, use "plan_trip_from_place" directly — don't try to guess the stop manually.
@@ -2565,7 +2641,7 @@ if prompt:
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
                 15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
-                16. If you find many stops for a transfer you need to say the lines that goes to that places, check what lines can make tranfer having the same stop or if they have one of this stops(s.goncalo, central de camionagem, s.damaso norte or s.damaso sul) to make tranfer in the center of guimaraes
+                16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, you MUST use 'query_transit_notices_tool' before answering — never say you have no way to check, and never invent a notice that tool didn't return.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
@@ -2646,7 +2722,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                agent_tools = [get_guimabus_data, get_stop_schedule, query_line_schedule_cache, query_pass_types_cache_tool, query_fare_table_cache, plan_trip_with_transfer, plan_trip_from_place, query_stop_parish_tool, generate_google_maps_link, find_nearest_stop, search_places_by_type]
+                agent_tools = [get_guimabus_data, get_stop_schedule, query_line_schedule_cache, query_pass_types_cache_tool, query_fare_table_cache, plan_trip_with_transfer, plan_trip_from_place, query_stop_parish_tool, generate_google_maps_link, find_nearest_stop, search_places_by_type, query_transit_notices_tool]
                 
                 candidate_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
