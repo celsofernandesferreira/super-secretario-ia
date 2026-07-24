@@ -1768,15 +1768,24 @@ def search_stops_by_parish(nome_freguesia: str):
 # Paragens centrais de Guimarães entre as quais é sempre possível fazer transbordo
 # a pé (a poucos minutos de distância umas das outras), mesmo que não sejam
 # literalmente a mesma paragem. Usadas como fallback quando não há nenhuma
-# paragem exatamente em comum entre a rede de origem e a de destino.
-_HUB_KEYWORDS_NORM = ["s goncalo", "central de camionagem", "s damaso norte", "s damaso sul", "s damaso"]
+# Paragens centrais de Guimarães entre as quais é sempre possível fazer transbordo
+_HUB_KEYWORDS_NORM = ["s goncalo", "central", "central de camionagem", "s damaso norte", "s damaso sul", "s damaso"]
 
 def _e_paragem_hub(nome_paragem: str) -> bool:
     n = _normalize_stop_name(nome_paragem)
     return any(kw in n for kw in _HUB_KEYWORDS_NORM)
 
+def _match_stop_name(pesquisa_norm: str, paragem_norm: str) -> bool:
+    if pesquisa_norm == paragem_norm: return True
+    if len(pesquisa_norm) >= 4 and pesquisa_norm in paragem_norm: return True
+    if len(paragem_norm) >= 4 and paragem_norm in pesquisa_norm: return True
+    # Match via tokens (garante que "Hospital" liga a "Hospital Guimarães")
+    t1 = set(pesquisa_norm.split())
+    t2 = set(paragem_norm.split())
+    if t1 and t1.issubset(t2): return True
+    return False
+
 def _e_linha_noturna(linha_id: str) -> bool:
-    # Regra 8 do prompt: linhas cujo identificador começa por "N" são noturnas.
     return str(linha_id).strip().upper().startswith("N")
 
 def plan_trip_with_transfer(origem: str, destino: str):
@@ -1798,19 +1807,16 @@ def plan_trip_with_transfer(origem: str, destino: str):
     paragens_origem_encontradas, paragens_destino_encontradas = set(), set()
     mapa_linha_paragens = {}
 
-    # "Guimarães" sozinho não é o nome de nenhuma paragem real — significa
-    # genericamente qualquer uma das paragens centrais (regra 12 do prompt).
-    # Em vez de depender do modelo se lembrar de substituir isto manualmente,
-    # tratamos aqui: se a origem/destino normalizar para "guimaraes", uma
-    # paragem conta como correspondência se for uma das paragens centrais.
     origem_e_guimaraes_generico = origem_norm == "guimaraes"
     destino_e_guimaraes_generico = destino_norm == "guimaraes"
 
     for linha_id, paragem in todas:
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
         paragem_norm = _normalize_stop_name(paragem)
-        match_origem = _e_paragem_hub(paragem) if origem_e_guimaraes_generico else re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm)
-        match_destino = _e_paragem_hub(paragem) if destino_e_guimaraes_generico else re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm)
+        
+        match_origem = _e_paragem_hub(paragem) if origem_e_guimaraes_generico else _match_stop_name(origem_norm, paragem_norm)
+        match_destino = _e_paragem_hub(paragem) if destino_e_guimaraes_generico else _match_stop_name(destino_norm, paragem_norm)
+        
         if match_origem:
             linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem)
         if match_destino:
@@ -1820,46 +1826,20 @@ def plan_trip_with_transfer(origem: str, destino: str):
     if not linhas_origem: linhas_origem, titulos_o = _search_lines_by_title(origem_norm); aviso_o = bool(linhas_origem)
     if not linhas_destino: linhas_destino, titulos_d = _search_lines_by_title(destino_norm); aviso_d = bool(linhas_destino)
 
-    aviso_o_freg, aviso_d_freg = None, None
-    if not linhas_origem:
-        paragens_da_freguesia = search_stops_by_parish(origem)
-        if paragens_da_freguesia:
-            for paragem_freg in paragens_da_freguesia:
-                for linha_id, paragem_indice in todas:
-                    if _normalize_stop_name(paragem_freg) == _normalize_stop_name(paragem_indice):
-                        linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem_indice)
-            if linhas_origem: aviso_o_freg = paragens_da_freguesia
-
-    if not linhas_destino:
-        paragens_da_freguesia = search_stops_by_parish(destino)
-        if paragens_da_freguesia:
-            for paragem_freg in paragens_da_freguesia:
-                for linha_id, paragem_indice in todas:
-                    if _normalize_stop_name(paragem_freg) == _normalize_stop_name(paragem_indice):
-                        linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem_indice)
-            if linhas_destino: aviso_d_freg = paragens_da_freguesia
-
-    if not linhas_origem: return f"I could not find the origin '{origem}'."
-    if not linhas_destino: return f"I could not find the destination '{destino}'."
+    if not linhas_origem: return f"Não encontrei a origem '{origem}' na rede."
+    if not linhas_destino: return f"Não encontrei o destino '{destino}' na rede."
 
     aviso_precisao = ""
-    if aviso_o: aviso_precisao += f"\n⚠️ Nota: '{origem}' encontrada pelo TÍTULO da linha."
-    if aviso_d: aviso_precisao += f"\n⚠️ Nota: '{destino}' encontrada pelo TÍTULO da linha."
-    if aviso_o_freg: aviso_precisao += f"\n📍 '{origem}' é freguesia."
-    if aviso_d_freg: aviso_precisao += f"\n📍 '{destino}' é freguesia."
+    if aviso_o: aviso_precisao += f"\n⚠️ Nota: '{origem}' foi mapeado pelo título da linha."
+    if aviso_d: aviso_precisao += f"\n⚠️ Nota: '{destino}' foi mapeado pelo título da linha."
 
     linhas_diretas = linhas_origem & linhas_destino
     if linhas_diretas:
-        # Regra 8 do prompt: dar prioridade às linhas diurnas — as noturnas (prefixo "N")
-        # só aparecem primeiro se forem mesmo a única opção disponível.
         diurnas = sorted(l for l in linhas_diretas if not _e_linha_noturna(l))
         noturnas = sorted(l for l in linhas_diretas if _e_linha_noturna(l))
         linhas_ordenadas = diurnas + noturnas
-
         resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}':\n"
         for l in linhas_ordenadas: resumo += f"- Linha {l}\n"
-        if not diurnas and noturnas:
-            resumo += "\n🌙 Nota: só encontrei linha(s) noturna(s) para este trajeto — não há alternativa diurna direta."
         return resumo + aviso_precisao
 
     stops_o, stops_d = set(), set()
@@ -1869,43 +1849,36 @@ def plan_trip_with_transfer(origem: str, destino: str):
     transbordos = (stops_o & stops_d) - paragens_origem_encontradas - paragens_destino_encontradas
     if transbordos:
         resumo = f"Não há linha direta. Sugestão de transbordo:\n\n"
+        comb = 0
         for t in sorted(transbordos):
             l_to = [l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())]
             l_from = [l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())]
             resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
+            comb += 1
+            if comb >= 4:
+                resumo += "- (Mostradas as principais opções de transbordo).\n"
+                break
         return resumo + aviso_precisao
 
-    # Não há nenhuma paragem literalmente em comum — antes de desistir, verifica se
-    # a origem e o destino têm cada uma acesso a alguma das paragens centrais de
-    # Guimarães (S. Gonçalo, Central de Camionagem, S. Dâmaso Norte/Sul). Essas
-    # paragens ficam a poucos minutos a pé umas das outras, por isso um transbordo
-    # entre elas é sempre viável mesmo que não seja literalmente o mesmo poste.
     hubs_o = sorted({p for p in stops_o if _e_paragem_hub(p)})
     hubs_d = sorted({p for p in stops_d if _e_paragem_hub(p)})
     if hubs_o and hubs_d:
-        resumo = (
-            "Não há transbordo na mesma paragem, mas é possível fazer transbordo a pé "
-            "pelo centro de Guimarães (as paragens S. Gonçalo, Central de Camionagem e "
-            "S. Dâmaso Norte/Sul ficam a poucos minutos a pé umas das outras):\n\n"
-        )
-        combinacoes_mostradas = 0
+        resumo = "Possível transbordo a pé no centro de Guimarães (as paragens centrais ficam a poucos minutos de distância):\n\n"
+        comb = 0
         for stop_o in hubs_o:
             l_to = [l for l in linhas_origem if stop_o in mapa_linha_paragens.get(l, set())]
             for stop_d in hubs_d:
                 l_from = [l for l in linhas_destino if stop_d in mapa_linha_paragens.get(l, set())]
                 if stop_o == stop_d:
-                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}' e depois linha {'/'.join(l_from)} — mesma paragem.\n"
+                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}' e apanha linha {'/'.join(l_from)} (mesma paragem).\n"
                 else:
-                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}', caminha até '{stop_d}', e apanha linha {'/'.join(l_from)}.\n"
-                combinacoes_mostradas += 1
-                if combinacoes_mostradas >= 4:
-                    break
-            if combinacoes_mostradas >= 4:
-                break
-        resumo += "\n⚠️ Este transbordo envolve caminhar entre paragens diferentes no centro de Guimarães, não é o mesmo poste."
+                    resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}', caminha para '{stop_d}' e apanha linha {'/'.join(l_from)}.\n"
+                comb += 1
+                if comb >= 4: break
+            if comb >= 4: break
         return resumo + aviso_precisao
 
-    return f"I could not find an obvious transfer between '{origem}' and '{destino}'."
+    return f"Não encontrei um transbordo óbvio entre '{origem}' e '{destino}'."
 
 def _resolve_place_to_stop(nome_local: str):
     """Resolves any place name (café, street, address, etc.) to the nearest bus stop,
