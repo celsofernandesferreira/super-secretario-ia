@@ -23,18 +23,18 @@ from bs4 import BeautifulSoup
 # --- LANGUAGE DICTIONARY ---
 UI_TEXT = {
     "PT": {
-        "title": "💼 O Teu Super Secretário de Produtividade",
-        "toast_score": "💾 Recorde de {name} ({score} pas.) guardado com sucesso!",
+        "title": "🚌 Agente Sobre Rodas😎",
+        "toast_score": "💾 Recorde de {name} ({score} pessoa(s)) guardado com sucesso!",
         "sidebar_panel": "⚙️ Painel do Agente",
         "clear_history": "🗑️ Limpar O Meu Histórico",
         "entertainment": "🕹️ Entretenimento",
-        "close_game": "Fechar Jogo X",
-        "open_game": "Abrir Mini-Game 👾",
+        "close_game": "Fechar Crazy Bus Driver X",
+        "open_game": "Abrir Crazy Bus Driver Mini-Game 👾",
         "transport_tickets": "🎫 Títulos de Transporte",
         "close_ticket": "Fechar Pedido de Passe X",
         "request_ticket": "Pedir Passe 🎫",
         "developer": "👨‍💻 Desenvolvedor",
-        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n📞 Contacto: **917 486 683**",
+        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
         "status": "Estado: **Online**\nModelo Nativo: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Área de Administrador",
         "login_admin": "Entrar como administrador",
@@ -55,14 +55,15 @@ UI_TEXT = {
         "chat_input": "Como posso ajudar hoje?",
         "speak": "Falar",
         "download_txt": "📥 Descarregar Resposta (.txt)",
-        "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Guimabus:** Monitorização da frota, horários e trajetos da Guimabus.\n2. **Modo Recrutador:** Informação sobre o teu currículo e percurso profissional para recrutadores — diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês, ou dá-me um problema de IT para eu mostrar como tu o resolverias.\n3. **Modo Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
-        "game_title": "🚌 Guimabus Arcade: Cabine de Condução 🚌",
+        "initial_msg": "Olá! Sou o **Agente de Produtividade de Elite do Celso**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Guimabus:** Monitorização da frota, horários e trajetos da Guimabus e informações .\n2. **Secretario do Celso:** Informação sobre o Perfil do Celso e percurso profissional para recrutadores — dá-me um problema de IT para eu mostrar como o Celso Resolveria.\n3. **Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
+        "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Gravar 💾",
         "game_name": "Teu Nome",
         "game_pax": "Passageiros",
+        "game_unit": "passageiros(s)",
         "game_top10": "🏆 TOP 10 MOTORISTAS",
         "game_gameover": "FIM DA LINHA",
         "game_transported": "Transportaste",
@@ -70,7 +71,7 @@ UI_TEXT = {
         "game_alert": "Por favor introduz o teu nome!",
         "ad_disclaimer": "⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.",
         "ad_notice": "Aviso",
-        "ticket_title": "🎫 Pedido de Passe — Guimabus",
+        "ticket_title": "🎫 Titulos de Transporte — Guimabus",
         "ticket_warning": "⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão.**",
         "ticket_updated": "📅 Dados atualizados em:",
         "ticket_wizard": "🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas",
@@ -111,18 +112,18 @@ UI_TEXT = {
         "updating_system": "**SISTEMA EM ATUALIZAÇÃO:** A descarregar novos horários e pacotes de dados. O agente está temporariamente bloqueado para evitar falhas. Por favor, aguarda (pode demorar 1-2 minutos)..."
     },
     "EN": {
-        "title": "💼 Your Super Productivity Secretary",
-        "toast_score": "💾 Score for {name} ({score} pax) saved successfully!",
+        "title": "🚌 Agent on Wheels😎",
+        "toast_score": "💾 Score for {name} ({score} person(s)) saved successfully!",
         "sidebar_panel": "⚙️ Agent Panel",
         "clear_history": "🗑️ Clear My History",
         "entertainment": "🕹️ Entertainment",
-        "close_game": "Close Game X",
-        "open_game": "Open Mini-Game 👾",
+        "close_game": "Close Crazy Bus Driver X",
+        "open_game": "Open Crazy Bus Driver Mini-Game 👾",
         "transport_tickets": "🎫 Transport Tickets",
         "close_ticket": "Close Ticket Request X",
         "request_ticket": "Request Ticket 🎫",
         "developer": "👨‍💻 Developer",
-        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n📞 Contact: **917 486 683**",
+        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
         "status": "Status: **Online**\nNative Model: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Administrator Area",
         "login_admin": "Login as Administrator",
@@ -143,14 +144,15 @@ UI_TEXT = {
         "chat_input": "How can I help you today?",
         "speak": "Speak",
         "download_txt": "📥 Download Response (.txt)",
-        "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus Mode:** Fleet monitoring, schedules and route planning for Guimabus.\n2. **Recruiter Mode:** Information about your CV and professional background for recruiters — tell me *'I want to train for an interview'* to simulate technical tests in English, or give me an IT problem so I can show how you would solve it.\n3. **Project Mode:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
-        "game_title": "🚌 Guimabus Arcade: Driving Cabin 🚌",
+        "initial_msg": "Hello! I am **Celso's Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus:** Fleet monitoring, schedules and routes for Guimabus, plus general information.\n2. **Celso's Assistant:** Information about Celso's profile and career for recruiters — give me an IT problem and I'll show you how Celso would solve it.\n3. **Project:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
+        "game_title": "🚌 Crazy Bus Driver 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Save 💾",
         "game_name": "Your Name",
         "game_pax": "Passengers",
+        "game_unit": "passenger(s)",
         "game_top10": "🏆 TOP 10 DRIVERS",
         "game_gameover": "END OF THE LINE",
         "game_transported": "You transported",
@@ -611,7 +613,7 @@ def extract_future_date(texto):
     agora = datetime.now()
     ano_atual = agora.year
     datas_encontradas = []
-
+ 
     for m in re.finditer(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b', texto):
         dia, mes = int(m.group(1)), int(m.group(2))
         ano = int(m.group(3)) if m.group(3) else ano_atual
@@ -620,7 +622,7 @@ def extract_future_date(texto):
             datas_encontradas.append(datetime(ano, mes, dia))
         except ValueError:
             pass
-
+ 
     for m in re.finditer(r'\b(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(\d{4}))?\b', texto.lower()):
         dia = int(m.group(1))
         mes_str = m.group(2)
@@ -630,20 +632,21 @@ def extract_future_date(texto):
                 datas_encontradas.append(datetime(ano, PT_MONTHS[mes_str], dia))
             except ValueError:
                 pass
-
+ 
     if datas_encontradas:
         return max(datas_encontradas)
     return None
-
+ 
 @st.cache_data(ttl=3600)
 def get_facebook_notices():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    # 1. NOVO URL DO FETCHRSS
+    url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.rss"
     avisos_ativos = []
-    todos_avisos = [] # 🛡️ LISTA DE SEGURANÇA (FALLBACK)
+    todos_avisos = [] 
     
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
-
+ 
     try:
         response = requests.get(url_rss, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
@@ -653,18 +656,27 @@ def get_facebook_notices():
             title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
-            enclosure = item.find("enclosure")
-            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
-            if not img_url and desc:
-                img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match: img_url = img_match.group(1)
+            # 2. CORREÇÃO DO TEXTO: Forçar tudo a uma única linha sem quebras manhosas
+            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            clean_text = re.sub(r'\s+', ' ', clean_text) # Transforma \n e múltiplos espaços num só espaço
+            title = re.sub(r'\s+', ' ', title).strip()
+            
+            # 3. CORREÇÃO DA IMAGEM: Procurar em media:content ou na tag <img> dentro da descrição
+            img_url = ""
+            media_content = item.find("media:content")
+            if media_content and media_content.get("url"):
+                img_url = media_content.get("url")
+            elif item.find("enclosure") and item.find("enclosure").get("url"):
+                img_url = item.find("enclosure").get("url")
+            else:
+                img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc, re.IGNORECASE)
+                if img_match: 
+                    img_url = img_match.group(1)
             
             texto_minusculas = clean_text.lower() + " " + title.lower()
             texto_final = clean_text if len(clean_text) > 5 else title
             
-            # We always keep a copy for the fallback plan
             aviso_temp = {
                 "texto": texto_final, 
                 "imagem": img_url, 
@@ -674,25 +686,18 @@ def get_facebook_notices():
             
             if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
                 continue
-
+ 
             data_fim_texto = extract_future_date(texto_minusculas)
-            
             palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
-
+ 
             if data_fim_texto:
                 if data_fim_texto < agora_local:
                     continue
-                # 🟢 TIER 1 — Roadworks/events with a confirmed end date or future date.
-                # Stays active as long as the date hasn't passed, and ALWAYS has
-                # priority over any generic post (base 1000).
                 dias_ate_fim = (data_fim_texto - agora_local).days
-                # The closer to the end/event, the more urgent/relevant it is.
                 prioridade_calculada = 1000 - max(dias_ate_fim, 0)
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 50
             else:
-                # 🟡 TIER 2 — Generic posts with no explicit date.
-                # Only stay active for ~1 week (used to be 15 days).
                 LIMITE_DIAS_GENERICO = 7
                 pub_date_node = item.find("pubDate")
                 dias_passados = 0
@@ -702,12 +707,12 @@ def get_facebook_notices():
                         dias_passados = (agora_utc - data_post).days
                     except Exception:
                         pass
-
+ 
                 if dias_passados > LIMITE_DIAS_GENERICO:
                     continue
-
+ 
                 prioridade_calculada = LIMITE_DIAS_GENERICO - dias_passados
-
+ 
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 20
             
@@ -716,20 +721,16 @@ def get_facebook_notices():
             
         avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
         
-        # 🛑 THE TRICK IS HERE: if the filter is too aggressive and throws everything away,
-        # we guarantee we still show at least the last 2 posts from the page!
         if not avisos_ativos and todos_avisos:
             return todos_avisos[:2]
         
-        # Shows ALL active notices (roadworks/events with a future date + posts
-        # from the last week that aren't resolved yet), ordered by priority.
         return avisos_ativos
             
     except Exception as e:
         logging.error(f"Native RSS error: {e}")
         
     return avisos_ativos
-
+ 
 def render_notices_footer(anuncios_ativos, ui):
     if not anuncios_ativos: return
     
@@ -772,14 +773,14 @@ def render_notices_footer(anuncios_ativos, ui):
             </div>
         </div>
     </div>
-
+ 
     <script>
         const anuncios = {dados_js};
         let indice = 0;
         const txt = document.getElementById('ticker-text');
         const img = document.getElementById('ticker-img');
         const container = document.querySelector('.text-container');
-
+ 
         async function correrAviso() {{
             const a = anuncios[indice];
             
