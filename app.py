@@ -16,6 +16,7 @@ import folium
 import email.utils
 import math
 import hmac
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
@@ -297,17 +298,50 @@ def initialize_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
 
-    # Remove any duplicate rows that may already exist (safe for a pre-existing database
-    # that was populated before this UNIQUE constraint existed), keeping the earliest row
-    # of each (tipo, nome) pair, then enforce real uniqueness going forward so that
-    # INSERT OR IGNORE actually prevents duplicates instead of silently doing nothing.
-    cursor.execute("""
-        DELETE FROM nos_geograficos
-        WHERE id NOT IN (
-            SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
-        )
-    """)
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+    # Normaliza o schema de nos_geograficos antes de tentar limpar duplicados.
+    # Uma versão antiga do .db (persistida entre deploys no Streamlit Cloud) pode
+    # ter esta tabela sem a coluna "id" (ou outras), e nesse caso o DELETE/CREATE
+    # UNIQUE INDEX abaixo rebentava com "no such column: id". Isto explica por que
+    # às vezes o deploy funcionava (schema já novo/vazio) e às vezes não (schema
+    # antigo persistido).
+    try:
+        colunas_existentes = {row[1] for row in cursor.execute("PRAGMA table_info(nos_geograficos)").fetchall()}
+        colunas_necessarias = {"id", "tipo", "nome"}
+
+        if colunas_necessarias.issubset(colunas_existentes):
+            # Remove duplicados que possam já existir (seguro para uma BD pré-existente
+            # que foi populada antes deste UNIQUE constraint existir), mantendo a linha
+            # mais antiga de cada par (tipo, nome), e só depois impõe unicidade real
+            # para que o INSERT OR IGNORE passe mesmo a prevenir duplicados.
+            cursor.execute("""
+                DELETE FROM nos_geograficos
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
+                )
+            """)
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+        else:
+            # Schema antigo/incompatível: recria a tabela do zero em vez de tentar
+            # corrigi-la incrementalmente. Os dados de POIs podem ser reimportados
+            # depois via "import_guimaraes_pois" / discover_parish.
+            logging.warning(f"Schema antigo detetado em nos_geograficos (colunas: {colunas_existentes}). A recriar a tabela.")
+            cursor.execute("DROP TABLE nos_geograficos")
+            cursor.execute("""
+                CREATE TABLE nos_geograficos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tipo TEXT,
+                    nome TEXT,
+                    freguesia TEXT,
+                    latitude REAL,
+                    longitude REAL,
+                    linhas_associadas TEXT,
+                    ultima_atualizacao TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+    except Exception as e:
+        logging.error(f"Erro ao normalizar o schema de nos_geograficos: {e}")
 
     conn.commit()
     conn.close()
@@ -426,12 +460,18 @@ def _search_local_map(local_nome: str):
         if pontuacao > melhor_pontuacao:
             melhor_pontuacao, melhor_match = pontuacao, dados
 
-    # We only accept it if at least half of the searched words match,
-    # to avoid returning false positives.
-    if melhor_match and melhor_pontuacao >= 0.5:
+    # Stricter matching than before: for short queries (<=2 words) we now require
+    # EVERY word to match, not just half. A 50% threshold meant a 2-word query like
+    # "cafe areal" could match an entry for just "areal" (a neighbourhood/zone) and be
+    # reported back with full confidence as if it were the specific business "Café
+    # Areal" — a real source of invented/incorrect locations. Longer queries keep a
+    # high (but not perfect) bar, since extra descriptive words are more tolerable.
+    limite_minimo = 1.0 if len(tokens_pesquisa) <= 2 else 0.75
+    if melhor_match and melhor_pontuacao >= limite_minimo:
         return melhor_match
     return None
 
+@st.cache_data(ttl=86400)
 def _geocode_nominatim_place(local_nome: str):
     """Geocodes a place name in Guimarães live via OpenStreetMap (Nominatim),
     used as a fallback when the place is not in the static map (geo_guimaraes.json)."""
@@ -439,18 +479,31 @@ def _geocode_nominatim_place(local_nome: str):
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 5},
             headers=headers, timeout=8
         )
         resp.raise_for_status()
         resultados = resp.json()
-        if resultados:
-            r = resultados[0]
-            return {
-                "nome_real": r.get("display_name", local_nome).split(",")[0],
-                "lat": float(r["lat"]),
-                "lon": float(r["lon"]),
-            }
+        if not resultados:
+            return None
+
+        # Nominatim's free-text search almost always returns *something*, even when no
+        # real match exists for the specific place asked about — it silently drops the
+        # words it can't match and geocodes whatever remains (e.g. a street or a
+        # neighbourhood). Blindly trusting result[0] was a real source of confidently
+        # reported, incorrect locations. We now only accept a candidate whose own name
+        # actually shares a meaningful word with the query.
+        tokens_pesquisa = set(t for t in normalize_search_name(local_nome).split("_") if t)
+        for r in resultados:
+            nome_resultado = r.get("display_name", "").split(",")[0]
+            tokens_resultado = set(t for t in normalize_search_name(nome_resultado).split("_") if t)
+            if tokens_pesquisa & tokens_resultado:
+                return {
+                    "nome_real": nome_resultado or local_nome,
+                    "lat": float(r["lat"]),
+                    "lon": float(r["lon"]),
+                }
+        return None
     except Exception as e:
         logging.error(f"Error geocoding via Nominatim for '{local_nome}': {e}")
     return None
@@ -592,12 +645,78 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def _load_dotenv_file(file_path: str | Path | None = None):
+    """Load simple KEY=VALUE pairs from a dotenv-style file without adding a new dependency."""
+    candidates = []
+    if file_path:
+        candidates.append(Path(file_path))
+
+    base_dir = Path(__file__).resolve().parent
+    candidates.extend([
+        base_dir / "Secrets.env",
+        base_dir / ".env",
+        base_dir / "secrets.env",
+        Path.cwd() / "Secrets.env",
+        Path.cwd() / ".env",
+        Path.cwd() / "secrets.env",
+    ])
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        try:
+            values = {}
+            for raw_line in resolved.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip("\"'")
+            return values
+        except Exception as exc:
+            logging.warning(f"Unable to read secrets file {resolved}: {exc}")
+    return {}
+
+
+DOTENV_VALUES = _load_dotenv_file()
+
+
+def _get_secret(key: str, default=None):
+    """Reads a configuration secret, preferring environment variables, then
+    Streamlit secrets, and finally a local dotenv-style file so the same app
+    behaves correctly in Docker and in local development."""
+    valor = os.getenv(key)
+    if valor:
+        return valor
+
+    try:
+        if st.secrets.get(key, None):
+            return st.secrets.get(key, default)
+    except Exception:
+        pass
+
+    if key in DOTENV_VALUES:
+        return DOTENV_VALUES[key]
+
+    return default
+
 # 5. Gemini API initialization
 try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    chave_api = _get_secret("GOOGLE_API_KEY")
+    if not chave_api:
+        raise ValueError("GOOGLE_API_KEY not set (checked environment variable and st.secrets).")
+    genai.configure(api_key=chave_api)
 except Exception:
-    st.error("Error: API key missing from Streamlit Secrets.")
-    logging.error("Failed to initialize the application: API key missing from Secrets.")
+    st.error("Error: API key missing from environment variables, Streamlit secrets, or Secrets.env.")
+    logging.error("Failed to initialize the application: API key missing from environment/secrets files.")
     st.stop()
 
 
@@ -613,7 +732,7 @@ def extract_future_date(texto):
     agora = datetime.now()
     ano_atual = agora.year
     datas_encontradas = []
- 
+
     for m in re.finditer(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b', texto):
         dia, mes = int(m.group(1)), int(m.group(2))
         ano = int(m.group(3)) if m.group(3) else ano_atual
@@ -622,7 +741,7 @@ def extract_future_date(texto):
             datas_encontradas.append(datetime(ano, mes, dia))
         except ValueError:
             pass
- 
+
     for m in re.finditer(r'\b(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(\d{4}))?\b', texto.lower()):
         dia = int(m.group(1))
         mes_str = m.group(2)
@@ -632,11 +751,11 @@ def extract_future_date(texto):
                 datas_encontradas.append(datetime(ano, PT_MONTHS[mes_str], dia))
             except ValueError:
                 pass
- 
+
     if datas_encontradas:
         return max(datas_encontradas)
     return None
- 
+
 @st.cache_data(ttl=3600)
 def get_facebook_notices():
     # 1. NOVO URL DO FETCHRSS
@@ -646,7 +765,7 @@ def get_facebook_notices():
     
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
- 
+
     try:
         response = requests.get(url_rss, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
@@ -686,10 +805,10 @@ def get_facebook_notices():
             
             if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
                 continue
- 
+
             data_fim_texto = extract_future_date(texto_minusculas)
             palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
- 
+
             if data_fim_texto:
                 if data_fim_texto < agora_local:
                     continue
@@ -707,12 +826,12 @@ def get_facebook_notices():
                         dias_passados = (agora_utc - data_post).days
                     except Exception:
                         pass
- 
+
                 if dias_passados > LIMITE_DIAS_GENERICO:
                     continue
- 
+
                 prioridade_calculada = LIMITE_DIAS_GENERICO - dias_passados
- 
+
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 20
             
@@ -730,7 +849,7 @@ def get_facebook_notices():
         logging.error(f"Native RSS error: {e}")
         
     return avisos_ativos
- 
+
 def render_notices_footer(anuncios_ativos, ui):
     if not anuncios_ativos: return
     
@@ -773,14 +892,14 @@ def render_notices_footer(anuncios_ativos, ui):
             </div>
         </div>
     </div>
- 
+
     <script>
         const anuncios = {dados_js};
         let indice = 0;
         const txt = document.getElementById('ticker-text');
         const img = document.getElementById('ticker-img');
         const container = document.querySelector('.text-container');
- 
+
         async function correrAviso() {{
             const a = anuncios[indice];
             
@@ -1505,7 +1624,13 @@ def _extract_stops_from_text(texto: str):
         m = padrao.match(linha_texto)
         if m:
             nome = m.group("nome").strip(" -\t")
-            if len(nome) >= 3:
+            horarios_str = m.group("horarios")
+            # Dashes ("-") are used in the official PDFs as a placeholder for "no
+            # service" and were previously accepted on their own as valid "times", so a
+            # row made entirely of dashes (or a coincidental legend/note line) could be
+            # wrongly registered as a real stop. Require at least one genuine HH:MM time
+            # in the row before treating it as an actual stop with a schedule.
+            if len(nome) >= 3 and re.search(r'\d{1,2}:\d{2}', horarios_str):
                 paragens.add(nome)
     return paragens
 
@@ -1528,6 +1653,20 @@ def build_stop_index():
                     (linha_id, paragem)
                 )
                 total_paragens += 1
+        conn.commit()
+
+        # Sanity cleanup: a real bus line always serves several stops. If a line ended
+        # up associated with only a single stop, that's almost certainly leftover noise
+        # from PDF text extraction (e.g. a stray legend/note line), not a genuine route
+        # — and offering it as a transfer option would be misleading. Drop those.
+        cursor.execute("""
+            DELETE FROM cache_paragens_linha
+            WHERE linha IN (
+                SELECT linha FROM cache_paragens_linha
+                GROUP BY linha
+                HAVING COUNT(DISTINCT paragem) < 2
+            )
+        """)
         conn.commit()
         conn.close()
         return f"Índice de paragens reconstruído: {total_paragens} associações linha-paragem."
@@ -1655,6 +1794,10 @@ def _e_paragem_hub(nome_paragem: str) -> bool:
     n = _normalize_stop_name(nome_paragem)
     return any(kw in n for kw in _HUB_KEYWORDS_NORM)
 
+def _e_linha_noturna(linha_id: str) -> bool:
+    # Regra 8 do prompt: linhas cujo identificador começa por "N" são noturnas.
+    return str(linha_id).strip().upper().startswith("N")
+
 def plan_trip_with_transfer(origem: str, destino: str):
     if not origem or not destino: return "É necessário indicar a paragem de origem e a paragem de destino."
     origem_norm, destino_norm = _normalize_stop_name(origem), _normalize_stop_name(destino)
@@ -1674,12 +1817,22 @@ def plan_trip_with_transfer(origem: str, destino: str):
     paragens_origem_encontradas, paragens_destino_encontradas = set(), set()
     mapa_linha_paragens = {}
 
+    # "Guimarães" sozinho não é o nome de nenhuma paragem real — significa
+    # genericamente qualquer uma das paragens centrais (regra 12 do prompt).
+    # Em vez de depender do modelo se lembrar de substituir isto manualmente,
+    # tratamos aqui: se a origem/destino normalizar para "guimaraes", uma
+    # paragem conta como correspondência se for uma das paragens centrais.
+    origem_e_guimaraes_generico = origem_norm == "guimaraes"
+    destino_e_guimaraes_generico = destino_norm == "guimaraes"
+
     for linha_id, paragem in todas:
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
         paragem_norm = _normalize_stop_name(paragem)
-        if re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm):
+        match_origem = _e_paragem_hub(paragem) if origem_e_guimaraes_generico else re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm)
+        match_destino = _e_paragem_hub(paragem) if destino_e_guimaraes_generico else re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm)
+        if match_origem:
             linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem)
-        if re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm):
+        if match_destino:
             linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem)
 
     aviso_o, aviso_d = False, False
@@ -1716,8 +1869,16 @@ def plan_trip_with_transfer(origem: str, destino: str):
 
     linhas_diretas = linhas_origem & linhas_destino
     if linhas_diretas:
+        # Regra 8 do prompt: dar prioridade às linhas diurnas — as noturnas (prefixo "N")
+        # só aparecem primeiro se forem mesmo a única opção disponível.
+        diurnas = sorted(l for l in linhas_diretas if not _e_linha_noturna(l))
+        noturnas = sorted(l for l in linhas_diretas if _e_linha_noturna(l))
+        linhas_ordenadas = diurnas + noturnas
+
         resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}':\n"
-        for l in linhas_diretas: resumo += f"- Linha {l}\n"
+        for l in linhas_ordenadas: resumo += f"- Linha {l}\n"
+        if not diurnas and noturnas:
+            resumo += "\n🌙 Nota: só encontrei linha(s) noturna(s) para este trajeto — não há alternativa diurna direta."
         return resumo + aviso_precisao
 
     stops_o, stops_d = set(), set()
@@ -2027,7 +2188,7 @@ def render_game(ui):
                     ctx.fillStyle = (k===0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
                     if (leaderboard[k]) {{
                         ctx.fillText((k+1) + "º " + leaderboard[k][0], gameWidth + 15, yPos);
-                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' pas.', canvas.width - 15, yPos); ctx.textAlign = 'start';
+                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' {ui['game_unit']}', canvas.width - 15, yPos); ctx.textAlign = 'start';
                     }} else {{ ctx.fillStyle = '#444'; ctx.fillText((k+1) + 'º ------', gameWidth + 15, yPos); }}
                 }}
                 
@@ -2218,7 +2379,7 @@ with st.sidebar:
             else:
                 password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
                 if st.button(ui["login_btn"], key="admin_login_btn"):
-                    admin_pass_real = st.secrets.get("ADMIN_PASSWORD", None)
+                    admin_pass_real = _get_secret("ADMIN_PASSWORD")
                     # Constant-time comparison (hmac.compare_digest) instead of "==",
                     # to avoid leaking timing information about how much of the password matched.
                     if admin_pass_real and password_input and hmac.compare_digest(password_input, admin_pass_real):
@@ -2403,6 +2564,7 @@ if prompt:
                 12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
+                15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
@@ -2439,16 +2601,38 @@ if prompt:
 
                 normalized_prompt = prompt.lower()
                 project_triggers = ["este projeto", "sobre o projeto", "sobre este projeto", "como foi feito", "como foi construido", "que tecnologias", "stack", "arquitetura", "arquitectura", "this project", "how was this built", "tech stack"]
-                recruiter_triggers = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+                # Split into two tiers: "strong" recruiter signals are unambiguous (CV,
+                # hiring, skills) and should always switch mode. The "IT problem" words
+                # are intentionally generic (so a recruiter can say "give me a problem")
+                # but the same words show up naturally in transport questions (e.g. "há
+                # algum problema na linha 170?"), so they only switch mode when the
+                # message doesn't otherwise look like a route/schedule question.
+                recruiter_triggers_strong = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "helpdesk", "ticket"]
+                recruiter_triggers_it_problem = ["problema", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
 
                 if any(word in normalized_prompt for word in project_triggers):
                     active_system_prompt = PROMPT_PROJECT
+                    st.session_state.modo_ativo = "project"
                 elif "entrevista" in normalized_prompt or "interview" in normalized_prompt:
                     active_system_prompt = PROMPT_INTERVIEW
-                elif any(word in normalized_prompt for word in recruiter_triggers):
+                    st.session_state.modo_ativo = "interview"
+                elif any(word in normalized_prompt for word in recruiter_triggers_strong):
                     active_system_prompt = PROMPT_RECRUITER
-                else:
+                    st.session_state.modo_ativo = "recruiter"
+                elif looks_like_route_request(prompt):
                     active_system_prompt = PROMPT_GUIMABUS
+                    st.session_state.modo_ativo = "guimabus"
+                elif any(word in normalized_prompt for word in recruiter_triggers_it_problem):
+                    active_system_prompt = PROMPT_RECRUITER
+                    st.session_state.modo_ativo = "recruiter"
+                else:
+                    # No clear signal in this specific message — instead of silently
+                    # resetting to Guimabus (which used to break the thread of an
+                    # ongoing Recruiter/Project conversation on any generic follow-up
+                    # like "e no fim de semana?" or "podes explicar melhor?"), keep
+                    # whatever mode the conversation was already in.
+                    _mapa_modos = {"project": PROMPT_PROJECT, "interview": PROMPT_INTERVIEW, "recruiter": PROMPT_RECRUITER, "guimabus": PROMPT_GUIMABUS}
+                    active_system_prompt = _mapa_modos.get(st.session_state.get("modo_ativo", "guimabus"), PROMPT_GUIMABUS)
 
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
@@ -2471,7 +2655,18 @@ if prompt:
 
                 for model_name in candidate_models:
                     try:
-                        model = genai.GenerativeModel(model_name=model_name, system_instruction=active_system_prompt, tools=agent_tools)
+                        model = genai.GenerativeModel(
+                            model_name=model_name,
+                            system_instruction=active_system_prompt,
+                            tools=agent_tools,
+                            # A low, fixed temperature makes tool-calling decisions far
+                            # more consistent: with the provider's default sampling, the
+                            # exact same question could sometimes trigger a real tool
+                            # call and sometimes get an "I don't know" answer purely by
+                            # chance. Factual/route questions should behave the same way
+                            # every time they're asked.
+                            generation_config={"temperature": 0.2},
+                        )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         history_len_before = len(chat.history)
                         response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
@@ -2506,7 +2701,24 @@ if prompt:
                 # call any real tool, it answered "off the top of its head" — exactly
                 # what happens when it invents line numbers. We force a new attempt
                 # in which it is required to consult a real tool before answering.
-                if active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt) and chat is not None:
+                #
+                # Important exception: if the model already answered with honest uncertainty
+                # (e.g. "I could not find...", "not confirmed"), it did NOT hallucinate — it
+                # correctly admitted it doesn't know. Forcing a retry in that case only adds
+                # latency (a second full API call, up to +25s) and risks the model being
+                # forced to call a tool with made-up arguments just to satisfy the rule,
+                # producing a worse answer than the honest one it already gave. So we skip
+                # the retry whenever the response already shows that honesty.
+                _FRASES_INCERTEZA_HONESTA = [
+                    "não encontrei", "nao encontrei", "não consegui", "nao consegui",
+                    "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
+                    "não tenho informação", "peço desculpa", "i'm sorry", "i am sorry",
+                    "não disponho", "não existem linhas", "sem transbordo", "sem informação",
+                ]
+                resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
+
+                if (active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt)
+                        and chat is not None and not resposta_ja_e_honesta):
                     if not _called_real_tool(chat, history_len_before):
                         logging.error(f"Possible hallucination detected (response without a tool call) for the prompt: {prompt}")
                         try:
