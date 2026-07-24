@@ -613,7 +613,7 @@ def extract_future_date(texto):
     agora = datetime.now()
     ano_atual = agora.year
     datas_encontradas = []
-
+ 
     for m in re.finditer(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b', texto):
         dia, mes = int(m.group(1)), int(m.group(2))
         ano = int(m.group(3)) if m.group(3) else ano_atual
@@ -622,7 +622,7 @@ def extract_future_date(texto):
             datas_encontradas.append(datetime(ano, mes, dia))
         except ValueError:
             pass
-
+ 
     for m in re.finditer(r'\b(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(\d{4}))?\b', texto.lower()):
         dia = int(m.group(1))
         mes_str = m.group(2)
@@ -632,20 +632,21 @@ def extract_future_date(texto):
                 datas_encontradas.append(datetime(ano, PT_MONTHS[mes_str], dia))
             except ValueError:
                 pass
-
+ 
     if datas_encontradas:
         return max(datas_encontradas)
     return None
-
+ 
 @st.cache_data(ttl=3600)
 def get_facebook_notices():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    # 1. NOVO URL DO FETCHRSS
+    url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.rss"
     avisos_ativos = []
-    todos_avisos = [] # 🛡️ LISTA DE SEGURANÇA (FALLBACK)
+    todos_avisos = [] 
     
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
-
+ 
     try:
         response = requests.get(url_rss, timeout=10)
         soup = BeautifulSoup(response.content, "xml") 
@@ -655,18 +656,27 @@ def get_facebook_notices():
             title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
-            enclosure = item.find("enclosure")
-            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
-            if not img_url and desc:
-                img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match: img_url = img_match.group(1)
+            # 2. CORREÇÃO DO TEXTO: Forçar tudo a uma única linha sem quebras manhosas
+            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            clean_text = re.sub(r'\s+', ' ', clean_text) # Transforma \n e múltiplos espaços num só espaço
+            title = re.sub(r'\s+', ' ', title).strip()
+            
+            # 3. CORREÇÃO DA IMAGEM: Procurar em media:content ou na tag <img> dentro da descrição
+            img_url = ""
+            media_content = item.find("media:content")
+            if media_content and media_content.get("url"):
+                img_url = media_content.get("url")
+            elif item.find("enclosure") and item.find("enclosure").get("url"):
+                img_url = item.find("enclosure").get("url")
+            else:
+                img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc, re.IGNORECASE)
+                if img_match: 
+                    img_url = img_match.group(1)
             
             texto_minusculas = clean_text.lower() + " " + title.lower()
             texto_final = clean_text if len(clean_text) > 5 else title
             
-            # We always keep a copy for the fallback plan
             aviso_temp = {
                 "texto": texto_final, 
                 "imagem": img_url, 
@@ -676,25 +686,18 @@ def get_facebook_notices():
             
             if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
                 continue
-
+ 
             data_fim_texto = extract_future_date(texto_minusculas)
-            
             palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
-
+ 
             if data_fim_texto:
                 if data_fim_texto < agora_local:
                     continue
-                # 🟢 TIER 1 — Roadworks/events with a confirmed end date or future date.
-                # Stays active as long as the date hasn't passed, and ALWAYS has
-                # priority over any generic post (base 1000).
                 dias_ate_fim = (data_fim_texto - agora_local).days
-                # The closer to the end/event, the more urgent/relevant it is.
                 prioridade_calculada = 1000 - max(dias_ate_fim, 0)
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 50
             else:
-                # 🟡 TIER 2 — Generic posts with no explicit date.
-                # Only stay active for ~1 week (used to be 15 days).
                 LIMITE_DIAS_GENERICO = 7
                 pub_date_node = item.find("pubDate")
                 dias_passados = 0
@@ -704,12 +707,12 @@ def get_facebook_notices():
                         dias_passados = (agora_utc - data_post).days
                     except Exception:
                         pass
-
+ 
                 if dias_passados > LIMITE_DIAS_GENERICO:
                     continue
-
+ 
                 prioridade_calculada = LIMITE_DIAS_GENERICO - dias_passados
-
+ 
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 20
             
@@ -718,20 +721,16 @@ def get_facebook_notices():
             
         avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
         
-        # 🛑 THE TRICK IS HERE: if the filter is too aggressive and throws everything away,
-        # we guarantee we still show at least the last 2 posts from the page!
         if not avisos_ativos and todos_avisos:
             return todos_avisos[:2]
         
-        # Shows ALL active notices (roadworks/events with a future date + posts
-        # from the last week that aren't resolved yet), ordered by priority.
         return avisos_ativos
             
     except Exception as e:
         logging.error(f"Native RSS error: {e}")
         
     return avisos_ativos
-
+ 
 def render_notices_footer(anuncios_ativos, ui):
     if not anuncios_ativos: return
     
@@ -774,14 +773,14 @@ def render_notices_footer(anuncios_ativos, ui):
             </div>
         </div>
     </div>
-
+ 
     <script>
         const anuncios = {dados_js};
         let indice = 0;
         const txt = document.getElementById('ticker-text');
         const img = document.getElementById('ticker-img');
         const container = document.querySelector('.text-container');
-
+ 
         async function correrAviso() {{
             const a = anuncios[indice];
             
