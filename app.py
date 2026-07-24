@@ -424,6 +424,30 @@ def looks_like_route_request(texto: str) -> bool:
     t = " " + normalize_search_name(texto).replace("_", " ") + " "
     return any(normalize_search_name(p).replace("_", " ") in t for p in _ROUTE_KEYWORDS_PT)
 
+# Separate, stricter category: questions specifically about disruptions/notices
+# (roadworks, strikes, diversions, special services). These must be answered
+# using 'query_transit_notices_tool' specifically — NOT just any tool from
+# ROUTE_TOOL_NAMES. Real-time fleet data (get_guimabus_data) reports vehicle
+# delays, not roadworks/diversions/special-service announcements, so a model
+# that calls get_guimabus_data instead would technically satisfy the generic
+# route-tool check while still answering a notices question from thin air.
+_NOTICE_KEYWORDS_PT = [
+    "obra", "obras", "greve", "desvio", "desvios", "trajeto alternativo",
+    "trajecto alternativo", "corte", "condicionamento", "interrupção", "interrupcao",
+    "aviso", "avisos", "avaria", "avarias", "serviço especial", "servico especial",
+    "reforço", "reforco", "evento", "festival", "concerto"
+]
+
+def looks_like_notice_request(texto: str) -> bool:
+    """Heuristic: detects whether the user is asking about disruptions, roadworks,
+    strikes, diversions or special/event services — questions that can ONLY be
+    honestly answered via 'query_transit_notices_tool', never from generic
+    knowledge or from fleet/delay data."""
+    if not texto:
+        return False
+    t = " " + normalize_search_name(texto).replace("_", " ") + " "
+    return any(normalize_search_name(p).replace("_", " ") in t for p in _NOTICE_KEYWORDS_PT)
+
 @st.cache_data
 def load_static_map():
     try:
@@ -2759,15 +2783,17 @@ if prompt:
                         st.error(ui["model_error"])
                     st.stop()
 
-                def _called_real_tool(chat_obj, desde_indice):
+                def _called_real_tool(chat_obj, desde_indice, nomes_permitidos=None):
                     """Checks whether, since 'since_index', the chat history contains a
-                    real call to one of the route/schedule tools (instead of the model
-                    having answered purely from its own generic knowledge)."""
+                    real call to one of 'nomes_permitidos' (defaults to ROUTE_TOOL_NAMES),
+                    instead of the model having answered purely from its own generic
+                    knowledge — or, worse, from the WRONG tool for the question asked."""
+                    nomes = nomes_permitidos if nomes_permitidos is not None else ROUTE_TOOL_NAMES
                     try:
                         for entrada in chat_obj.history[desde_indice:]:
                             for part in getattr(entrada, "parts", []):
                                 fc = getattr(part, "function_call", None)
-                                if fc and getattr(fc, "name", None) in ROUTE_TOOL_NAMES:
+                                if fc and getattr(fc, "name", None) in nomes:
                                     return True
                     except Exception:
                         pass
@@ -2824,6 +2850,42 @@ if prompt:
                                 logging.error("Safety net: the forced attempt also did not call a real tool.")
                         except Exception as e:
                             logging.error(f"Anti-hallucination safety net failure: {e}")
+
+                # 🛡️ STRICT NOTICES SAFETY NET (separate from the general one above)
+                # Disruption/roadworks/strike/special-service questions can ONLY be
+                # honestly answered via 'query_transit_notices_tool'. Real-time fleet
+                # data (get_guimabus_data, which reports vehicle delays) or schedule
+                # caches do NOT contain this information — so if the general safety
+                # net above saw ANY route tool called (e.g. get_guimabus_data) it would
+                # wrongly consider the question "answered from real data", even though
+                # it's the wrong data for a notices question. This check requires the
+                # specific tool. It is intentionally independent of the "honest
+                # uncertainty" phrase check too: a reply that opens with "peço
+                # desculpa..." but then confidently claims "não existem obras" is not
+                # honest uncertainty, it's an unverified claim dressed as one.
+                if active_system_prompt == PROMPT_GUIMABUS and looks_like_notice_request(prompt) and chat is not None:
+                    if not _called_real_tool(chat, history_len_before, ["query_transit_notices_tool"]):
+                        logging.error(f"Notices question answered without calling query_transit_notices_tool: {prompt}")
+                        try:
+                            forced_notice_tool_config = {
+                                "function_calling_config": {
+                                    "mode": "ANY",
+                                    "allowed_function_names": ["query_transit_notices_tool"],
+                                }
+                            }
+                            forced_notice_response = chat.send_message(
+                                "A tua resposta anterior sobre obras/greves/desvios/serviços especiais NÃO "
+                                "consultou a ferramenta 'query_transit_notices_tool'. És OBRIGADO a chamar "
+                                "essa ferramenta agora e a basear a resposta apenas no que ela devolver. "
+                                "NUNCA afirmes que 'não existem avisos/obras' sem teres consultado essa "
+                                "ferramenta — se ela não devolver nada relevante, diz honestamente que não "
+                                "tens essa informação disponível de momento, em vez de confirmar normalidade.",
+                                tool_config=forced_notice_tool_config,
+                                request_options={"timeout": 25}
+                            )
+                            response = forced_notice_response
+                        except Exception as e:
+                            logging.error(f"Notices safety net failure: {e}")
 
                 full_response = response.text
 
