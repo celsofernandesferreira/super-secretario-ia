@@ -16,7 +16,6 @@ import folium
 import email.utils
 import math
 import hmac
-from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
@@ -24,18 +23,18 @@ from bs4 import BeautifulSoup
 # --- LANGUAGE DICTIONARY ---
 UI_TEXT = {
     "PT": {
-        "title": "🚌 Agente Sobre Rodas😎",
-        "toast_score": "💾 Recorde de {name} ({score} pessoa(s)) guardado com sucesso!",
+        "title": "💼 O Teu Super Secretário de Produtividade",
+        "toast_score": "💾 Recorde de {name} ({score} pas.) guardado com sucesso!",
         "sidebar_panel": "⚙️ Painel do Agente",
         "clear_history": "🗑️ Limpar O Meu Histórico",
         "entertainment": "🕹️ Entretenimento",
-        "close_game": "Fechar Crazy Bus Driver X",
-        "open_game": "Abrir Crazy Bus Driver Mini-Game 👾",
+        "close_game": "Fechar Jogo X",
+        "open_game": "Abrir Mini-Game 👾",
         "transport_tickets": "🎫 Títulos de Transporte",
         "close_ticket": "Fechar Pedido de Passe X",
         "request_ticket": "Pedir Passe 🎫",
         "developer": "👨‍💻 Desenvolvedor",
-        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
+        "dev_desc": "**Celso Ferreira**\n*À procura de emprego na área de IT / Informática.*\n📞 Contacto: **917 486 683**",
         "status": "Estado: **Online**\nModelo Nativo: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Área de Administrador",
         "login_admin": "Entrar como administrador",
@@ -56,15 +55,14 @@ UI_TEXT = {
         "chat_input": "Como posso ajudar hoje?",
         "speak": "Falar",
         "download_txt": "📥 Descarregar Resposta (.txt)",
-        "initial_msg": "Olá! Sou o **Agente de Produtividade de Elite do Celso**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Guimabus:** Monitorização da frota, horários e trajetos da Guimabus e informações .\n2. **Secretario do Celso:** Informação sobre o Perfil do Celso e percurso profissional para recrutadores — dá-me um problema de IT para eu mostrar como o Celso Resolveria.\n3. **Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
-        "game_title": "🚌 Crazy Bus Driver 🚌",
+        "initial_msg": "Olá, Celso! Sou o teu **Agente de Produtividade de Elite**.\n\nEstou pronto para te apoiar em três frentes:\n1. **Modo Guimabus:** Monitorização da frota, horários e trajetos da Guimabus.\n2. **Modo Recrutador:** Informação sobre o teu currículo e percurso profissional para recrutadores — diz-me *'Quero treinar para uma entrevista'* para simularmos testes técnicos em inglês, ou dá-me um problema de IT para eu mostrar como tu o resolverias.\n3. **Modo Projeto:** Pergunta-me sobre este projeto — como foi construído, que tecnologias usa e como funciona.\n\nComo posso ajudar hoje?",
+        "game_title": "🚌 Guimabus Arcade: Cabine de Condução 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Gravar 💾",
         "game_name": "Teu Nome",
         "game_pax": "Passageiros",
-        "game_unit": "passageiros(s)",
         "game_top10": "🏆 TOP 10 MOTORISTAS",
         "game_gameover": "FIM DA LINHA",
         "game_transported": "Transportaste",
@@ -72,7 +70,7 @@ UI_TEXT = {
         "game_alert": "Por favor introduz o teu nome!",
         "ad_disclaimer": "⚠️ Aviso importante: Esta é uma ferramenta de apoio e verificação preliminar. Não é um canal oficial de submissão à Guimabus.",
         "ad_notice": "Aviso",
-        "ticket_title": "🎫 Titulos de Transporte — Guimabus",
+        "ticket_title": "🎫 Pedido de Passe — Guimabus",
         "ticket_warning": "⚠️ **Aviso importante:** este formulário é uma ferramenta de apoio e verificação preliminar. **Não é um canal oficial de submissão.**",
         "ticket_updated": "📅 Dados atualizados em:",
         "ticket_wizard": "🧭 Não sabes qual tipologia é a tua? Responde a estas perguntas",
@@ -113,18 +111,18 @@ UI_TEXT = {
         "updating_system": "**SISTEMA EM ATUALIZAÇÃO:** A descarregar novos horários e pacotes de dados. O agente está temporariamente bloqueado para evitar falhas. Por favor, aguarda (pode demorar 1-2 minutos)..."
     },
     "EN": {
-        "title": "🚌 Agent on Wheels😎",
-        "toast_score": "💾 Score for {name} ({score} person(s)) saved successfully!",
+        "title": "💼 Your Super Productivity Secretary",
+        "toast_score": "💾 Score for {name} ({score} pax) saved successfully!",
         "sidebar_panel": "⚙️ Agent Panel",
         "clear_history": "🗑️ Clear My History",
         "entertainment": "🕹️ Entertainment",
-        "close_game": "Close Crazy Bus Driver X",
-        "open_game": "Open Crazy Bus Driver Mini-Game 👾",
+        "close_game": "Close Game X",
+        "open_game": "Open Mini-Game 👾",
         "transport_tickets": "🎫 Transport Tickets",
         "close_ticket": "Close Ticket Request X",
         "request_ticket": "Request Ticket 🎫",
         "developer": "👨‍💻 Developer",
-        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n🔗 [LinkedIn](https://www.linkedin.com/in/celso-ferreira-ab0830134/) | [GitHub](https://github.com/celsofernandesferreira)",
+        "dev_desc": "**Celso Ferreira**\n*Looking for IT / Computer Science roles.*\n📞 Contact: **917 486 683**",
         "status": "Status: **Online**\nNative Model: `Gemini-3.5-Flash`",
         "admin_area": "🔒 Administrator Area",
         "login_admin": "Login as Administrator",
@@ -145,15 +143,14 @@ UI_TEXT = {
         "chat_input": "How can I help you today?",
         "speak": "Speak",
         "download_txt": "📥 Download Response (.txt)",
-        "initial_msg": "Hello! I am **Celso's Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus:** Fleet monitoring, schedules and routes for Guimabus, plus general information.\n2. **Celso's Assistant:** Information about Celso's profile and career for recruiters — give me an IT problem and I'll show you how Celso would solve it.\n3. **Project:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
-        "game_title": "🚌 Crazy Bus Driver 🚌",
+        "initial_msg": "Hello, Celso! I am your **Elite Productivity Agent**.\n\nI am ready to support you on three fronts:\n1. **Guimabus Mode:** Fleet monitoring, schedules and route planning for Guimabus.\n2. **Recruiter Mode:** Information about your CV and professional background for recruiters — tell me *'I want to train for an interview'* to simulate technical tests in English, or give me an IT problem so I can show how you would solve it.\n3. **Project Mode:** Ask me about this project — how it was built, what technologies it uses and how it works.\n\nHow can I help you today?",
+        "game_title": "🚌 Guimabus Arcade: Driving Cabin 🚌",
         "game_play": "Play ▶",
         "game_pause": "Pause ⏸",
         "game_reset": "Reset 🔄",
         "game_save": "Save 💾",
         "game_name": "Your Name",
         "game_pax": "Passengers",
-        "game_unit": "passenger(s)",
         "game_top10": "🏆 TOP 10 DRIVERS",
         "game_gameover": "END OF THE LINE",
         "game_transported": "You transported",
@@ -298,50 +295,17 @@ def initialize_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
 
-    # Normaliza o schema de nos_geograficos antes de tentar limpar duplicados.
-    # Uma versão antiga do .db (persistida entre deploys no Streamlit Cloud) pode
-    # ter esta tabela sem a coluna "id" (ou outras), e nesse caso o DELETE/CREATE
-    # UNIQUE INDEX abaixo rebentava com "no such column: id". Isto explica por que
-    # às vezes o deploy funcionava (schema já novo/vazio) e às vezes não (schema
-    # antigo persistido).
-    try:
-        colunas_existentes = {row[1] for row in cursor.execute("PRAGMA table_info(nos_geograficos)").fetchall()}
-        colunas_necessarias = {"id", "tipo", "nome"}
-
-        if colunas_necessarias.issubset(colunas_existentes):
-            # Remove duplicados que possam já existir (seguro para uma BD pré-existente
-            # que foi populada antes deste UNIQUE constraint existir), mantendo a linha
-            # mais antiga de cada par (tipo, nome), e só depois impõe unicidade real
-            # para que o INSERT OR IGNORE passe mesmo a prevenir duplicados.
-            cursor.execute("""
-                DELETE FROM nos_geograficos
-                WHERE id NOT IN (
-                    SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
-                )
-            """)
-            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
-        else:
-            # Schema antigo/incompatível: recria a tabela do zero em vez de tentar
-            # corrigi-la incrementalmente. Os dados de POIs podem ser reimportados
-            # depois via "import_guimaraes_pois" / discover_parish.
-            logging.warning(f"Schema antigo detetado em nos_geograficos (colunas: {colunas_existentes}). A recriar a tabela.")
-            cursor.execute("DROP TABLE nos_geograficos")
-            cursor.execute("""
-                CREATE TABLE nos_geograficos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tipo TEXT,
-                    nome TEXT,
-                    freguesia TEXT,
-                    latitude REAL,
-                    longitude REAL,
-                    linhas_associadas TEXT,
-                    ultima_atualizacao TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
-            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
-    except Exception as e:
-        logging.error(f"Erro ao normalizar o schema de nos_geograficos: {e}")
+    # Remove any duplicate rows that may already exist (safe for a pre-existing database
+    # that was populated before this UNIQUE constraint existed), keeping the earliest row
+    # of each (tipo, nome) pair, then enforce real uniqueness going forward so that
+    # INSERT OR IGNORE actually prevents duplicates instead of silently doing nothing.
+    cursor.execute("""
+        DELETE FROM nos_geograficos
+        WHERE id NOT IN (
+            SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
+        )
+    """)
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
 
     conn.commit()
     conn.close()
@@ -460,18 +424,12 @@ def _search_local_map(local_nome: str):
         if pontuacao > melhor_pontuacao:
             melhor_pontuacao, melhor_match = pontuacao, dados
 
-    # Stricter matching than before: for short queries (<=2 words) we now require
-    # EVERY word to match, not just half. A 50% threshold meant a 2-word query like
-    # "cafe areal" could match an entry for just "areal" (a neighbourhood/zone) and be
-    # reported back with full confidence as if it were the specific business "Café
-    # Areal" — a real source of invented/incorrect locations. Longer queries keep a
-    # high (but not perfect) bar, since extra descriptive words are more tolerable.
-    limite_minimo = 1.0 if len(tokens_pesquisa) <= 2 else 0.75
-    if melhor_match and melhor_pontuacao >= limite_minimo:
+    # We only accept it if at least half of the searched words match,
+    # to avoid returning false positives.
+    if melhor_match and melhor_pontuacao >= 0.5:
         return melhor_match
     return None
 
-@st.cache_data(ttl=86400)
 def _geocode_nominatim_place(local_nome: str):
     """Geocodes a place name in Guimarães live via OpenStreetMap (Nominatim),
     used as a fallback when the place is not in the static map (geo_guimaraes.json)."""
@@ -479,31 +437,18 @@ def _geocode_nominatim_place(local_nome: str):
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 5},
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
             headers=headers, timeout=8
         )
         resp.raise_for_status()
         resultados = resp.json()
-        if not resultados:
-            return None
-
-        # Nominatim's free-text search almost always returns *something*, even when no
-        # real match exists for the specific place asked about — it silently drops the
-        # words it can't match and geocodes whatever remains (e.g. a street or a
-        # neighbourhood). Blindly trusting result[0] was a real source of confidently
-        # reported, incorrect locations. We now only accept a candidate whose own name
-        # actually shares a meaningful word with the query.
-        tokens_pesquisa = set(t for t in normalize_search_name(local_nome).split("_") if t)
-        for r in resultados:
-            nome_resultado = r.get("display_name", "").split(",")[0]
-            tokens_resultado = set(t for t in normalize_search_name(nome_resultado).split("_") if t)
-            if tokens_pesquisa & tokens_resultado:
-                return {
-                    "nome_real": nome_resultado or local_nome,
-                    "lat": float(r["lat"]),
-                    "lon": float(r["lon"]),
-                }
-        return None
+        if resultados:
+            r = resultados[0]
+            return {
+                "nome_real": r.get("display_name", local_nome).split(",")[0],
+                "lat": float(r["lat"]),
+                "lon": float(r["lon"]),
+            }
     except Exception as e:
         logging.error(f"Error geocoding via Nominatim for '{local_nome}': {e}")
     return None
@@ -645,78 +590,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-def _load_dotenv_file(file_path: str | Path | None = None):
-    """Load simple KEY=VALUE pairs from a dotenv-style file without adding a new dependency."""
-    candidates = []
-    if file_path:
-        candidates.append(Path(file_path))
-
-    base_dir = Path(__file__).resolve().parent
-    candidates.extend([
-        base_dir / "Secrets.env",
-        base_dir / ".env",
-        base_dir / "secrets.env",
-        Path.cwd() / "Secrets.env",
-        Path.cwd() / ".env",
-        Path.cwd() / "secrets.env",
-    ])
-
-    seen = set()
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve(strict=False)
-        except Exception:
-            resolved = candidate
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if not resolved.exists() or not resolved.is_file():
-            continue
-        try:
-            values = {}
-            for raw_line in resolved.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                values[key.strip()] = value.strip().strip("\"'")
-            return values
-        except Exception as exc:
-            logging.warning(f"Unable to read secrets file {resolved}: {exc}")
-    return {}
-
-
-DOTENV_VALUES = _load_dotenv_file()
-
-
-def _get_secret(key: str, default=None):
-    """Reads a configuration secret, preferring environment variables, then
-    Streamlit secrets, and finally a local dotenv-style file so the same app
-    behaves correctly in Docker and in local development."""
-    valor = os.getenv(key)
-    if valor:
-        return valor
-
-    try:
-        if st.secrets.get(key, None):
-            return st.secrets.get(key, default)
-    except Exception:
-        pass
-
-    if key in DOTENV_VALUES:
-        return DOTENV_VALUES[key]
-
-    return default
-
 # 5. Gemini API initialization
 try:
-    chave_api = _get_secret("GOOGLE_API_KEY")
-    if not chave_api:
-        raise ValueError("GOOGLE_API_KEY not set (checked environment variable and st.secrets).")
-    genai.configure(api_key=chave_api)
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except Exception:
-    st.error("Error: API key missing from environment variables, Streamlit secrets, or Secrets.env.")
-    logging.error("Failed to initialize the application: API key missing from environment/secrets files.")
+    st.error("Error: API key missing from Streamlit Secrets.")
+    logging.error("Failed to initialize the application: API key missing from Secrets.")
     st.stop()
 
 
@@ -758,10 +637,9 @@ def extract_future_date(texto):
 
 @st.cache_data(ttl=3600)
 def get_facebook_notices():
-    # 1. NOVO URL DO FETCHRSS
-    url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.rss"
+    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
     avisos_ativos = []
-    todos_avisos = [] 
+    todos_avisos = [] # 🛡️ LISTA DE SEGURANÇA (FALLBACK)
     
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
@@ -775,27 +653,18 @@ def get_facebook_notices():
             title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            
-            # 2. CORREÇÃO DO TEXTO: Forçar tudo a uma única linha sem quebras manhosas
             clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
-            clean_text = re.sub(r'\s+', ' ', clean_text) # Transforma \n e múltiplos espaços num só espaço
-            title = re.sub(r'\s+', ' ', title).strip()
             
-            # 3. CORREÇÃO DA IMAGEM: Procurar em media:content ou na tag <img> dentro da descrição
-            img_url = ""
-            media_content = item.find("media:content")
-            if media_content and media_content.get("url"):
-                img_url = media_content.get("url")
-            elif item.find("enclosure") and item.find("enclosure").get("url"):
-                img_url = item.find("enclosure").get("url")
-            else:
-                img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc, re.IGNORECASE)
-                if img_match: 
-                    img_url = img_match.group(1)
+            enclosure = item.find("enclosure")
+            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
+            if not img_url and desc:
+                img_match = re.search(r'src="([^"]+)"', desc)
+                if img_match: img_url = img_match.group(1)
             
             texto_minusculas = clean_text.lower() + " " + title.lower()
             texto_final = clean_text if len(clean_text) > 5 else title
             
+            # We always keep a copy for the fallback plan
             aviso_temp = {
                 "texto": texto_final, 
                 "imagem": img_url, 
@@ -807,16 +676,23 @@ def get_facebook_notices():
                 continue
 
             data_fim_texto = extract_future_date(texto_minusculas)
+            
             palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
 
             if data_fim_texto:
                 if data_fim_texto < agora_local:
                     continue
+                # 🟢 TIER 1 — Roadworks/events with a confirmed end date or future date.
+                # Stays active as long as the date hasn't passed, and ALWAYS has
+                # priority over any generic post (base 1000).
                 dias_ate_fim = (data_fim_texto - agora_local).days
+                # The closer to the end/event, the more urgent/relevant it is.
                 prioridade_calculada = 1000 - max(dias_ate_fim, 0)
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 50
             else:
+                # 🟡 TIER 2 — Generic posts with no explicit date.
+                # Only stay active for ~1 week (used to be 15 days).
                 LIMITE_DIAS_GENERICO = 7
                 pub_date_node = item.find("pubDate")
                 dias_passados = 0
@@ -840,9 +716,13 @@ def get_facebook_notices():
             
         avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
         
+        # 🛑 THE TRICK IS HERE: if the filter is too aggressive and throws everything away,
+        # we guarantee we still show at least the last 2 posts from the page!
         if not avisos_ativos and todos_avisos:
             return todos_avisos[:2]
         
+        # Shows ALL active notices (roadworks/events with a future date + posts
+        # from the last week that aren't resolved yet), ordered by priority.
         return avisos_ativos
             
     except Exception as e:
@@ -1624,13 +1504,7 @@ def _extract_stops_from_text(texto: str):
         m = padrao.match(linha_texto)
         if m:
             nome = m.group("nome").strip(" -\t")
-            horarios_str = m.group("horarios")
-            # Dashes ("-") are used in the official PDFs as a placeholder for "no
-            # service" and were previously accepted on their own as valid "times", so a
-            # row made entirely of dashes (or a coincidental legend/note line) could be
-            # wrongly registered as a real stop. Require at least one genuine HH:MM time
-            # in the row before treating it as an actual stop with a schedule.
-            if len(nome) >= 3 and re.search(r'\d{1,2}:\d{2}', horarios_str):
+            if len(nome) >= 3:
                 paragens.add(nome)
     return paragens
 
@@ -1653,20 +1527,6 @@ def build_stop_index():
                     (linha_id, paragem)
                 )
                 total_paragens += 1
-        conn.commit()
-
-        # Sanity cleanup: a real bus line always serves several stops. If a line ended
-        # up associated with only a single stop, that's almost certainly leftover noise
-        # from PDF text extraction (e.g. a stray legend/note line), not a genuine route
-        # — and offering it as a transfer option would be misleading. Drop those.
-        cursor.execute("""
-            DELETE FROM cache_paragens_linha
-            WHERE linha IN (
-                SELECT linha FROM cache_paragens_linha
-                GROUP BY linha
-                HAVING COUNT(DISTINCT paragem) < 2
-            )
-        """)
         conn.commit()
         conn.close()
         return f"Índice de paragens reconstruído: {total_paragens} associações linha-paragem."
@@ -1794,10 +1654,6 @@ def _e_paragem_hub(nome_paragem: str) -> bool:
     n = _normalize_stop_name(nome_paragem)
     return any(kw in n for kw in _HUB_KEYWORDS_NORM)
 
-def _e_linha_noturna(linha_id: str) -> bool:
-    # Regra 8 do prompt: linhas cujo identificador começa por "N" são noturnas.
-    return str(linha_id).strip().upper().startswith("N")
-
 def plan_trip_with_transfer(origem: str, destino: str):
     if not origem or not destino: return "É necessário indicar a paragem de origem e a paragem de destino."
     origem_norm, destino_norm = _normalize_stop_name(origem), _normalize_stop_name(destino)
@@ -1817,22 +1673,12 @@ def plan_trip_with_transfer(origem: str, destino: str):
     paragens_origem_encontradas, paragens_destino_encontradas = set(), set()
     mapa_linha_paragens = {}
 
-    # "Guimarães" sozinho não é o nome de nenhuma paragem real — significa
-    # genericamente qualquer uma das paragens centrais (regra 12 do prompt).
-    # Em vez de depender do modelo se lembrar de substituir isto manualmente,
-    # tratamos aqui: se a origem/destino normalizar para "guimaraes", uma
-    # paragem conta como correspondência se for uma das paragens centrais.
-    origem_e_guimaraes_generico = origem_norm == "guimaraes"
-    destino_e_guimaraes_generico = destino_norm == "guimaraes"
-
     for linha_id, paragem in todas:
         mapa_linha_paragens.setdefault(linha_id, set()).add(paragem)
         paragem_norm = _normalize_stop_name(paragem)
-        match_origem = _e_paragem_hub(paragem) if origem_e_guimaraes_generico else re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm)
-        match_destino = _e_paragem_hub(paragem) if destino_e_guimaraes_generico else re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm)
-        if match_origem:
+        if re.search(r'\b' + re.escape(origem_norm) + r'\b', paragem_norm):
             linhas_origem.add(linha_id); paragens_origem_encontradas.add(paragem)
-        if match_destino:
+        if re.search(r'\b' + re.escape(destino_norm) + r'\b', paragem_norm):
             linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem)
 
     aviso_o, aviso_d = False, False
@@ -1869,16 +1715,8 @@ def plan_trip_with_transfer(origem: str, destino: str):
 
     linhas_diretas = linhas_origem & linhas_destino
     if linhas_diretas:
-        # Regra 8 do prompt: dar prioridade às linhas diurnas — as noturnas (prefixo "N")
-        # só aparecem primeiro se forem mesmo a única opção disponível.
-        diurnas = sorted(l for l in linhas_diretas if not _e_linha_noturna(l))
-        noturnas = sorted(l for l in linhas_diretas if _e_linha_noturna(l))
-        linhas_ordenadas = diurnas + noturnas
-
         resumo = f"Encontrei linha(s) DIRETA(S) entre '{origem}' e '{destino}':\n"
-        for l in linhas_ordenadas: resumo += f"- Linha {l}\n"
-        if not diurnas and noturnas:
-            resumo += "\n🌙 Nota: só encontrei linha(s) noturna(s) para este trajeto — não há alternativa diurna direta."
+        for l in linhas_diretas: resumo += f"- Linha {l}\n"
         return resumo + aviso_precisao
 
     stops_o, stops_d = set(), set()
@@ -2188,7 +2026,7 @@ def render_game(ui):
                     ctx.fillStyle = (k===0) ? '#f1c40f' : ((k===1) ? '#bdc3c7' : ((k===2) ? '#e67e22' : '#ffffff'));
                     if (leaderboard[k]) {{
                         ctx.fillText((k+1) + "º " + leaderboard[k][0], gameWidth + 15, yPos);
-                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' {ui['game_unit']}', canvas.width - 15, yPos); ctx.textAlign = 'start';
+                        ctx.textAlign = 'end'; ctx.fillText(leaderboard[k][1] + ' pas.', canvas.width - 15, yPos); ctx.textAlign = 'start';
                     }} else {{ ctx.fillStyle = '#444'; ctx.fillText((k+1) + 'º ------', gameWidth + 15, yPos); }}
                 }}
                 
@@ -2379,7 +2217,7 @@ with st.sidebar:
             else:
                 password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
                 if st.button(ui["login_btn"], key="admin_login_btn"):
-                    admin_pass_real = _get_secret("ADMIN_PASSWORD")
+                    admin_pass_real = st.secrets.get("ADMIN_PASSWORD", None)
                     # Constant-time comparison (hmac.compare_digest) instead of "==",
                     # to avoid leaking timing information about how much of the password matched.
                     if admin_pass_real and password_input and hmac.compare_digest(password_input, admin_pass_real):
@@ -2564,7 +2402,6 @@ if prompt:
                 12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
-                15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
@@ -2601,38 +2438,16 @@ if prompt:
 
                 normalized_prompt = prompt.lower()
                 project_triggers = ["este projeto", "sobre o projeto", "sobre este projeto", "como foi feito", "como foi construido", "que tecnologias", "stack", "arquitetura", "arquitectura", "this project", "how was this built", "tech stack"]
-                # Split into two tiers: "strong" recruiter signals are unambiguous (CV,
-                # hiring, skills) and should always switch mode. The "IT problem" words
-                # are intentionally generic (so a recruiter can say "give me a problem")
-                # but the same words show up naturally in transport questions (e.g. "há
-                # algum problema na linha 170?"), so they only switch mode when the
-                # message doesn't otherwise look like a route/schedule question.
-                recruiter_triggers_strong = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "helpdesk", "ticket"]
-                recruiter_triggers_it_problem = ["problema", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+                recruiter_triggers = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
 
                 if any(word in normalized_prompt for word in project_triggers):
                     active_system_prompt = PROMPT_PROJECT
-                    st.session_state.modo_ativo = "project"
                 elif "entrevista" in normalized_prompt or "interview" in normalized_prompt:
                     active_system_prompt = PROMPT_INTERVIEW
-                    st.session_state.modo_ativo = "interview"
-                elif any(word in normalized_prompt for word in recruiter_triggers_strong):
+                elif any(word in normalized_prompt for word in recruiter_triggers):
                     active_system_prompt = PROMPT_RECRUITER
-                    st.session_state.modo_ativo = "recruiter"
-                elif looks_like_route_request(prompt):
-                    active_system_prompt = PROMPT_GUIMABUS
-                    st.session_state.modo_ativo = "guimabus"
-                elif any(word in normalized_prompt for word in recruiter_triggers_it_problem):
-                    active_system_prompt = PROMPT_RECRUITER
-                    st.session_state.modo_ativo = "recruiter"
                 else:
-                    # No clear signal in this specific message — instead of silently
-                    # resetting to Guimabus (which used to break the thread of an
-                    # ongoing Recruiter/Project conversation on any generic follow-up
-                    # like "e no fim de semana?" or "podes explicar melhor?"), keep
-                    # whatever mode the conversation was already in.
-                    _mapa_modos = {"project": PROMPT_PROJECT, "interview": PROMPT_INTERVIEW, "recruiter": PROMPT_RECRUITER, "guimabus": PROMPT_GUIMABUS}
-                    active_system_prompt = _mapa_modos.get(st.session_state.get("modo_ativo", "guimabus"), PROMPT_GUIMABUS)
+                    active_system_prompt = PROMPT_GUIMABUS
 
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
@@ -2655,18 +2470,7 @@ if prompt:
 
                 for model_name in candidate_models:
                     try:
-                        model = genai.GenerativeModel(
-                            model_name=model_name,
-                            system_instruction=active_system_prompt,
-                            tools=agent_tools,
-                            # A low, fixed temperature makes tool-calling decisions far
-                            # more consistent: with the provider's default sampling, the
-                            # exact same question could sometimes trigger a real tool
-                            # call and sometimes get an "I don't know" answer purely by
-                            # chance. Factual/route questions should behave the same way
-                            # every time they're asked.
-                            generation_config={"temperature": 0.2},
-                        )
+                        model = genai.GenerativeModel(model_name=model_name, system_instruction=active_system_prompt, tools=agent_tools)
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         history_len_before = len(chat.history)
                         response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
@@ -2701,24 +2505,7 @@ if prompt:
                 # call any real tool, it answered "off the top of its head" — exactly
                 # what happens when it invents line numbers. We force a new attempt
                 # in which it is required to consult a real tool before answering.
-                #
-                # Important exception: if the model already answered with honest uncertainty
-                # (e.g. "I could not find...", "not confirmed"), it did NOT hallucinate — it
-                # correctly admitted it doesn't know. Forcing a retry in that case only adds
-                # latency (a second full API call, up to +25s) and risks the model being
-                # forced to call a tool with made-up arguments just to satisfy the rule,
-                # producing a worse answer than the honest one it already gave. So we skip
-                # the retry whenever the response already shows that honesty.
-                _FRASES_INCERTEZA_HONESTA = [
-                    "não encontrei", "nao encontrei", "não consegui", "nao consegui",
-                    "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
-                    "não tenho informação", "peço desculpa", "i'm sorry", "i am sorry",
-                    "não disponho", "não existem linhas", "sem transbordo", "sem informação",
-                ]
-                resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
-
-                if (active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt)
-                        and chat is not None and not resposta_ja_e_honesta):
+                if active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt) and chat is not None:
                     if not _called_real_tool(chat, history_len_before):
                         logging.error(f"Possible hallucination detected (response without a tool call) for the prompt: {prompt}")
                         try:
