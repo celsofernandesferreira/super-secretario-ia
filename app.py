@@ -212,7 +212,7 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-# 2. DATABASE CONFIGURATION (Persistent SQLite with High Scores and Schedule Cache)
+# 2. DATABASE CONFIGURATION
 def initialize_db():
     conn = sqlite3.connect("agente_memoria.db")
     cursor = conn.cursor()
@@ -311,7 +311,7 @@ def initialize_db():
             """)
             cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
         else:
-            logging.warning(f"Schema antigo detetado em nos_geograficos (colunas: {colunas_existentes}). A recriar a tabela.")
+            logging.warning(f"Schema antigo detetado em nos_geograficos. A recriar a tabela.")
             cursor.execute("DROP TABLE nos_geograficos")
             cursor.execute("""
                 CREATE TABLE nos_geograficos (
@@ -399,8 +399,7 @@ _ROUTE_KEYWORDS_PT = [
 ]
 
 def looks_like_route_request(texto: str) -> bool:
-    if not texto:
-        return False
+    if not texto: return False
     t = " " + normalize_search_name(texto).replace("_", " ") + " "
     return any(normalize_search_name(p).replace("_", " ") in t for p in _ROUTE_KEYWORDS_PT)
 
@@ -424,27 +423,22 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 def _search_local_map(local_nome: str):
-    """Searches for a place in LOCAL_MAP (geo_guimaraes.json) with word-tolerant matching."""
-    if not LOCAL_MAP:
-        return None
+    if not LOCAL_MAP: return None
     chave_pesquisa = normalize_search_name(local_nome)
     tokens_pesquisa = set(t for t in chave_pesquisa.split("_") if t)
-    if not tokens_pesquisa:
-        return None
+    if not tokens_pesquisa: return None
 
     melhor_match, melhor_pontuacao = None, 0.0
     for chave, dados in LOCAL_MAP.items():
         tokens_chave = set(t for t in chave.split("_") if t)
         comuns = tokens_pesquisa & tokens_chave
-        if not comuns:
-            continue
+        if not comuns: continue
         pontuacao = len(comuns) / len(tokens_pesquisa)
         if pontuacao > melhor_pontuacao:
             melhor_pontuacao, melhor_match = pontuacao, dados
 
-    # 🟢 LIMITE REDUZIDO: 50% de correspondência resolve o bloqueio de sítios com nomes curtos/parciais
-    limite_minimo = 0.5 
-    if melhor_match and melhor_pontuacao >= limite_minimo:
+    # 🟢 Limite de 50% de correspondência permite encontrar a Moto Espinha sem ser bloqueado
+    if melhor_match and melhor_pontuacao >= 0.5:
         return melhor_match
     return None
 
@@ -454,13 +448,11 @@ def _geocode_nominatim_place(local_nome: str):
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 5},
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
             headers=headers, timeout=8
         )
         resp.raise_for_status()
         resultados = resp.json()
-        
-        # 🟢 CONFIANÇA DIRETA NO OSM: Retorna logo o primeiro resultado encontrado, evitando falsos negativos 
         if resultados:
             r = resultados[0]
             return {
@@ -507,7 +499,6 @@ def find_nearest_stop(local_nome: str):
         return f"O local '{local_encontrado['nome_real']}'{nota_fonte} fica a {int(menor_distancia)} metros da paragem de autocarro '{paragem_mais_proxima}'. ⚠️ Esta função só indica a paragem mais próxima geograficamente — NÃO confirma que linha passa por ela. Usa 'plan_trip_with_transfer' ou 'query_line_schedule_cache' com o nome exato desta paragem para confirmar a linha real."
     else:
         return "Encontrei o local, mas não existem paragens de autocarro nas imediações."
-
 
 def search_places_by_type(tipo_local: str, limite: int = 20):
     if not LOCAL_MAP:
@@ -560,10 +551,8 @@ query_params = st.query_params
 if "save_nome" in query_params and "save_pontos" in query_params:
     nome_recorde = query_params["save_nome"].upper()
     pontos_recorde = int(float(query_params["save_pontos"]))
-    
     save_score_db(nome_recorde, pontos_recorde)
     st.toast(ui["toast_score"].replace("{name}", nome_recorde).replace("{score}", str(pontos_recorde)))
-    
     st.query_params.clear()
     st.rerun()
 
@@ -639,8 +628,7 @@ DOTENV_VALUES = _load_dotenv_file()
 
 def _get_secret(key: str, default=None):
     valor = os.getenv(key)
-    if valor:
-        return valor
+    if valor: return valor
 
     try:
         if st.secrets.get(key, None):
@@ -662,7 +650,6 @@ except Exception:
     st.error("Error: API key missing from environment variables, Streamlit secrets, or Secrets.env.")
     logging.error("Failed to initialize the application: API key missing from environment/secrets files.")
     st.stop()
-
 
 def extract_future_date(texto):
     PT_MONTHS = {
@@ -878,16 +865,13 @@ def render_notices_footer(anuncios_ativos, ui):
     components.html(html_rodape, height=170)
 
 def _extract_vehicle_list(dados):
-    if isinstance(dados, list):
-        return dados
+    if isinstance(dados, list): return dados
     if isinstance(dados, dict):
         for chave in ("vehicles", "data", "results", "items", "veiculos"):
             valor = dados.get(chave)
-            if isinstance(valor, list):
-                return valor
+            if isinstance(valor, list): return valor
         for valor in dados.values():
-            if isinstance(valor, list):
-                return valor
+            if isinstance(valor, list): return valor
     return []
 
 def _first_value(dicionario, chaves, default=None):
@@ -909,17 +893,14 @@ def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = "https://gmr.elevensystems.pt/api/locations"
     params = {"passengerInfo": "true"}
-    if route_id:
-        params["routeId"] = route_id
+    if route_id: params["routeId"] = route_id
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=8)
         response.raise_for_status()
 
-        try:
-            dados = response.json()
-        except ValueError:
-            return "Não foi possível ler os dados da Guimabus (resposta em formato inesperado)."
+        try: dados = response.json()
+        except ValueError: return "Não foi possível ler os dados da Guimabus (resposta em formato inesperado)."
 
         veiculos = _extract_vehicle_list(dados)
         if not veiculos:
@@ -952,8 +933,7 @@ def get_guimabus_data(route_id: str = None):
 
 @st.cache_data(ttl=30)
 def get_stop_schedule(stop_id: str):
-    if not stop_id:
-        return "É necessário indicar o ID da paragem."
+    if not stop_id: return "É necessário indicar o ID da paragem."
     
     origem_texto = str(stop_id).strip().lower()
     id_numérico = None
@@ -989,8 +969,7 @@ def get_stop_schedule(stop_id: str):
 
     try:
         termos_pesquisa = re.sub(r'\b(estou|na|no|em|paragem|para|ir|as|os|a|o|da|do|linhas|linha|central|guimaraes|guimarães|tenho|quais|quero)\b', '', origem_texto).split()
-        if not termos_pesquisa:
-            termos_pesquisa = [origem_texto]
+        if not termos_pesquisa: termos_pesquisa = [origem_texto]
 
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -1008,16 +987,10 @@ def get_stop_schedule(stop_id: str):
             for row in linhas_encontradas:
                 num_linha = row[0]
                 texto_completo = row[1]
-                
                 linhas_texto = texto_completo.split("\n")
-                trecho_relevante = []
-                for l in linhas_texto:
-                    if any(termo in l.lower() for termo in termos_pesquisa) or "página" in l.lower() or "tabela" in l.lower():
-                        trecho_relevante.append(l)
-                
+                trecho_relevante = [l for l in linhas_texto if any(termo in l.lower() for termo in termos_pesquisa) or "página" in l.lower() or "tabela" in l.lower()]
                 contexto_linha = "\n".join(trecho_relevante[:25])
                 resultado_busca += f"\n--- MAPEAMENTO AUTOMÁTICO DETETADO: LINHA {num_linha} ---\n{contexto_linha}\n"
-            
             return resultado_busca
             
     except Exception as e_db:
@@ -1034,8 +1007,7 @@ def sync_all_guimabus_schedules():
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        links_pdf = {}
-        titulos_linha = {}
+        links_pdf, titulos_linha = {}, {}
         for link in soup.find_all('a', href=True):
             href = link['href']
             if ".pdf" in href and "horario" in href.lower():
@@ -1045,22 +1017,17 @@ def sync_all_guimabus_schedules():
                     if linha_id not in links_pdf:
                         links_pdf[linha_id] = href
                         texto_link = link.get_text(strip=True)
-                        if texto_link:
-                            titulos_linha[linha_id] = texto_link
+                        if texto_link: titulos_linha[linha_id] = texto_link
         
-        if not links_pdf:
-            return "Nenhum ficheiro PDF de horários localizado na página principal."
+        if not links_pdf: return "Nenhum ficheiro PDF de horários localizado na página principal."
         
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
-        
-        linhas_processadas = []
-        linhas_falhadas = []
+        linhas_processadas, linhas_falhadas = [], []
         timestamp_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         for linha_id, url_pdf in links_pdf.items():
-            sucesso = False
-            ultimo_erro = None
+            sucesso, ultimo_erro = False, None
             for tentativa in range(2):
                 try:
                     pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
@@ -1073,12 +1040,10 @@ def sync_all_guimabus_schedules():
                     with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
                         for idx, pagina in enumerate(pdf.pages):
                             texto_pag = pagina.extract_text(layout=True)
-                            if texto_pag:
-                                texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
+                            if texto_pag: texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
 
                     conteudo_final = "\n\n".join(texto_extraido)
-                    if not conteudo_final.strip():
-                        conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
+                    if not conteudo_final.strip(): conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
 
                     cursor.execute("""
                         INSERT OR REPLACE INTO cache_horarios (linha, url, conteudo_txt, ultima_atualizacao)
@@ -1109,8 +1074,7 @@ def sync_all_guimabus_schedules():
         conn.close()
         
         success_msg = f"Sync complete: {len(linhas_processadas)}/{len(links_pdf)} PDFs downloaded and converted into the local DB!"
-        if linhas_falhadas:
-            success_msg += f" Failed: {', '.join(linhas_falhadas)}."
+        if linhas_falhadas: success_msg += f" Failed: {', '.join(linhas_falhadas)}."
         logging.info(success_msg)
         return success_msg
         
@@ -1122,17 +1086,14 @@ def sync_all_guimabus_schedules():
 def query_line_schedule_cache(linha_id: str):
     try:
         entrada = str(linha_id).strip().upper()
-        if not entrada:
-            return "É necessário indicar o número da linha."
+        if not entrada: return "É necessário indicar o número da linha."
 
         candidatos = [entrada]
         if entrada.isdigit():
             sem_zeros = entrada.lstrip('0') or '0'
-            if sem_zeros not in candidatos:
-                candidatos.append(sem_zeros)
+            if sem_zeros not in candidatos: candidatos.append(sem_zeros)
             com_tres_digitos = entrada.zfill(3)
-            if com_tres_digitos not in candidatos:
-                candidatos.append(com_tres_digitos)
+            if com_tres_digitos not in candidatos: candidatos.append(com_tres_digitos)
 
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -1140,8 +1101,7 @@ def query_line_schedule_cache(linha_id: str):
         for candidato in candidatos:
             cursor.execute("SELECT conteudo_txt, url, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (candidato,))
             resultado = cursor.fetchone()
-            if resultado:
-                break
+            if resultado: break
         conn.close()
         
         if resultado:
@@ -1167,8 +1127,7 @@ def get_schedule_cache_age_days():
         cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_horarios")
         resultado = cursor.fetchone()
         conn.close()
-        if not resultado or not resultado[0]:
-            return None
+        if not resultado or not resultado[0]: return None
         ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
         return (datetime.now() - ultima).days
     except Exception as e:
@@ -1182,8 +1141,7 @@ def get_pass_cache_age_days():
         cursor.execute("SELECT MAX(ultima_atualizacao) FROM cache_titulos")
         resultado = cursor.fetchone()
         conn.close()
-        if not resultado or not resultado[0]:
-            return None
+        if not resultado or not resultado[0]: return None
         ultima = datetime.strptime(resultado[0], "%Y-%m-%d %H:%M:%S")
         return (datetime.now() - ultima).days
     except Exception as e:
@@ -1229,8 +1187,7 @@ def import_guimaraes_pois():
             tipo_poi = tags.get('amenity', tags.get('tourism', tags.get('shop', 'poi')))
             
             if nome_poi and 'lat' in elemento and 'lon' in elemento:
-                lat = elemento['lat']
-                lon = elemento['lon']
+                lat, lon = elemento['lat'], elemento['lon']
                 cursor.execute("""
                     INSERT OR IGNORE INTO nos_geograficos (tipo, nome, latitude, longitude, ultima_atualizacao)
                     VALUES (?, ?, ?, ?, ?)
@@ -1239,7 +1196,7 @@ def import_guimaraes_pois():
                 
         conn.commit()
         conn.close()
-        return f"Sucesso: {pois_guardados} Pontos de Interesse (Hospitais, Cafés, etc.) guardados na BD local!"
+        return f"Sucesso: {pois_guardados} Pontos de Interesse guardados na BD local!"
     except Exception as e:
         return f"Erro na extração de POIs: {e}"
 
@@ -1265,8 +1222,7 @@ def import_parish_streets(nome_freguesia):
             tags = elemento.get('tags', {})
             nome_rua = tags.get('name')
             if nome_rua and 'center' in elemento:
-                lat = elemento['center']['lat']
-                lon = elemento['center']['lon']
+                lat, lon = elemento['center']['lat'], elemento['center']['lon']
                 if nome_rua not in ruas_guardadas:
                     cursor.execute("""
                         INSERT OR IGNORE INTO nos_geograficos (tipo, nome, freguesia, latitude, longitude, ultima_atualizacao)
@@ -1294,8 +1250,7 @@ def generate_line_map_html(linha_id):
     paragens = cursor.fetchall()
     conn.close()
     
-    if not paragens:
-        return "Sem dados geográficos suficientes para esta linha."
+    if not paragens: return "Sem dados geográficos suficientes para esta linha."
     
     mapa = folium.Map(location=[paragens[0][1], paragens[0][2]], zoom_start=13, tiles="OpenStreetMap")
     coordenadas_rota = []
@@ -1319,32 +1274,24 @@ def generate_line_map_html(linha_id):
 def generate_google_maps_link(local_nome: str):
     local_encontrado = _search_local_map(local_nome)
     if local_encontrado:
-        nome_real = local_encontrado["nome_real"]
-        lat = local_encontrado["lat"]
-        lon = local_encontrado["lon"]
-        link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-        return f"📍 Encontrei a localização de '{nome_real}' no mapa estático. Podes abrir no Google Maps aqui: {link_maps}"
+        nome_real, lat, lon = local_encontrado["nome_real"], local_encontrado["lat"], local_encontrado["lon"]
+        return f"📍 Encontrei a localização de '{nome_real}' no mapa estático. Podes abrir no Google Maps aqui: https://www.google.com/maps/search/?api=1&query={lat},{lon}"
 
     nome_norm = _normalize_stop_name(local_nome)
     conn = sqlite3.connect("agente_memoria.db")
     conn.create_function("_normalize_stop_name", 1, _normalize_stop_name)
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT nome, latitude, longitude FROM nos_geograficos 
-        WHERE _normalize_stop_name(nome) LIKE ? LIMIT 1
-    """, (f"%{nome_norm}%",))
+    cursor.execute("SELECT nome, latitude, longitude FROM nos_geograficos WHERE _normalize_stop_name(nome) LIKE ? LIMIT 1", (f"%{nome_norm}%",))
     resultado = cursor.fetchone()
     conn.close()
     
     if resultado:
         nome_real, lat, lon = resultado
-        link_maps = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-        return f"📍 Encontrei a localização de '{nome_real}' na base de dados. Podes abrir diretamente no Google Maps aqui: {link_maps}"
+        return f"📍 Encontrei a localização de '{nome_real}' na base de dados. Podes abrir diretamente no Google Maps aqui: https://www.google.com/maps/search/?api=1&query={lat},{lon}"
 
     local_live = _geocode_nominatim_place(local_nome)
     if local_live:
-        link_maps = f"https://www.google.com/maps/search/?api=1&query={local_live['lat']},{local_live['lon']}"
-        return f"📍 Encontrei '{local_live['nome_real']}' via OpenStreetMap (tempo real, ⚠️ não confirmado pelo mapa oficial). Podes abrir no Google Maps aqui: {link_maps}"
+        return f"📍 Encontrei '{local_live['nome_real']}' via OpenStreetMap. Podes abrir no Google Maps aqui: https://www.google.com/maps/search/?api=1&query={local_live['lat']},{local_live['lon']}"
 
     return f"Não consegui encontrar coordenadas GPS para '{local_nome}'."
 
@@ -1396,19 +1343,14 @@ def sync_guimabus_pass_types():
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']):
-            tag.decompose()
+        for tag in soup.find_all(['nav', 'footer', 'form', 'script', 'style']): tag.decompose()
 
         texto_completo = soup.get_text(separator="\n")
-        linhas_texto = [l.strip() for l in texto_completo.split("\n")]
-        linhas_texto = [l for l in linhas_texto if l]
+        linhas_texto = [l.strip() for l in texto_completo.split("\n") if l.strip()]
         texto_normalizado = "\n".join(linhas_texto)
 
-        blocos = re.split(r'\nPASSE\n', "\n" + texto_normalizado)
-        blocos = [b for b in blocos[1:]]
-
-        if not blocos:
-            return "Não foi possível identificar nenhuma tipologia de passe na página."
+        blocos = [b for b in re.split(r'\nPASSE\n', "\n" + texto_normalizado)[1:]]
+        if not blocos: return "Não foi possível identificar nenhuma tipologia de passe na página."
 
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -1426,32 +1368,24 @@ def sync_guimabus_pass_types():
             parsing_mode = "desc"
 
             for linha in linhas_bloco[1:]:
-                linha_lower = linha.lower()
-                linha_stripped = linha.strip()
-
+                linha_lower, linha_stripped = linha.lower(), linha.strip()
                 if not linha_stripped: continue
 
                 if "só podem ser" in linha_lower or "até ao dia" in linha_lower or ("carregamento" in linha_lower and "mês" in linha_lower):
-                    prazo = linha_stripped
-                    parsing_mode = "prazo"
-                    continue
+                    prazo = linha_stripped; parsing_mode = "prazo"; continue
 
                 if "preço:" in linha_lower:
                     val = re.split(r'preço:', linha, flags=re.IGNORECASE)[1].strip()
                     if val: preco = val
-                    parsing_mode = "preco"
-                    continue
+                    parsing_mode = "preco"; continue
 
                 if linha_lower == "gratuito":
-                    preco = "Gratuito"
-                    parsing_mode = "preco"
-                    continue
+                    preco = "Gratuito"; parsing_mode = "preco"; continue
 
                 if "custo do cartão:" in linha_lower:
                     val = re.split(r'custo do cartão:', linha, flags=re.IGNORECASE)[1].strip()
                     if val: custo_cartao = val
-                    parsing_mode = "cartao"
-                    continue
+                    parsing_mode = "cartao"; continue
 
                 if "documentos necessários:" in linha_lower:
                     parsing_mode = "docs"
@@ -1459,22 +1393,16 @@ def sync_guimabus_pass_types():
                     if val: documentos.append(val)
                     continue
 
-                if parsing_mode == "desc":
-                    description_lines.append(linha_stripped)
-                elif parsing_mode == "docs":
-                    documentos.append(linha_stripped)
-                elif parsing_mode == "prazo":
-                    prazo += " " + linha_stripped
+                if parsing_mode == "desc": description_lines.append(linha_stripped)
+                elif parsing_mode == "docs": documentos.append(linha_stripped)
+                elif parsing_mode == "prazo": prazo += " " + linha_stripped
                 elif parsing_mode == "preco" and preco in ["Consultar tabela tarifária", ""]:
-                    preco = linha_stripped
-                    parsing_mode = "done"
+                    preco = linha_stripped; parsing_mode = "done"
                 elif parsing_mode == "cartao" and custo_cartao in ["Não indicado", ""]:
-                    custo_cartao = linha_stripped
-                    parsing_mode = "done"
+                    custo_cartao = linha_stripped; parsing_mode = "done"
 
             descricao = " ".join(description_lines)
-            if not documentos:
-                documentos = ["Cartão de Cidadão / Documento de Identificação"]
+            if not documentos: documentos = ["Cartão de Cidadão / Documento de Identificação"]
 
             cursor.execute("""
                 INSERT OR REPLACE INTO cache_titulos (tipologia, descricao, preco, custo_cartao, prazo, documentos_json, ultima_atualizacao)
@@ -1501,16 +1429,12 @@ def sync_guimabus_fare_table():
         for link in soup.find_all('a', href=True):
             href = link['href']
             if ".pdf" in href.lower() and ("tarifa" in href.lower() or "tabela" in href.lower()):
-                url_pdf = href
-                break
+                url_pdf = href; break
         if not url_pdf:
             for link in soup.find_all('a', href=True):
-                if ".pdf" in link['href'].lower():
-                    url_pdf = link['href']
-                    break
+                if ".pdf" in link['href'].lower(): url_pdf = link['href']; break
 
-        if not url_pdf:
-            return "Não foi encontrado nenhum PDF de tarifário na página."
+        if not url_pdf: return "Não foi encontrado nenhum PDF de tarifário na página."
 
         pdf_response = requests.get(url_pdf, headers=headers, timeout=20)
         pdf_response.raise_for_status()
@@ -1519,12 +1443,10 @@ def sync_guimabus_fare_table():
         with pdfplumber.open(io.BytesIO(pdf_response.content)) as pdf:
             for idx, pagina in enumerate(pdf.pages):
                 texto_pag = pagina.extract_text(layout=True)
-                if texto_pag:
-                    texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
+                if texto_pag: texto_extraido.append(f"[PÁGINA {idx+1}]\n{texto_pag}")
 
         conteudo_final = "\n\n".join(texto_extraido)
-        if not conteudo_final.strip():
-            conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
+        if not conteudo_final.strip(): conteudo_final = "PDF em formato de imagem ou protegido contra leitura."
 
         conn = sqlite3.connect("agente_memoria.db")
         cursor = conn.cursor()
@@ -1571,8 +1493,7 @@ def build_stop_index():
         cursor.execute("DELETE FROM cache_paragens_linha")
         total_paragens = 0
         for linha_id, conteudo_txt in linhas_cache:
-            if not conteudo_txt:
-                continue
+            if not conteudo_txt: continue
             paragens = _extract_stops_from_text(conteudo_txt)
             for paragem in paragens:
                 cursor.execute(
@@ -1614,14 +1535,13 @@ def _search_lines_by_title(termo_norm: str):
         cursor.execute("SELECT linha, titulo FROM cache_titulo_linha")
         todos_titulos = cursor.fetchall()
         conn.close()
-    except Exception as e:
+    except Exception:
         return set(), []
 
     linhas_encontradas = set()
     titulos_encontrados = []
     for linha_id, titulo in todos_titulos:
-        if not titulo:
-            continue
+        if not titulo: continue
         titulo_norm = _normalize_stop_name(titulo)
         if re.search(r'\b' + re.escape(termo_norm) + r'\b', titulo_norm):
             linhas_encontradas.add(linha_id)
@@ -1707,8 +1627,8 @@ def search_stops_by_parish(nome_freguesia: str):
     freguesia_norm = _normalize_stop_name(nome_freguesia)
     return [paragem for paragem, freguesia in todas if re.search(r'\b' + re.escape(freguesia_norm) + r'\b', _normalize_stop_name(freguesia))]
 
-
-_HUB_KEYWORDS_NORM = ["s goncalo", "central de camionagem", "s damaso norte", "s damaso sul", "s damaso"]
+# --- MOTOR DE TRANSBORDO E INJEÇÃO AUTOMÁTICA ---
+_HUB_KEYWORDS_NORM = ["s goncalo", "central", "central de camionagem", "s damaso norte", "s damaso sul", "s damaso"]
 
 def _e_paragem_hub(nome_paragem: str) -> bool:
     n = _normalize_stop_name(nome_paragem)
@@ -1716,6 +1636,26 @@ def _e_paragem_hub(nome_paragem: str) -> bool:
 
 def _e_linha_noturna(linha_id: str) -> bool:
     return str(linha_id).strip().upper().startswith("N")
+
+# 🟢 INJEÇÃO AUTOMÁTICA: Extrai os horários do SQLite para as linhas envolvidas e entrega-os diretamente no retorno do tool
+def _get_schedules_for_lines(linhas_set):
+    if not linhas_set: return ""
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        texto_horarios = "\n\n[INSTRUÇÃO DE SISTEMA: Aqui estão os horários exatos das linhas envolvidas neste trajeto. É ESTRITAMENTE OBRIGATÓRIO leres estes dados e apresentá-los ao utilizador numa tabela Markdown limpa (com colunas como 'Partida' e 'Chegada'). Inclui também o Link Oficial. NÃO MANDES o utilizador ir procurar, a resposta exata está aqui:]\n"
+        for l in linhas_set:
+            candidatos = [l, l.lstrip('0') or '0', l.zfill(3)]
+            for cand in candidatos:
+                cursor.execute("SELECT conteudo_txt, url FROM cache_horarios WHERE linha = ?", (cand,))
+                res = cursor.fetchone()
+                if res:
+                    texto_horarios += f"\n=== HORÁRIOS DA LINHA {l} ===\n🔗 Link Oficial: {res[1]}\n{res[0]}\n"
+                    break
+        conn.close()
+        return texto_horarios
+    except Exception:
+        return ""
 
 def plan_trip_with_transfer(origem: str, destino: str):
     if not origem or not destino: return "É necessário indicar a paragem de origem e a paragem de destino."
@@ -1752,8 +1692,12 @@ def plan_trip_with_transfer(origem: str, destino: str):
             linhas_destino.add(linha_id); paragens_destino_encontradas.add(paragem)
 
     aviso_o, aviso_d = False, False
-    if not linhas_origem: linhas_origem, titulos_o = _search_lines_by_title(origem_norm); aviso_o = bool(linhas_origem)
-    if not linhas_destino: linhas_destino, titulos_d = _search_lines_by_title(destino_norm); aviso_d = bool(linhas_destino)
+    if not linhas_origem: 
+        linhas_origem, titulos_o = _search_lines_by_title(origem_norm)
+        aviso_o = bool(linhas_origem)
+    if not linhas_destino: 
+        linhas_destino, titulos_d = _search_lines_by_title(destino_norm)
+        aviso_d = bool(linhas_destino)
 
     aviso_o_freg, aviso_d_freg = None, None
     if not linhas_origem:
@@ -1793,7 +1737,8 @@ def plan_trip_with_transfer(origem: str, destino: str):
         for l in linhas_ordenadas: resumo += f"- Linha {l}\n"
         if not diurnas and noturnas:
             resumo += "\n🌙 Nota: só encontrei linha(s) noturna(s) para este trajeto — não há alternativa diurna direta."
-        return resumo + aviso_precisao
+        
+        return resumo + aviso_precisao + _get_schedules_for_lines(set(linhas_ordenadas[:2]))
 
     stops_o, stops_d = set(), set()
     for l in linhas_origem: stops_o |= mapa_linha_paragens.get(l, set())
@@ -1802,11 +1747,20 @@ def plan_trip_with_transfer(origem: str, destino: str):
     transbordos = (stops_o & stops_d) - paragens_origem_encontradas - paragens_destino_encontradas
     if transbordos:
         resumo = f"Não há linha direta. Sugestão de transbordo:\n\n"
+        comb = 0
+        linhas_alvo = set()
         for t in sorted(transbordos):
             l_to = [l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())]
             l_from = [l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())]
             resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
-        return resumo + aviso_precisao
+            
+            if l_to: linhas_alvo.add(l_to[0])
+            if l_from: linhas_alvo.add(l_from[0])
+            
+            comb += 1
+            if comb >= 3: break
+            
+        return resumo + aviso_precisao + _get_schedules_for_lines(linhas_alvo)
 
     hubs_o = sorted({p for p in stops_o if _e_paragem_hub(p)})
     hubs_d = sorted({p for p in stops_d if _e_paragem_hub(p)})
@@ -1817,6 +1771,7 @@ def plan_trip_with_transfer(origem: str, destino: str):
             "S. Dâmaso Norte/Sul ficam a poucos minutos a pé umas das outras):\n\n"
         )
         combinacoes_mostradas = 0
+        linhas_alvo = set()
         for stop_o in hubs_o:
             l_to = [l for l in linhas_origem if stop_o in mapa_linha_paragens.get(l, set())]
             for stop_d in hubs_d:
@@ -1825,19 +1780,20 @@ def plan_trip_with_transfer(origem: str, destino: str):
                     resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}' e depois linha {'/'.join(l_from)} — mesma paragem.\n"
                 else:
                     resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}', caminha até '{stop_d}', e apanha linha {'/'.join(l_from)}.\n"
+                
+                if l_to: linhas_alvo.add(l_to[0])
+                if l_from: linhas_alvo.add(l_from[0])
+                
                 combinacoes_mostradas += 1
-                if combinacoes_mostradas >= 4:
-                    break
-            if combinacoes_mostradas >= 4:
-                break
+                if combinacoes_mostradas >= 3: break
+            if combinacoes_mostradas >= 3: break
+            
         resumo += "\n⚠️ Este transbordo envolve caminhar entre paragens diferentes no centro de Guimarães, não é o mesmo poste."
-        return resumo + aviso_precisao
+        return resumo + aviso_precisao + _get_schedules_for_lines(linhas_alvo)
 
     return f"I could not find an obvious transfer between '{origem}' and '{destino}'."
 
 def _resolve_place_to_stop(nome_local: str):
-    """Resolves any place name (café, street, address, etc.) to the nearest bus stop,
-    using the static map first, then live geocoding, and always checking SQLite backup."""
     local = _search_local_map(nome_local)
     fonte = "mapa estático"
     if not local:
@@ -1868,7 +1824,6 @@ def _resolve_place_to_stop(nome_local: str):
         for nome_bd, lat_bd, lon_bd in cursor.fetchall():
             dist = calculate_distance(lat_origem, lon_origem, lat_bd, lon_bd)
             if dist < menor_distancia:
-                # Verifica se a paragem encontrada existe nos horários do autocarro
                 cursor.execute("SELECT 1 FROM cache_paragens_linha WHERE paragem = ? LIMIT 1", (nome_bd,))
                 if cursor.fetchone():
                     menor_distancia = dist
@@ -1883,12 +1838,10 @@ def plan_trip_from_place(origem: str, destino: str):
     if not origem or not destino:
         return "É necessário indicar a localização de origem e de destino."
 
-    # 1) Direct attempt
     resultado_direto = plan_trip_with_transfer(origem, destino)
     if not resultado_direto.startswith("I could not find the origin") and not resultado_direto.startswith("I could not find the destination"):
         return resultado_direto
 
-    # 2) Resolve each place to the nearest bus stop
     paragem_o, dist_o, fonte_o = _resolve_place_to_stop(origem)
     paragem_d, dist_d, fonte_d = _resolve_place_to_stop(destino)
 
@@ -2168,11 +2121,6 @@ def render_game(ui):
                 var nome = nomeInput.value.trim().toUpperCase();
                 if(!nome) {{ alert("{ui['game_alert']}"); return; }}
                 btnGravar.disabled = true; btnGravar.innerText = "💾...";
-                // Não lemos window.parent.location (isso é bloqueado como leitura
-                // entre origens diferentes, ex: no Streamlit Cloud). Em vez disso,
-                // criamos um link normal com target="_parent" e simulamos um clique —
-                // a navegação por clique num link é sempre permitida pelo browser,
-                // mesmo que o iframe seja tratado como uma origem diferente.
                 try {{
                     var novaQuery = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + encodeURIComponent(score / 10);
                     var link = document.createElement("a");
@@ -2216,7 +2164,7 @@ if len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] 
 if "jogo_ativo" not in st.session_state:
     st.session_state.jogo_ativo = False
 
-# --- ELITE SIDEBAR ---
+# --- SIDEBAR ATUALIZAÇÕES ---
 is_updating = check_sync_needed(limite_dias=7)
 
 if is_updating:
@@ -2238,11 +2186,8 @@ if is_updating:
             import_guimaraes_pois()
             
     st.session_state.is_updating = False
-    st.rerun() # Refresh força a libertação do input box abaixo.
+    st.rerun()
 
-# 🔓 We only get here if the system is NOT updating (see block above).
-# This is where the language buttons are finally drawn into the "slots"
-# reserved above — while the update is running, they stay empty.
 with lang_pt_slot:
     if st.button("🇵🇹 PT", use_container_width=True, key="lang_pt_btn"):
         st.session_state.language = "PT"
@@ -2307,8 +2252,6 @@ with st.sidebar:
                 password_input = st.text_input(ui["admin_pass"], type="password", key="admin_pwd")
                 if st.button(ui["login_btn"], key="admin_login_btn"):
                     admin_pass_real = _get_secret("ADMIN_PASSWORD")
-                    # Constant-time comparison (hmac.compare_digest) instead of "==",
-                    # to avoid leaking timing information about how much of the password matched.
                     if admin_pass_real and password_input and hmac.compare_digest(password_input, admin_pass_real):
                         st.session_state.admin_autenticado = True
                         st.session_state.admin_falhas = 0
@@ -2316,7 +2259,6 @@ with st.sidebar:
                         st.rerun()
                     else:
                         st.session_state.admin_falhas += 1
-                        # After 5 failed attempts, lock the login for 5 minutes.
                         if st.session_state.admin_falhas >= 5:
                             st.session_state.admin_bloqueado_ate = agora + timedelta(minutes=5)
                             st.session_state.admin_falhas = 0
@@ -2385,31 +2327,6 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"], avatar=avatar_tipo):
         st.markdown(message["content"])
 
-# --- BLOCKING AND RESILIENT EXECUTION OF INITIAL UPDATES ---
-is_updating = check_sync_needed(limite_dias=7)
-
-if is_updating:
-    st.error(ui["updating_system"], icon="⏳")
-    
-    with st.spinner(ui["robot_reading"]):
-        tasks = st.session_state.update_tasks
-        
-        if tasks.get("sch"):
-            sync_all_guimabus_schedules()
-            build_stop_index()
-        elif tasks.get("idx"):
-            build_stop_index()
-        
-        if tasks.get("tkt"):
-            sync_pass_types_and_fares()
-            
-        if tasks.get("geo"):
-            import_guimaraes_pois()
-            
-    st.session_state.is_updating = False
-    st.rerun() # Refresh força a libertação do input box abaixo.
-
-# The input is only actually rendered after the lock function is clear
 prompt_texto = st.chat_input(ui["chat_input"])
 audio_file = st.audio_input(ui["speak"])
 
@@ -2454,16 +2371,15 @@ if prompt:
 
                 SCHEDULE_INSTRUCTION = (
                     "MANDATÓRIO: Sempre que o utilizador perguntar por uma viagem, usa 'plan_trip_from_place'. "
-                    "Se a ferramenta devolver um TRANSBORDO (ex: 'apanha linha A e depois linha B'), "
-                    "É ESTRITAMENTE OBRIGATÓRIO chamares a ferramenta `query_line_schedule_cache` DUAS VEZES (uma vez para a linha A e outra vez para a linha B). "
-                    "Cruza a hora de chegada da 1ª linha com a hora de partida da 2ª linha para teres a certeza que o passageiro consegue fazer o transbordo. "
-                    "NUNCA dês a resposta sem mostrares as horas exatas de AMBAS as linhas na mesma resposta. "
-                    "FORMATAÇÃO: Apresenta os horários de forma bem visível. Usa tabelas em formato Markdown com cabeçalhos como 'Partida' e 'Chegada' sempre que apresentares horários ou opções múltiplas, pois é muito mais fácil de ler."
+                    "A ferramenta devolverá automaticamente os horários necessários no seu texto. "
+                    "É ESTRITAMENTE OBRIGATÓRIO que apresentes as horas exatas de partida/chegada na resposta final, "
+                    "organizadas em formato de tabela Markdown (com colunas como 'Linha', 'Partida', 'Chegada') para ser bem legível. "
+                    "NUNCA dês a resposta sem mostrar os horários exatos de todas as linhas envolvidas."
                 ) if st.session_state.language == "PT" else (
-                    "MANDATORY: When asked for a trip, use 'plan_trip_from_place'. If a transfer is suggested (e.g., 'take line A then line B'), "
-                    "you MUST call `query_line_schedule_cache` TWICE (once for line A, once for line B) to verify connecting times. "
-                    "NEVER answer without presenting the exact times for BOTH lines in the same response. "
-                    "FORMATTING: Always present schedules using clear Markdown tables with columns like 'Departure' and 'Arrival'."
+                    "MANDATORY: When asked for a trip, use 'plan_trip_from_place'. "
+                    "The tool will automatically inject the schedules. "
+                    "You MUST format and present the exact departure and arrival times using Markdown tables. "
+                    "NEVER answer without displaying the exact times for all required lines."
                 )
 
                 PROMPT_GUIMABUS = f"""You are Celso Ferreira's Elite Executive Assistant.
@@ -2489,7 +2405,7 @@ if prompt:
                 2. - If origin and destination are already names of known stops or parishes, use "plan_trip_with_transfer" with the exact names. If it closely resembles a stop, mention that. When in doubt, ask the user.
                 3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
                 4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
-                5. If a route has several lines, suggest all of them and their schedules.
+                5. If a route has several lines (direct or for either leg of a transfer), you MUST list ALL of them, not just one or two examples — never summarise with "e.g." or pick just one when the tool returned several.
                 6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day.
                 7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
                 8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
@@ -2536,16 +2452,27 @@ if prompt:
 
                 normalized_prompt = prompt.lower()
                 project_triggers = ["este projeto", "sobre o projeto", "sobre este projeto", "como foi feito", "como foi construido", "que tecnologias", "stack", "arquitetura", "arquitectura", "this project", "how was this built", "tech stack"]
-                recruiter_triggers = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "problema", "helpdesk", "ticket", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+                recruiter_triggers_strong = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "helpdesk", "ticket"]
+                recruiter_triggers_it_problem = ["problema", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
 
                 if any(word in normalized_prompt for word in project_triggers):
                     active_system_prompt = PROMPT_PROJECT
+                    st.session_state.modo_ativo = "project"
                 elif "entrevista" in normalized_prompt or "interview" in normalized_prompt:
                     active_system_prompt = PROMPT_INTERVIEW
-                elif any(word in normalized_prompt for word in recruiter_triggers):
+                    st.session_state.modo_ativo = "interview"
+                elif any(word in normalized_prompt for word in recruiter_triggers_strong):
                     active_system_prompt = PROMPT_RECRUITER
-                else:
+                    st.session_state.modo_ativo = "recruiter"
+                elif looks_like_route_request(prompt):
                     active_system_prompt = PROMPT_GUIMABUS
+                    st.session_state.modo_ativo = "guimabus"
+                elif any(word in normalized_prompt for word in recruiter_triggers_it_problem):
+                    active_system_prompt = PROMPT_RECRUITER
+                    st.session_state.modo_ativo = "recruiter"
+                else:
+                    _mapa_modos = {"project": PROMPT_PROJECT, "interview": PROMPT_INTERVIEW, "recruiter": PROMPT_RECRUITER, "guimabus": PROMPT_GUIMABUS}
+                    active_system_prompt = _mapa_modos.get(st.session_state.get("modo_ativo", "guimabus"), PROMPT_GUIMABUS)
 
                 historico_api = []
                 for msg in st.session_state.messages[:-1]:
@@ -2568,7 +2495,12 @@ if prompt:
 
                 for model_name in candidate_models:
                     try:
-                        model = genai.GenerativeModel(model_name=model_name, system_instruction=active_system_prompt, tools=agent_tools)
+                        model = genai.GenerativeModel(
+                            model_name=model_name,
+                            system_instruction=active_system_prompt,
+                            tools=agent_tools,
+                            generation_config={"temperature": 0.2},
+                        )
                         chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
                         history_len_before = len(chat.history)
                         response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
@@ -2585,9 +2517,6 @@ if prompt:
                     st.stop()
 
                 def _called_real_tool(chat_obj, desde_indice):
-                    """Checks whether, since 'since_index', the chat history contains a
-                    real call to one of the route/schedule tools (instead of the model
-                    having answered purely from its own generic knowledge)."""
                     try:
                         for entrada in chat_obj.history[desde_indice:]:
                             for part in getattr(entrada, "parts", []):
@@ -2598,10 +2527,6 @@ if prompt:
                         pass
                     return False
 
-                # 🛡️ ANTI-HALLUCINATION SAFETY NET
-                # Se a pergunta for sobre rotas/linhas/horários e o modelo NÃO usar
-                # nenhuma ferramenta real, ele alucinou. Forçamos uma nova tentativa,
-                # exceto se ele já admitiu honestamente que não encontrou.
                 _FRASES_INCERTEZA_HONESTA = [
                     "não encontrei", "nao encontrei", "não consegui", "nao consegui",
                     "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
