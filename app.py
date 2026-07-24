@@ -298,17 +298,50 @@ def initialize_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
 
-    # Remove any duplicate rows that may already exist (safe for a pre-existing database
-    # that was populated before this UNIQUE constraint existed), keeping the earliest row
-    # of each (tipo, nome) pair, then enforce real uniqueness going forward so that
-    # INSERT OR IGNORE actually prevents duplicates instead of silently doing nothing.
-    cursor.execute("""
-        DELETE FROM nos_geograficos
-        WHERE id NOT IN (
-            SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
-        )
-    """)
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+    # Normaliza o schema de nos_geograficos antes de tentar limpar duplicados.
+    # Uma versão antiga do .db (persistida entre deploys no Streamlit Cloud) pode
+    # ter esta tabela sem a coluna "id" (ou outras), e nesse caso o DELETE/CREATE
+    # UNIQUE INDEX abaixo rebentava com "no such column: id". Isto explica por que
+    # às vezes o deploy funcionava (schema já novo/vazio) e às vezes não (schema
+    # antigo persistido).
+    try:
+        colunas_existentes = {row[1] for row in cursor.execute("PRAGMA table_info(nos_geograficos)").fetchall()}
+        colunas_necessarias = {"id", "tipo", "nome"}
+
+        if colunas_necessarias.issubset(colunas_existentes):
+            # Remove duplicados que possam já existir (seguro para uma BD pré-existente
+            # que foi populada antes deste UNIQUE constraint existir), mantendo a linha
+            # mais antiga de cada par (tipo, nome), e só depois impõe unicidade real
+            # para que o INSERT OR IGNORE passe mesmo a prevenir duplicados.
+            cursor.execute("""
+                DELETE FROM nos_geograficos
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM nos_geograficos GROUP BY tipo, nome
+                )
+            """)
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+        else:
+            # Schema antigo/incompatível: recria a tabela do zero em vez de tentar
+            # corrigi-la incrementalmente. Os dados de POIs podem ser reimportados
+            # depois via "import_guimaraes_pois" / discover_parish.
+            logging.warning(f"Schema antigo detetado em nos_geograficos (colunas: {colunas_existentes}). A recriar a tabela.")
+            cursor.execute("DROP TABLE nos_geograficos")
+            cursor.execute("""
+                CREATE TABLE nos_geograficos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tipo TEXT,
+                    nome TEXT,
+                    freguesia TEXT,
+                    latitude REAL,
+                    longitude REAL,
+                    linhas_associadas TEXT,
+                    ultima_atualizacao TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nome_nos ON nos_geograficos(nome);")
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_geo ON nos_geograficos(tipo, nome);")
+    except Exception as e:
+        logging.error(f"Erro ao normalizar o schema de nos_geograficos: {e}")
 
     conn.commit()
     conn.close()
