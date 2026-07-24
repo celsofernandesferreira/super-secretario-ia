@@ -435,7 +435,13 @@ _NOTICE_KEYWORDS_PT = [
     "obra", "obras", "greve", "desvio", "desvios", "trajeto alternativo",
     "trajecto alternativo", "corte", "condicionamento", "interrupção", "interrupcao",
     "aviso", "avisos", "avaria", "avarias", "serviço especial", "servico especial",
-    "reforço", "reforco", "evento", "festival", "concerto"
+    "reforço", "reforco", "evento", "festival", "concerto",
+    # "especial"/"especiais" sozinho cobre frases como "transportes especiais",
+    # "autocarros especiais", "horário especial", "saídas especiais", etc. — a
+    # lista acima só cobria a frase exata "serviço especial", o que deixava passar
+    # perguntas como "existem transportes especiais para X?" sem exigir a
+    # ferramenta de avisos.
+    "especial", "especiais", "shuttle", "reforçado", "reforcado"
 ]
 
 def looks_like_notice_request(texto: str) -> bool:
@@ -2812,80 +2818,68 @@ if prompt:
                 # forced to call a tool with made-up arguments just to satisfy the rule,
                 # producing a worse answer than the honest one it already gave. So we skip
                 # the retry whenever the response already shows that honesty.
+                #
+                # IMPORTANT — this used to be two separate checks (a general route check
+                # and a stricter notices check), each capable of firing its OWN forced
+                # retry. That meant a single user message could trigger up to 3 total
+                # Gemini API calls (1 initial + 2 retries), burning through the free daily
+                # quota much faster than necessary. They are now unified into ONE check
+                # that decides which tool(s) to require and fires AT MOST one retry.
                 _FRASES_INCERTEZA_HONESTA = [
                     "não encontrei", "nao encontrei", "não consegui", "nao consegui",
                     "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
-                    "não tenho informação", "peço desculpa", "i'm sorry", "i am sorry",
-                    "não disponho", "não existem linhas", "sem transbordo", "sem informação",
+                    "não tenho informação", "não disponho", "não existem linhas",
+                    "sem transbordo", "sem informação",
                 ]
                 resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
 
-                if (active_system_prompt == PROMPT_GUIMABUS and looks_like_route_request(prompt)
-                        and chat is not None and not resposta_ja_e_honesta):
-                    if not _called_real_tool(chat, history_len_before):
-                        logging.error(f"Possible hallucination detected (response without a tool call) for the prompt: {prompt}")
+                # Notices questions (obras/greve/serviços especiais) are checked FIRST and
+                # take priority: they require the specific 'query_transit_notices_tool',
+                # because a generic route tool (e.g. get_guimabus_data, which only reports
+                # real-time vehicle delays) would otherwise be wrongly accepted as "real
+                # data" for a question it can't actually answer.
+                if active_system_prompt == PROMPT_GUIMABUS and chat is not None:
+                    if looks_like_notice_request(prompt):
+                        ferramentas_exigidas = ["query_transit_notices_tool"]
+                        instrucao_forcada = (
+                            "A tua resposta anterior sobre obras/greves/desvios/serviços especiais NÃO "
+                            "consultou a ferramenta 'query_transit_notices_tool'. És OBRIGADO a chamar "
+                            "essa ferramenta agora e a basear a resposta apenas no que ela devolver. "
+                            "NUNCA afirmes que 'não existem avisos/obras' ou inventes horários/locais sem "
+                            "teres consultado essa ferramenta — se ela não devolver nada relevante, diz "
+                            "honestamente que não tens essa informação disponível de momento."
+                        )
+                    elif looks_like_route_request(prompt) and not resposta_ja_e_honesta:
+                        ferramentas_exigidas = ROUTE_TOOL_NAMES
+                        instrucao_forcada = (
+                            "A tua resposta anterior não usou nenhuma ferramenta de trajeto/horários. "
+                            "Repete a resposta, mas és OBRIGADO a consultar uma ferramenta real "
+                            "(plan_trip_from_place, plan_trip_with_transfer, "
+                            "query_line_schedule_cache, get_stop_schedule ou "
+                            "find_nearest_stop) antes de responderes. "
+                            "NUNCA inventes linhas ou horários que não venham da ferramenta."
+                        )
+                    else:
+                        ferramentas_exigidas = None
+                        instrucao_forcada = None
+
+                    if ferramentas_exigidas and not _called_real_tool(chat, history_len_before, ferramentas_exigidas):
+                        logging.error(f"Possible hallucination detected (missing call to {ferramentas_exigidas}) for the prompt: {prompt}")
                         try:
                             forced_tool_config = {
                                 "function_calling_config": {
                                     "mode": "ANY",
-                                    "allowed_function_names": ROUTE_TOOL_NAMES,
+                                    "allowed_function_names": ferramentas_exigidas,
                                 }
                             }
-                            history_len_before_retry = len(chat.history)
                             forced_response = chat.send_message(
-                                "A tua resposta anterior não usou nenhuma ferramenta de trajeto/horários. "
-                                "Repete a resposta, mas és OBRIGADO a consultar uma ferramenta real "
-                                "(plan_trip_from_place, plan_trip_with_transfer, "
-                                "query_line_schedule_cache, get_stop_schedule ou "
-                                "find_nearest_stop) antes de responderes. "
-                                "NUNCA inventes linhas ou horários que não venham da ferramenta.",
+                                instrucao_forcada,
                                 tool_config=forced_tool_config,
                                 request_options={"timeout": 25}
                             )
-                            if _called_real_tool(chat, history_len_before_retry):
-                                response = forced_response
-                            else:
-                                # Even when forced, it didn't confirm anything via real tools — warn the user.
-                                response = forced_response
-                                logging.error("Safety net: the forced attempt also did not call a real tool.")
+                            response = forced_response
                         except Exception as e:
                             logging.error(f"Anti-hallucination safety net failure: {e}")
-
-                # 🛡️ STRICT NOTICES SAFETY NET (separate from the general one above)
-                # Disruption/roadworks/strike/special-service questions can ONLY be
-                # honestly answered via 'query_transit_notices_tool'. Real-time fleet
-                # data (get_guimabus_data, which reports vehicle delays) or schedule
-                # caches do NOT contain this information — so if the general safety
-                # net above saw ANY route tool called (e.g. get_guimabus_data) it would
-                # wrongly consider the question "answered from real data", even though
-                # it's the wrong data for a notices question. This check requires the
-                # specific tool. It is intentionally independent of the "honest
-                # uncertainty" phrase check too: a reply that opens with "peço
-                # desculpa..." but then confidently claims "não existem obras" is not
-                # honest uncertainty, it's an unverified claim dressed as one.
-                if active_system_prompt == PROMPT_GUIMABUS and looks_like_notice_request(prompt) and chat is not None:
-                    if not _called_real_tool(chat, history_len_before, ["query_transit_notices_tool"]):
-                        logging.error(f"Notices question answered without calling query_transit_notices_tool: {prompt}")
-                        try:
-                            forced_notice_tool_config = {
-                                "function_calling_config": {
-                                    "mode": "ANY",
-                                    "allowed_function_names": ["query_transit_notices_tool"],
-                                }
-                            }
-                            forced_notice_response = chat.send_message(
-                                "A tua resposta anterior sobre obras/greves/desvios/serviços especiais NÃO "
-                                "consultou a ferramenta 'query_transit_notices_tool'. És OBRIGADO a chamar "
-                                "essa ferramenta agora e a basear a resposta apenas no que ela devolver. "
-                                "NUNCA afirmes que 'não existem avisos/obras' sem teres consultado essa "
-                                "ferramenta — se ela não devolver nada relevante, diz honestamente que não "
-                                "tens essa informação disponível de momento, em vez de confirmar normalidade.",
-                                tool_config=forced_notice_tool_config,
-                                request_options={"timeout": 25}
-                            )
-                            response = forced_notice_response
-                        except Exception as e:
-                            logging.error(f"Notices safety net failure: {e}")
 
                 full_response = response.text
 
