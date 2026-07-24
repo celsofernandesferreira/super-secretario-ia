@@ -758,9 +758,10 @@ def extract_future_date(texto):
 
 @st.cache_data(ttl=3600)
 def get_facebook_notices():
-    url_rss = "https://rss.app/feeds/xF3kb9tGqqFDxAsF.xml"
+    # 1. NOVO URL DO FETCHRSS
+    url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.rss"
     avisos_ativos = []
-    todos_avisos = [] # 🛡️ LISTA DE SEGURANÇA (FALLBACK)
+    todos_avisos = [] 
     
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
@@ -774,18 +775,27 @@ def get_facebook_notices():
             title = item.find("title").text if item.find("title") else "Aviso"
             content_encoded = item.find("content:encoded")
             desc = content_encoded.text if content_encoded else (item.find("description").text if item.find("description") else "")
-            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
             
-            enclosure = item.find("enclosure")
-            img_url = enclosure.get("url") if enclosure and enclosure.get("url") else ""
-            if not img_url and desc:
-                img_match = re.search(r'src="([^"]+)"', desc)
-                if img_match: img_url = img_match.group(1)
+            # 2. CORREÇÃO DO TEXTO: Forçar tudo a uma única linha sem quebras manhosas
+            clean_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ").strip()
+            clean_text = re.sub(r'\s+', ' ', clean_text) # Transforma \n e múltiplos espaços num só espaço
+            title = re.sub(r'\s+', ' ', title).strip()
+            
+            # 3. CORREÇÃO DA IMAGEM: Procurar em media:content ou na tag <img> dentro da descrição
+            img_url = ""
+            media_content = item.find("media:content")
+            if media_content and media_content.get("url"):
+                img_url = media_content.get("url")
+            elif item.find("enclosure") and item.find("enclosure").get("url"):
+                img_url = item.find("enclosure").get("url")
+            else:
+                img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc, re.IGNORECASE)
+                if img_match: 
+                    img_url = img_match.group(1)
             
             texto_minusculas = clean_text.lower() + " " + title.lower()
             texto_final = clean_text if len(clean_text) > 5 else title
             
-            # We always keep a copy for the fallback plan
             aviso_temp = {
                 "texto": texto_final, 
                 "imagem": img_url, 
@@ -797,23 +807,16 @@ def get_facebook_notices():
                 continue
 
             data_fim_texto = extract_future_date(texto_minusculas)
-            
             palavras_criticas = ["obra", "obras", "trânsito", "greve", "corte", "condicionamento", "interrupção", "aviso", "urgente"]
 
             if data_fim_texto:
                 if data_fim_texto < agora_local:
                     continue
-                # 🟢 TIER 1 — Roadworks/events with a confirmed end date or future date.
-                # Stays active as long as the date hasn't passed, and ALWAYS has
-                # priority over any generic post (base 1000).
                 dias_ate_fim = (data_fim_texto - agora_local).days
-                # The closer to the end/event, the more urgent/relevant it is.
                 prioridade_calculada = 1000 - max(dias_ate_fim, 0)
                 if any(kw in texto_minusculas for kw in palavras_criticas):
                     prioridade_calculada += 50
             else:
-                # 🟡 TIER 2 — Generic posts with no explicit date.
-                # Only stay active for ~1 week (used to be 15 days).
                 LIMITE_DIAS_GENERICO = 7
                 pub_date_node = item.find("pubDate")
                 dias_passados = 0
@@ -837,13 +840,9 @@ def get_facebook_notices():
             
         avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
         
-        # 🛑 THE TRICK IS HERE: if the filter is too aggressive and throws everything away,
-        # we guarantee we still show at least the last 2 posts from the page!
         if not avisos_ativos and todos_avisos:
             return todos_avisos[:2]
         
-        # Shows ALL active notices (roadworks/events with a future date + posts
-        # from the last week that aren't resolved yet), ordered by priority.
         return avisos_ativos
             
     except Exception as e:
@@ -2555,7 +2554,7 @@ if prompt:
                 2. - If origin and destination are already names of known stops or parishes, use "plan_trip_with_transfer" with the exact names. If it closely resembles a stop, mention that. When in doubt, ask the user.
                 3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
                 4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
-                5. If a route has several lines, suggest all of them and their schedules.
+                5. If a route has several lines (direct or for either leg of a transfer), you MUST list ALL of them, not just one or two examples — never summarise with "e.g." or pick just one when the tool returned several.
                 6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day.
                 7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
                 8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
@@ -2566,6 +2565,7 @@ if prompt:
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
                 15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
+                16. If you find many stops for a transfer you need to say the lines that goes to that places.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
