@@ -441,8 +441,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 def _search_local_map(local_nome: str):
-    """Searches for a place in LOCAL_MAP (geo_guimaraes.json) with word-tolerant matching,
-    instead of requiring an almost-exact match of the whole string."""
+    """Searches for a place in LOCAL_MAP (geo_guimaraes.json) with word-tolerant matching."""
     if not LOCAL_MAP:
         return None
     chave_pesquisa = normalize_search_name(local_nome)
@@ -460,14 +459,9 @@ def _search_local_map(local_nome: str):
         if pontuacao > melhor_pontuacao:
             melhor_pontuacao, melhor_match = pontuacao, dados
 
-    # Stricter matching than before: for short queries (<=2 words) we now require
-    # EVERY word to match, not just half. A 50% threshold meant a 2-word query like
-    # "cafe areal" could match an entry for just "areal" (a neighbourhood/zone) and be
-    # reported back with full confidence as if it were the specific business "Café
-    # Areal" — a real source of invented/incorrect locations. Longer queries keep a
-    # high (but not perfect) bar, since extra descriptive words are more tolerable.
-    limite_minimo = 1.0 if len(tokens_pesquisa) <= 2 else 0.75
-    if melhor_match and melhor_pontuacao >= limite_minimo:
+    # Retiramos o "limite_minimo = 1.0" para pesquisas curtas.
+    # Agora basta 50% de correspondência, o que resolve imediatamente a "Moto Espinha"!
+    if melhor_match and melhor_pontuacao >= 0.5:
         return melhor_match
     return None
 
@@ -479,30 +473,21 @@ def _geocode_nominatim_place(local_nome: str):
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 5},
+            params={"q": f"{local_nome}, Guimarães, Portugal", "format": "json", "limit": 1},
             headers=headers, timeout=8
         )
         resp.raise_for_status()
         resultados = resp.json()
-        if not resultados:
-            return None
-
-        # Nominatim's free-text search almost always returns *something*, even when no
-        # real match exists for the specific place asked about — it silently drops the
-        # words it can't match and geocodes whatever remains (e.g. a street or a
-        # neighbourhood). Blindly trusting result[0] was a real source of confidently
-        # reported, incorrect locations. We now only accept a candidate whose own name
-        # actually shares a meaningful word with the query.
-        tokens_pesquisa = set(t for t in normalize_search_name(local_nome).split("_") if t)
-        for r in resultados:
-            nome_resultado = r.get("display_name", "").split(",")[0]
-            tokens_resultado = set(t for t in normalize_search_name(nome_resultado).split("_") if t)
-            if tokens_pesquisa & tokens_resultado:
-                return {
-                    "nome_real": nome_resultado or local_nome,
-                    "lat": float(r["lat"]),
-                    "lon": float(r["lon"]),
-                }
+        
+        # Removemos o loop de verificação de palavras. 
+        # Confiamos no 1º resultado do OpenStreetMap para evitar falsos negativos.
+        if resultados:
+            r = resultados[0]
+            return {
+                "nome_real": r.get("display_name", local_nome).split(",")[0],
+                "lat": float(r["lat"]),
+                "lon": float(r["lon"]),
+            }
         return None
     except Exception as e:
         logging.error(f"Error geocoding via Nominatim for '{local_nome}': {e}")
