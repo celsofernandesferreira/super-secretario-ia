@@ -441,7 +441,8 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 def _search_local_map(local_nome: str):
-    """Searches for a place in LOCAL_MAP (geo_guimaraes.json) with word-tolerant matching."""
+    """Searches for a place in LOCAL_MAP (geo_guimaraes.json) with word-tolerant matching,
+    instead of requiring an almost-exact match of the whole string."""
     if not LOCAL_MAP:
         return None
     chave_pesquisa = normalize_search_name(local_nome)
@@ -459,13 +460,12 @@ def _search_local_map(local_nome: str):
         if pontuacao > melhor_pontuacao:
             melhor_pontuacao, melhor_match = pontuacao, dados
 
-    # Retiramos o "limite_minimo = 1.0" para pesquisas curtas.
-    # Agora basta 50% de correspondência, o que resolve imediatamente a "Moto Espinha"!
+    # We only accept it if at least half of the searched words match,
+    # to avoid returning false positives.
     if melhor_match and melhor_pontuacao >= 0.5:
         return melhor_match
     return None
 
-@st.cache_data(ttl=86400)
 def _geocode_nominatim_place(local_nome: str):
     """Geocodes a place name in Guimarães live via OpenStreetMap (Nominatim),
     used as a fallback when the place is not in the static map (geo_guimaraes.json)."""
@@ -478,9 +478,6 @@ def _geocode_nominatim_place(local_nome: str):
         )
         resp.raise_for_status()
         resultados = resp.json()
-        
-        # Removemos o loop de verificação de palavras. 
-        # Confiamos no 1º resultado do OpenStreetMap para evitar falsos negativos.
         if resultados:
             r = resultados[0]
             return {
@@ -488,11 +485,10 @@ def _geocode_nominatim_place(local_nome: str):
                 "lat": float(r["lat"]),
                 "lon": float(r["lon"]),
             }
-        return None
     except Exception as e:
         logging.error(f"Error geocoding via Nominatim for '{local_nome}': {e}")
     return None
-
+    
 def find_nearest_stop(local_nome: str):
     """Finds the nearest bus stop to any café, street, factory or other place.
     Searches the static map first (geo_guimaraes.json); if not found, tries live
