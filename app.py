@@ -1071,6 +1071,23 @@ _STATUS_GUIMABUS_PT = {
     "outofservice": "fora de serviço",
 }
 
+# Dicionário separado para o campo "status" (pontualidade), confirmado como um
+# campo DISTINTO de "busStatus" (estado físico) num payload real da API em
+# 2026-07-26: {"status":"ontime","busStatus":"incomingAt",...}. Antes, o código
+# só lia um destes dois campos e descartava o outro.
+_PONTUALIDADE_GUIMABUS_PT = {
+    "ontime": "dentro do horário",
+    "late": "atrasado",
+    "early": "adiantado",
+    "delayed": "atrasado",
+}
+
+def _traduzir_pontualidade_bus(status_bruto):
+    if not status_bruto:
+        return "pontualidade desconhecida"
+    chave = str(status_bruto).strip().lower()
+    return _PONTUALIDADE_GUIMABUS_PT.get(chave, str(status_bruto))
+
 def _traduzir_status_bus(status_bruto):
     if not status_bruto:
         return "estado desconhecido"
@@ -1101,53 +1118,68 @@ def get_guimabus_data(route_id: str = None):
 
         total_atraso = 0
         count_com_atraso = 0
-        algum_bus_com_proxima_paragem = False
         resumo = "Dados de frota em tempo real (Guimabus):\n"
         for bus in veiculos:
-            id_bus = _first_value(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
-            linha = _first_value(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
-            status_bruto = _first_value(bus, ["busStatus", "status", "state"], None)
-            atraso = _first_value(bus, ["delay", "delayMinutes", "delay_min"], None)
-            proxima_paragem = _first_value(bus, [
-                "nextStop", "nextStopName", "proximaParagem", "destinationStop",
-                "headsign", "nextStopDescription", "stopName"
-            ], None)
-            eta_proxima = _first_value(bus, [
-                "etaNextStop", "nextStopEta", "minutesToNextStop", "timeToNextStop",
-                "eta", "etaMinutes", "waitTime", "waitingTime"
-            ], None)
-            distancia_proxima = _first_value(bus, [
-                "distanceToNextStop", "distance", "distanceMeters", "distanceToStop"
-            ], None)
+            # Campos confirmados com um payload real da API em 2026-07-26:
+            # {"id","position":{"lat","lon"},"speed","status","color","busStatus","delay"}
+            # A API NÃO devolve o número da linha por veículo, nem "próxima paragem",
+            # nem "sentido" (Ida/Volta) — tentativas anteriores de ler esses campos
+            # eram suposições e nunca vinham preenchidas. Foram removidas.
+            id_bus = bus.get("id", "N/A")
+            # Como o pedido já filtra por routeId, sabemos com certeza a que linha
+            # este autocarro pertence, mesmo que a API não o repita no próprio registo.
+            linha = route_id
+            delay = bus.get("delay")
+            velocidade = bus.get("speed")
+
+            # "status" (pontualidade: ontime/late/early) e "busStatus" (estado físico:
+            # incomingAt/atStop/enRoute) são DOIS campos distintos — antes só se lia um
+            # e descartava o outro.
+            status_pontualidade = _traduzir_pontualidade_bus(bus.get("status"))
+            status_fisico = _traduzir_status_bus(bus.get("busStatus"))
 
             linha_txt = f" (Linha {linha})" if linha else ""
-            atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
-            status_txt = _traduzir_status_bus(status_bruto)
-            resumo += f"- Autocarro {id_bus}{linha_txt}: {status_txt} (Atraso: {atraso_txt})"
+            atraso_txt = f"{delay}min" if delay is not None else "desconhecido"
+            resumo += f"- Autocarro {id_bus}{linha_txt}: {status_fisico}, {status_pontualidade} (Atraso: {atraso_txt})"
 
-            if proxima_paragem:
-                algum_bus_com_proxima_paragem = True
-                resumo += f" — próxima paragem: {proxima_paragem}"
-                if eta_proxima is not None:
-                    resumo += f" (chega em ~{eta_proxima} min)"
-                elif distancia_proxima is not None:
-                    resumo += f" (a ~{distancia_proxima}m)"
+            if isinstance(velocidade, (int, float)):
+                resumo += " — parado" if velocidade == 0 else f" — {velocidade} km/h"
+
+            # A API não diz qual é a próxima paragem — calculamos NÓS a paragem
+            # oficial mais próxima da posição GPS atual, usando a mesma lógica de
+            # distância que já existe para localizar cafés/moradas. Isto é uma
+            # APROXIMAÇÃO calculada, não uma confirmação direta da API.
+            posicao = bus.get("position")
+            if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao and LOCAL_MAP:
+                lat_bus, lon_bus = posicao["lat"], posicao["lon"]
+                paragem_mais_perto, menor_dist = None, float("inf")
+                for dados_local in LOCAL_MAP.values():
+                    if dados_local.get("tipo") in ["bus_stop", "public_transport"]:
+                        d = calculate_distance(lat_bus, lon_bus, dados_local["lat"], dados_local["lon"])
+                        if d < menor_dist:
+                            menor_dist, paragem_mais_perto = d, dados_local.get("nome_real")
+                if paragem_mais_perto:
+                    resumo += f" — perto de '{paragem_mais_perto}' (~{int(menor_dist)}m, calculado por GPS)"
+
             resumo += "\n"
 
-            if isinstance(atraso, (int, float)):
-                total_atraso += atraso
+            if isinstance(delay, (int, float)):
+                total_atraso += delay
                 count_com_atraso += 1
 
         if count_com_atraso > 0:
             media = total_atraso / count_com_atraso
             resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
 
-        if not algum_bus_com_proxima_paragem:
-            resumo += (
-                "\n\nℹ️ Nota: a API de tracking em tempo real não devolveu informação sobre "
-                "a próxima paragem/distância para nenhum destes autocarros neste momento — "
-                "só é possível confirmar o estado geral e o atraso."
-            )
+        resumo += (
+            "\n\nℹ️ Nota: a API de tracking em tempo real da Guimabus não devolve o "
+            "sentido (Ida/Volta) nem uma 'próxima paragem oficial' — só posição GPS, "
+            "velocidade, estado e atraso. A proximidade a uma paragem indicada acima "
+            "é uma APROXIMAÇÃO calculada por distância GPS, não é garantido que seja "
+            "essa a próxima paragem real do trajeto (o autocarro pode estar a "
+            "afastar-se dela, não a aproximar-se). Não presumas o sentido sem "
+            "confirmares com o utilizador ou com os horários em cache."
+        )
         return resumo
     except Exception as e:
         return f"Erro na ligação ao tracking: {e}"
@@ -2800,7 +2832,7 @@ if prompt:
                 16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, you MUST use 'query_transit_notices_tool' before answering — never say you have no way to check, and never invent a notice that tool didn't return.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
-                If a tool's result contains "⚠️ NOT CONFIRMED", "📍", or "🌙", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact, and NEVER present a night-line-only leg ("🌙" warning) as if it were a normal daytime option without flagging it clearly."""
+                If a tool's result contains "⚠️ NOT CONFIRMED", "📍", "🌙", or "ℹ️", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact, NEVER present a night-line-only leg ("🌙" warning) as if it were a normal daytime option without flagging it clearly, and NEVER drop an "ℹ️" note about missing real-time fields (e.g. direction/next-stop data) just to make the answer sound more complete — always mention explicitly which detail you could NOT confirm."""
                 
                 PROMPT_INTERVIEW = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
