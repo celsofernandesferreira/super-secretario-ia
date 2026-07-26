@@ -1098,9 +1098,12 @@ def _traduzir_status_bus(status_bruto):
 def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = "https://gmr.elevensystems.pt/api/locations"
+    # NOTA IMPORTANTE (confirmado pelo utilizador em 2026-07-26): o parâmetro
+    # "routeId" NÃO filtra de forma fiável — houve um caso confirmado em que a
+    # linha 11 estava genuinamente em circulação, mas o pedido filtrado por
+    # routeId=11 devolveu uma lista vazia. Por isso deixámos de o enviar à API:
+    # pedimos SEMPRE a frota completa (todas as linhas).
     params = {"passengerInfo": "true"}
-    if route_id:
-        params["routeId"] = route_id
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=8)
@@ -1113,72 +1116,121 @@ def get_guimabus_data(route_id: str = None):
 
         veiculos = _extract_vehicle_list(dados)
         if not veiculos:
-            linha_txt = f" da linha {route_id}" if route_id else ""
-            return f"Não há autocarros{linha_txt} em circulação neste momento."
+            return "Não há nenhum autocarro da Guimabus em circulação neste momento (frota completa, todas as linhas)."
+
+        # Campos confirmados com payloads reais em 2026-07-26:
+        # {"id","position":{"lat","lon"},"speed","status","color","busStatus","delay"}
+        # DESCOBERTA (confirmada com 16 autocarros reais em circulação simultânea):
+        # o "id" tem sempre o mesmo prefixo (ex: "1101...") em TODOS os veículos,
+        # independentemente da linha — não codifica a linha, é só a série da frota.
+        # Em contraste, o campo "color" REPETE-SE entre veículos diferentes (3 pares
+        # de autocarros partilhavam exatamente a mesma cor nesse teste) — isto sugere
+        # fortemente que "color" corresponde à LINHA (cor fixa por linha, prática
+        # comum em apps de transporte), não é decorativo por veículo individual.
+        # NÃO sabemos ainda qual cor corresponde a qual número de linha — para tentar
+        # inferir isso, cruzamos a posição GPS de cada grupo de cor com as paragens
+        # conhecidas de cada linha (tabela cache_paragens_linha). Continua a ser uma
+        # ESTIMATIVA, nunca comunicada como facto confirmado pela API.
+        mapa_paragem_linhas = {}
+        try:
+            conn = sqlite3.connect("agente_memoria.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT linha, paragem FROM cache_paragens_linha")
+            for linha_id, paragem in cursor.fetchall():
+                mapa_paragem_linhas.setdefault(_normalize_stop_name(paragem), set()).add(linha_id)
+            conn.close()
+        except Exception:
+            pass
+
+        def _linhas_provaveis_por_posicao(lat, lon, raio_m=250):
+            if not LOCAL_MAP:
+                return set()
+            linhas = set()
+            for dados_local in LOCAL_MAP.values():
+                if dados_local.get("tipo") in ["bus_stop", "public_transport"]:
+                    d = calculate_distance(lat, lon, dados_local["lat"], dados_local["lon"])
+                    if d <= raio_m:
+                        nome_norm = _normalize_stop_name(dados_local.get("nome_real", ""))
+                        linhas |= mapa_paragem_linhas.get(nome_norm, set())
+            return linhas
+
+        def _paragem_mais_perto(lat, lon):
+            if not LOCAL_MAP:
+                return None, None
+            paragem, menor_dist = None, float("inf")
+            for dados_local in LOCAL_MAP.values():
+                if dados_local.get("tipo") in ["bus_stop", "public_transport"]:
+                    d = calculate_distance(lat, lon, dados_local["lat"], dados_local["lon"])
+                    if d < menor_dist:
+                        menor_dist, paragem = d, dados_local.get("nome_real")
+            return paragem, menor_dist
+
+        grupos_por_cor = {}
+        for bus in veiculos:
+            grupos_por_cor.setdefault(bus.get("color", "sem_cor"), []).append(bus)
 
         total_atraso = 0
         count_com_atraso = 0
-        resumo = "Dados de frota em tempo real (Guimabus):\n"
-        for bus in veiculos:
-            # Campos confirmados com um payload real da API em 2026-07-26:
-            # {"id","position":{"lat","lon"},"speed","status","color","busStatus","delay"}
-            # A API NÃO devolve o número da linha por veículo, nem "próxima paragem",
-            # nem "sentido" (Ida/Volta) — tentativas anteriores de ler esses campos
-            # eram suposições e nunca vinham preenchidas. Foram removidas.
-            id_bus = bus.get("id", "N/A")
-            # Como o pedido já filtra por routeId, sabemos com certeza a que linha
-            # este autocarro pertence, mesmo que a API não o repita no próprio registo.
-            linha = route_id
-            delay = bus.get("delay")
-            velocidade = bus.get("speed")
+        resumo = f"Dados de frota em tempo real (Guimabus) — TODAS AS LINHAS, {len(veiculos)} autocarro(s) em circulação, agrupados por cor (possível = linha):\n"
 
-            # "status" (pontualidade: ontime/late/early) e "busStatus" (estado físico:
-            # incomingAt/atStop/enRoute) são DOIS campos distintos — antes só se lia um
-            # e descartava o outro.
-            status_pontualidade = _traduzir_pontualidade_bus(bus.get("status"))
-            status_fisico = _traduzir_status_bus(bus.get("busStatus"))
+        for cor, buses_do_grupo in grupos_por_cor.items():
+            linhas_do_grupo = set()
+            for bus in buses_do_grupo:
+                posicao = bus.get("position")
+                if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao:
+                    linhas_do_grupo |= _linhas_provaveis_por_posicao(posicao["lat"], posicao["lon"])
 
-            linha_txt = f" (Linha {linha})" if linha else ""
-            atraso_txt = f"{delay}min" if delay is not None else "desconhecido"
-            resumo += f"- Autocarro {id_bus}{linha_txt}: {status_fisico}, {status_pontualidade} (Atraso: {atraso_txt})"
+            if len(linhas_do_grupo) == 1:
+                linha_provavel_txt = f" — linha provável: {next(iter(linhas_do_grupo))} (estimado, NÃO confirmado pela API)"
+            elif len(linhas_do_grupo) > 1:
+                linha_provavel_txt = f" — linhas possíveis: {', '.join(sorted(linhas_do_grupo))} (estimado, ambíguo)"
+            else:
+                linha_provavel_txt = " — linha não identificada"
 
-            if isinstance(velocidade, (int, float)):
-                resumo += " — parado" if velocidade == 0 else f" — {velocidade} km/h"
+            resumo += f"\n🎨 Grupo cor {cor} ({len(buses_do_grupo)} autocarro(s)){linha_provavel_txt}:\n"
 
-            # A API não diz qual é a próxima paragem — calculamos NÓS a paragem
-            # oficial mais próxima da posição GPS atual, usando a mesma lógica de
-            # distância que já existe para localizar cafés/moradas. Isto é uma
-            # APROXIMAÇÃO calculada, não uma confirmação direta da API.
-            posicao = bus.get("position")
-            if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao and LOCAL_MAP:
-                lat_bus, lon_bus = posicao["lat"], posicao["lon"]
-                paragem_mais_perto, menor_dist = None, float("inf")
-                for dados_local in LOCAL_MAP.values():
-                    if dados_local.get("tipo") in ["bus_stop", "public_transport"]:
-                        d = calculate_distance(lat_bus, lon_bus, dados_local["lat"], dados_local["lon"])
-                        if d < menor_dist:
-                            menor_dist, paragem_mais_perto = d, dados_local.get("nome_real")
-                if paragem_mais_perto:
-                    resumo += f" — perto de '{paragem_mais_perto}' (~{int(menor_dist)}m, calculado por GPS)"
+            for bus in buses_do_grupo:
+                id_bus = bus.get("id", "N/A")
+                delay = bus.get("delay")
+                velocidade = bus.get("speed")
+                status_pontualidade = _traduzir_pontualidade_bus(bus.get("status"))
+                status_fisico = _traduzir_status_bus(bus.get("busStatus"))
+                atraso_txt = f"{delay}min" if delay is not None else "desconhecido"
+                resumo += f"  - Autocarro ID {id_bus}: {status_fisico}, {status_pontualidade} (Atraso: {atraso_txt})"
 
-            resumo += "\n"
+                if isinstance(velocidade, (int, float)):
+                    resumo += " — parado" if velocidade == 0 else f" — {velocidade} km/h"
 
-            if isinstance(delay, (int, float)):
-                total_atraso += delay
-                count_com_atraso += 1
+                posicao = bus.get("position")
+                if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao:
+                    paragem_perto, dist_perto = _paragem_mais_perto(posicao["lat"], posicao["lon"])
+                    if paragem_perto:
+                        resumo += f" — perto de '{paragem_perto}' (~{int(dist_perto)}m)"
+
+                resumo += "\n"
+
+                if isinstance(delay, (int, float)):
+                    total_atraso += delay
+                    count_com_atraso += 1
 
         if count_com_atraso > 0:
             media = total_atraso / count_com_atraso
-            resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
+            resumo += f"\n--- Estatística: Atraso médio da frota completa: {media:.1f} minutos. ---"
 
+        if route_id:
+            resumo += (
+                f"\n\n⚠️ NOT CONFIRMED: foi pedida a linha {route_id} especificamente. A API não indica "
+                f"a linha por veículo de forma oficial — a 'linha provável' de cada grupo de cor acima "
+                f"é uma ESTIMATIVA baseada em proximidade a paragens conhecidas, não uma confirmação. "
+                f"Se um grupo indicar linha {route_id} como provável, comunica isso como estimativa, "
+                f"nunca como facto confirmado. Se nenhum grupo apontar para a linha {route_id}, diz "
+                f"honestamente que não foi possível confirmar autocarros dessa linha neste momento."
+            )
         resumo += (
-            "\n\nℹ️ Nota: a API de tracking em tempo real da Guimabus não devolve o "
-            "sentido (Ida/Volta) nem uma 'próxima paragem oficial' — só posição GPS, "
-            "velocidade, estado e atraso. A proximidade a uma paragem indicada acima "
-            "é uma APROXIMAÇÃO calculada por distância GPS, não é garantido que seja "
-            "essa a próxima paragem real do trajeto (o autocarro pode estar a "
-            "afastar-se dela, não a aproximar-se). Não presumas o sentido sem "
-            "confirmares com o utilizador ou com os horários em cache."
+            "\n\nℹ️ Nota: a API não devolve o sentido (Ida/Volta) nem a linha oficialmente. O "
+            "agrupamento por cor e a 'linha provável' são heurísticas baseadas em observação "
+            "(cores repetidas entre veículos + proximidade GPS a paragens conhecidas) — comunica "
+            "sempre isto como estimativa, nunca como facto confirmado pela API."
         )
         return resumo
     except Exception as e:
@@ -2800,7 +2852,7 @@ if prompt:
                 {LANGUAGE_INSTRUCTION}
 
                 You have these tools related to the local Guimabus fleet:
-                - get_guimabus_data: real-time fleet status.
+                - get_guimabus_data: real-time status of the ENTIRE fleet (all lines at once) — position, speed, delay, and punctuality for every vehicle currently circulating. It does NOT tell you which line each vehicle belongs to (the API doesn't expose that, and the routeId filter parameter was confirmed unreliable, so it's no longer used). If the user asks about a specific line's real-time status, call this tool anyway (it returns the whole fleet), but be honest that you cannot confirm which vehicle(s), if any, belong to that specific line — never guess based on vehicle ID patterns or anything else not explicitly returned.
                 - get_stop_schedule: forecast of waiting times for a specific stop.
                 - query_line_schedule_cache: queries the local cache to read fixed schedules and timetables.
                 - query_pass_types_cache_tool: reads the pass types.
