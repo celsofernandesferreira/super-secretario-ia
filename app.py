@@ -1094,6 +1094,20 @@ def _traduzir_status_bus(status_bruto):
     chave = str(status_bruto).strip().lower()
     return _STATUS_GUIMABUS_PT.get(chave, str(status_bruto))
 
+# Tabela de cores CONFIRMADAS manualmente (não é heurística/estimativa) — cada
+# entrada foi verificada comparando o percurso desenhado no mapa oficial da
+# Guimabus (com uma linha específica selecionada) com as coordenadas GPS reais
+# de autocarros dessa mesma cor devolvidos pela API. Regista aqui cada cor que
+# fores confirmando (basta tirar print do mapa oficial com uma linha
+# selecionada e comparar as coordenadas, ou pedir para eu comparar).
+CORES_LINHA_CONFIRMADAS = {
+    # Confirmado em 2026-07-26: percurso do mapa oficial (Guimarães/Creixomil ao
+    # norte até Vizela/Teixugueiras ao sul) coincide com as coordenadas de dois
+    # autocarros de cor "FF9900" (11010379 perto de Vizela, 11010543 perto de
+    # Guimarães) num payload real da API.
+    "FF9900": "11",
+}
+
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
@@ -1174,18 +1188,22 @@ def get_guimabus_data(route_id: str = None):
         resumo = f"Dados de frota em tempo real (Guimabus) — TODAS AS LINHAS, {len(veiculos)} autocarro(s) em circulação, agrupados por cor (possível = linha):\n"
 
         for cor, buses_do_grupo in grupos_por_cor.items():
-            linhas_do_grupo = set()
-            for bus in buses_do_grupo:
-                posicao = bus.get("position")
-                if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao:
-                    linhas_do_grupo |= _linhas_provaveis_por_posicao(posicao["lat"], posicao["lon"])
-
-            if len(linhas_do_grupo) == 1:
-                linha_provavel_txt = f" — linha provável: {next(iter(linhas_do_grupo))} (estimado, NÃO confirmado pela API)"
-            elif len(linhas_do_grupo) > 1:
-                linha_provavel_txt = f" — linhas possíveis: {', '.join(sorted(linhas_do_grupo))} (estimado, ambíguo)"
+            cor_norm = str(cor).strip().upper()
+            if cor_norm in CORES_LINHA_CONFIRMADAS:
+                linha_provavel_txt = f" — linha CONFIRMADA: {CORES_LINHA_CONFIRMADAS[cor_norm]} (verificado manualmente, não é estimativa)"
             else:
-                linha_provavel_txt = " — linha não identificada"
+                linhas_do_grupo = set()
+                for bus in buses_do_grupo:
+                    posicao = bus.get("position")
+                    if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao:
+                        linhas_do_grupo |= _linhas_provaveis_por_posicao(posicao["lat"], posicao["lon"])
+
+                if len(linhas_do_grupo) == 1:
+                    linha_provavel_txt = f" — linha provável: {next(iter(linhas_do_grupo))} (estimado, NÃO confirmado pela API)"
+                elif len(linhas_do_grupo) > 1:
+                    linha_provavel_txt = f" — linhas possíveis: {', '.join(sorted(linhas_do_grupo))} (estimado, ambíguo)"
+                else:
+                    linha_provavel_txt = " — linha não identificada"
 
             resumo += f"\n🎨 Grupo cor {cor} ({len(buses_do_grupo)} autocarro(s)){linha_provavel_txt}:\n"
 
