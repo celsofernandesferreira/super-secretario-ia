@@ -754,6 +754,40 @@ except Exception:
 
 
 # --- FACEBOOK RSS INTEGRATION (SMART NATIVE LOGIC) ---
+
+# Feriados nacionais portugueses de DATA FIXA (dia, mês não muda de ano para ano).
+# NOTA: não cobre feriados móveis (Carnaval, Sexta-feira Santa, Páscoa, Corpo de
+# Deus) nem feriados municipais (ex: S. Torcato em Guimarães) — se precisares
+# de precisão total nesses dias, é preciso adicionar manualmente aqui.
+_FERIADOS_FIXOS_PT = {
+    (1, 1): "Ano Novo",
+    (4, 25): "Dia da Liberdade",
+    (5, 1): "Dia do Trabalhador",
+    (6, 10): "Dia de Portugal",
+    (8, 15): "Assunção de Nossa Senhora",
+    (10, 5): "Implantação da República",
+    (11, 1): "Dia de Todos os Santos",
+    (12, 1): "Restauração da Independência",
+    (12, 8): "Imaculada Conceição",
+    (12, 25): "Natal",
+}
+
+_DIAS_SEMANA_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+
+def _tipo_de_dia_pt(data: datetime) -> str:
+    """Calcula em código (nunca em texto/prompt) que tipo de dia é hoje para efeitos
+    de horários de autocarro: 'Dia Útil', 'Sábado' ou 'Domingo e Feriados'. Isto
+    existe para o modelo NUNCA ter de calcular sozinho o dia da semana a partir da
+    data — só recebe o resultado já pronto, o que evita erros de cálculo."""
+    if (data.month, data.day) in _FERIADOS_FIXOS_PT:
+        return f"Domingo e Feriados (hoje é feriado: {_FERIADOS_FIXOS_PT[(data.month, data.day)]})"
+    dia_semana = data.weekday()  # 0 = segunda ... 6 = domingo
+    if dia_semana == 6:
+        return "Domingo e Feriados"
+    if dia_semana == 5:
+        return "Sábado"
+    return "Dia Útil"
+
 def extract_future_date(texto):
     PT_MONTHS = {
         "janeiro": 1, "jan": 1, "fevereiro": 2, "fev": 2, "março": 3, "mar": 3,
@@ -1257,12 +1291,31 @@ def query_line_schedule_cache(linha_id: str):
             resultado = cursor.fetchone()
             if resultado:
                 break
+
+        # Se a linha pedida for puramente numérica (ex: "11") e não houver cache para
+        # ela, NUNCA vamos silenciosamente devolver a versão noturna ("N11") como se
+        # fosse a resposta — isso confundia o utilizador ao apresentar uma linha
+        # diferente sem qualquer aviso. Em vez disso, avisamos explicitamente que só a
+        # noturna está em cache, para o agente comunicar essa distinção claramente.
+        aviso_apenas_noturna = ""
+        if not resultado and entrada.isdigit():
+            cursor.execute("SELECT conteudo_txt, url, ultima_atualizacao FROM cache_horarios WHERE linha = ?", (f"N{entrada}",))
+            resultado_noturna = cursor.fetchone()
+            if resultado_noturna:
+                resultado = resultado_noturna
+                aviso_apenas_noturna = (
+                    f"\n\n⚠️ ATENÇÃO: não existe em cache a linha diurna '{entrada}'. "
+                    f"O que se segue são os horários da linha NOTURNA 'N{entrada}' — NÃO apresentes isto "
+                    f"como se fosse a linha '{entrada}' normal. Diz claramente ao utilizador que só "
+                    f"encontraste a versão noturna e sugere confirmar no site oficial ou pedir ao "
+                    f"administrador para sincronizar novamente."
+                )
         conn.close()
         
         if resultado:
             conteudo_txt, url_pdf, ultima_atualizacao = resultado
             link_txt = f"\n\n🔗 Link oficial para confirmares: {url_pdf}" if url_pdf else ""
-            return f"Horários em Cache para a Linha {linha_id} (Atualizado em {ultima_atualizacao}):\n\n{conteudo_txt}{link_txt}"
+            return f"Horários em Cache para a Linha {linha_id} (Atualizado em {ultima_atualizacao}):\n\n{conteudo_txt}{link_txt}{aviso_apenas_noturna}"
         return f"Não existem horários em cache para a linha {linha_id}. Peça ao administrador para rodar a Sincronização Geral."
     except Exception as e:
         return f"Erro na leitura da cache SQLite: {e}"
@@ -1859,6 +1912,21 @@ def _e_linha_noturna(linha_id: str) -> bool:
     # Regra 8 do prompt: linhas cujo identificador começa por "N" são noturnas.
     return str(linha_id).strip().upper().startswith("N")
 
+def _priorizar_diurnas(linhas):
+    """Given a list/set of line ids for one leg of a trip, returns (lines sorted
+    with day lines first then night lines, warning_or_None). The warning is set
+    ONLY when EVERY line found for that leg is a night line — this is what lets
+    callers avoid silently presenting a night-only line as if it were a normal
+    daytime option (the exact bug reported: a transfer suggestion showing only
+    'N11' with no indication it wasn't the regular daytime '11')."""
+    linhas_unicas = sorted(set(linhas))
+    diurnas = [l for l in linhas_unicas if not _e_linha_noturna(l)]
+    noturnas = [l for l in linhas_unicas if _e_linha_noturna(l)]
+    aviso = None
+    if not diurnas and noturnas:
+        aviso = "só há linha(s) NOTURNA(S) disponível(eis) para este troço — não confundir com a linha diurna equivalente"
+    return diurnas + noturnas, aviso
+
 def plan_trip_with_transfer(origem: str, destino: str):
     if not origem or not destino: return "É necessário indicar a paragem de origem e a paragem de destino."
     origem_norm, destino_norm = _normalize_stop_name(origem), _normalize_stop_name(destino)
@@ -1977,9 +2045,11 @@ def plan_trip_with_transfer(origem: str, destino: str):
     if transbordos:
         resumo = f"Não há linha direta. Sugestão de transbordo:\n\n"
         for t in sorted(transbordos):
-            l_to = [l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())]
-            l_from = [l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())]
+            l_to, aviso_to = _priorizar_diurnas([l for l in linhas_origem if t in mapa_linha_paragens.get(l, set())])
+            l_from, aviso_from = _priorizar_diurnas([l for l in linhas_destino if t in mapa_linha_paragens.get(l, set())])
             resumo += f"- Via **{t}**: apanha linha {'/'.join(l_to)} e depois linha {'/'.join(l_from)}.\n"
+            if aviso_to: resumo += f"  🌙 Nota (1º troço até '{t}'): {aviso_to}.\n"
+            if aviso_from: resumo += f"  🌙 Nota (2º troço a partir de '{t}'): {aviso_from}.\n"
         return resumo + aviso_precisao
 
     # Não há nenhuma paragem literalmente em comum — antes de desistir, verifica se
@@ -1997,13 +2067,15 @@ def plan_trip_with_transfer(origem: str, destino: str):
         )
         combinacoes_mostradas = 0
         for stop_o in hubs_o:
-            l_to = [l for l in linhas_origem if stop_o in mapa_linha_paragens.get(l, set())]
+            l_to, aviso_to = _priorizar_diurnas([l for l in linhas_origem if stop_o in mapa_linha_paragens.get(l, set())])
             for stop_d in hubs_d:
-                l_from = [l for l in linhas_destino if stop_d in mapa_linha_paragens.get(l, set())]
+                l_from, aviso_from = _priorizar_diurnas([l for l in linhas_destino if stop_d in mapa_linha_paragens.get(l, set())])
                 if stop_o == stop_d:
                     resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}' e depois linha {'/'.join(l_from)} — mesma paragem.\n"
                 else:
                     resumo += f"- Apanha linha {'/'.join(l_to)} até '{stop_o}', caminha até '{stop_d}', e apanha linha {'/'.join(l_from)}.\n"
+                if aviso_to: resumo += f"  🌙 Nota (até '{stop_o}'): {aviso_to}.\n"
+                if aviso_from: resumo += f"  🌙 Nota (a partir de '{stop_d}'): {aviso_from}.\n"
                 combinacoes_mostradas += 1
                 if combinacoes_mostradas >= 4:
                     break
@@ -2661,7 +2733,7 @@ if prompt:
                 3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
                 4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
                 5. If a route has several lines (direct or for either leg of a transfer), you MUST list ALL of them, not just one or two examples — never summarise with "e.g." or pick just one when the tool returned several.
-                6. Whenever a schedule is requested, provide all schedules for the given day; if no day is given, all schedules for the current day.
+                6. Whenever a schedule is requested WITHOUT the user mentioning a specific day, you MUST use the "TIPO DE DIA PARA EFEITOS DE HORÁRIOS" value given in the system context (Dia Útil / Sábado / Domingo e Feriados) — it is already calculated for you, NEVER calculate the day of the week yourself and never assume "Dia Útil" by default if today happens to be a weekend or holiday. Inside the schedule text returned by the tools, read ONLY the section matching that day type (usually under headers like "Dias Úteis", "Sábados", "Domingos e Feriados"). If the user explicitly asks about a different day (e.g. "e ao sábado?", "e num feriado?"), use that instead of today's.
                 7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
                 8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
                 9. From any stop it is possible to transfer in the centre of Guimarães by walking between the stops s.goncalo, central de camionagem, s.damaso norte or s.damaso sul. Even if it takes two or three transfers, you must find a solution.
@@ -2672,10 +2744,9 @@ if prompt:
                 14. Even if you've already found a solution, you must check all of them.
                 15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
                 16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, you MUST use 'query_transit_notices_tool' before answering — never say you have no way to check, and never invent a notice that tool didn't return.
-                17. You must always check day lines, if N behind the number means its nocturnal.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
-                If a tool's result contains "⚠️ NOT CONFIRMED" or "📍", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact."""
+                If a tool's result contains "⚠️ NOT CONFIRMED", "📍", or "🌙", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact, and NEVER present a night-line-only leg ("🌙" warning) as if it were a normal daytime option without flagging it clearly."""
                 
                 PROMPT_INTERVIEW = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
                 Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
@@ -2749,7 +2820,12 @@ if prompt:
                         historico_api.append({"role": role_api, "parts": [msg["content"]]})
                 
                 agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-                contexto_data = f"[DATA E HORA ATUAL DO SISTEMA: {agora.strftime('%Y-%m-%d %H:%M')}.]"
+                tipo_dia_hoje = _tipo_de_dia_pt(agora)
+                nome_dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
+                contexto_data = (
+                    f"[DATA E HORA ATUAL DO SISTEMA: {agora.strftime('%Y-%m-%d %H:%M')} ({nome_dia_semana}). "
+                    f"TIPO DE DIA PARA EFEITOS DE HORÁRIOS (já calculado, não precisas de calcular): {tipo_dia_hoje}.]"
+                )
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
