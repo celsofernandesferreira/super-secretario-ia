@@ -1094,19 +1094,93 @@ def _traduzir_status_bus(status_bruto):
     chave = str(status_bruto).strip().lower()
     return _STATUS_GUIMABUS_PT.get(chave, str(status_bruto))
 
-# Tabela de cores CONFIRMADAS manualmente (não é heurística/estimativa) — cada
-# entrada foi verificada comparando o percurso desenhado no mapa oficial da
-# Guimabus (com uma linha específica selecionada) com as coordenadas GPS reais
-# de autocarros dessa mesma cor devolvidos pela API. Regista aqui cada cor que
-# fores confirmando (basta tirar print do mapa oficial com uma linha
-# selecionada e comparar as coordenadas, ou pedir para eu comparar).
-CORES_LINHA_CONFIRMADAS = {
-    # Confirmado em 2026-07-26: percurso do mapa oficial (Guimarães/Creixomil ao
-    # norte até Vizela/Teixugueiras ao sul) coincide com as coordenadas de dois
-    # autocarros de cor "FF9900" (11010379 perto de Vizela, 11010543 perto de
-    # Guimarães) num payload real da API.
-    "FF9900": "11",
-}
+def _formatar_numero_linha(nome_curto: str) -> str:
+    """Formata o número/código da linha da forma como os utilizadores o conhecem
+    (ex: '011' -> '11', '004' -> '4'), tirando zeros à esquerda só quando o
+    código é puramente numérico. Códigos como 'N11' (noturna) ou '2300'
+    (especial) já não têm zeros à esquerda a tirar, por isso ficam iguais."""
+    nome_curto = str(nome_curto).strip()
+    if nome_curto.isdigit():
+        return str(int(nome_curto))
+    return nome_curto
+
+def list_all_lines_tool():
+    """Lista TODAS as linhas oficialmente ativas na rede da Guimabus (número e
+    nome apenas — NUNCA menciona a cor nem o id interno da base de dados, são
+    detalhes técnicos irrelevantes para quem pergunta). Vai sempre buscar a
+    lista em tempo real à API oficial (com cache de 24h), por isso deteta
+    automaticamente se uma linha for descontinuada ou adicionada pela Guimabus,
+    sem precisar de qualquer atualização manual do código."""
+    cor_para_linhas, linha_para_info = get_line_metadata()
+    if not linha_para_info:
+        return "Não foi possível obter a lista oficial de linhas neste momento — tenta novamente mais tarde."
+
+    linhas_dia, linhas_noite, linhas_especiais = [], [], []
+    for nome_curto, info in linha_para_info.items():
+        if not info.get("ativa", True):
+            continue
+        entrada = f"{_formatar_numero_linha(nome_curto)} — {info['nome']}"
+        if nome_curto.startswith("N"):
+            linhas_noite.append(entrada)
+        elif nome_curto.isdigit() and int(nome_curto) >= 2000:
+            linhas_especiais.append(entrada)
+        else:
+            linhas_dia.append(entrada)
+
+    total = len(linhas_dia) + len(linhas_noite) + len(linhas_especiais)
+    resumo = f"Linhas atualmente ativas na rede Guimabus ({total} no total):\n\n"
+    if linhas_dia:
+        resumo += "🚌 Linhas diurnas:\n" + "\n".join(f"- {l}" for l in sorted(linhas_dia)) + "\n\n"
+    if linhas_noite:
+        resumo += "🌙 Linhas noturnas:\n" + "\n".join(f"- {l}" for l in sorted(linhas_noite)) + "\n\n"
+    if linhas_especiais:
+        resumo += "🎉 Serviços especiais:\n" + "\n".join(f"- {l}" for l in sorted(linhas_especiais)) + "\n"
+    return resumo
+
+@st.cache_data(ttl=86400)
+def get_line_metadata():
+    """Vai buscar a lista OFICIAL e completa de linhas (id, nome completo, número
+    curto, cor, se está ativa) diretamente à API da Guimabus. Confirmado pelo
+    utilizador em 2026-07-26 via https://gmr.elevensystems.pt/api/route — este
+    endpoint dá uma correspondência AUTORITATIVA cor->linha, muito mais fiável
+    do que a antiga estimativa por proximidade GPS.
+
+    Devolve dois dicionários:
+    - cor_para_linhas: {"FF9900": {"011"}, "999933": {"012", "014"}, ...}
+      (a maioria das cores tem só 1 linha, mas algumas são partilhadas por pares
+      de linhas "circulares" que são variantes de ida/volta do mesmo trajeto, ou
+      pelas linhas noturnas/serviços especiais que partilham uma cor genérica)
+    - linha_para_info: {"011": {"nome": "PEREIRINHAS | GANDARELA", "ativa": True}, ...}
+
+    Cache de 24h porque esta informação (nomes/cores das linhas) muda muito
+    raramente, ao contrário da posição da frota que muda a cada minuto.
+    """
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
+    url = "https://gmr.elevensystems.pt/api/route"
+    try:
+        response = requests.get(url, headers=headers, timeout=8)
+        response.raise_for_status()
+        linhas = response.json()
+        if not isinstance(linhas, list):
+            return {}, {}
+
+        cor_para_linhas = {}
+        linha_para_info = {}
+        for linha in linhas:
+            nome_curto = str(linha.get("nameShort", "")).strip().upper()
+            cor = str(linha.get("color", "")).strip().upper()
+            if not nome_curto:
+                continue
+            linha_para_info[nome_curto] = {
+                "nome": linha.get("name", ""),
+                "ativa": linha.get("isActive", True),
+            }
+            if cor:
+                cor_para_linhas.setdefault(cor, set()).add(nome_curto)
+        return cor_para_linhas, linha_para_info
+    except Exception as e:
+        logging.error(f"Erro ao obter metadados oficiais das linhas: {e}")
+        return {}, {}
 
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
@@ -1132,19 +1206,16 @@ def get_guimabus_data(route_id: str = None):
         if not veiculos:
             return "Não há nenhum autocarro da Guimabus em circulação neste momento (frota completa, todas as linhas)."
 
-        # Campos confirmados com payloads reais em 2026-07-26:
-        # {"id","position":{"lat","lon"},"speed","status","color","busStatus","delay"}
-        # DESCOBERTA (confirmada com 16 autocarros reais em circulação simultânea):
-        # o "id" tem sempre o mesmo prefixo (ex: "1101...") em TODOS os veículos,
-        # independentemente da linha — não codifica a linha, é só a série da frota.
-        # Em contraste, o campo "color" REPETE-SE entre veículos diferentes (3 pares
-        # de autocarros partilhavam exatamente a mesma cor nesse teste) — isto sugere
-        # fortemente que "color" corresponde à LINHA (cor fixa por linha, prática
-        # comum em apps de transporte), não é decorativo por veículo individual.
-        # NÃO sabemos ainda qual cor corresponde a qual número de linha — para tentar
-        # inferir isso, cruzamos a posição GPS de cada grupo de cor com as paragens
-        # conhecidas de cada linha (tabela cache_paragens_linha). Continua a ser uma
-        # ESTIMATIVA, nunca comunicada como facto confirmado pela API.
+        # Tabela OFICIAL cor->linha(s), confirmada via https://gmr.elevensystems.pt/api/route
+        # (2026-07-26). A maioria das cores mapeia para 1 única linha; algumas são
+        # partilhadas por pares de linhas "circulares" (variantes de ida/volta do
+        # mesmo trajeto físico) ou pelas linhas noturnas/serviços especiais (que
+        # usam uma cor genérica comum). Quando há ambiguidade genuína, usamos a
+        # proximidade GPS a paragens conhecidas como DESEMPATE, mas só entre os
+        # candidatos que a tabela oficial já reduziu — não é preciso pesquisar
+        # todas as linhas existentes como acontecia antes de termos esta tabela.
+        cor_para_linhas, linha_para_info = get_line_metadata()
+
         mapa_paragem_linhas = {}
         try:
             conn = sqlite3.connect("agente_memoria.db")
@@ -1179,33 +1250,48 @@ def get_guimabus_data(route_id: str = None):
                         menor_dist, paragem = d, dados_local.get("nome_real")
             return paragem, menor_dist
 
-        grupos_por_cor = {}
+        # Primeiro passo: para cada autocarro, resolve a linha (via cor->linha oficial,
+        # com desempate por GPS só quando a cor é genuinamente partilhada), e agrupa
+        # pelo resultado dessa resolução — NUNCA pela cor em si. A cor e o id interno
+        # da base de dados são detalhes técnicos que não devem chegar ao utilizador.
+        grupos_por_linha_resolvida = {}
         for bus in veiculos:
-            grupos_por_cor.setdefault(bus.get("color", "sem_cor"), []).append(bus)
+            cor_norm = str(bus.get("color", "")).strip().upper()
+            candidatos = cor_para_linhas.get(cor_norm, set())
+            candidatos_ativos = {l for l in candidatos if linha_para_info.get(l, {}).get("ativa", True)}
+            candidatos_finais = candidatos_ativos if candidatos_ativos else candidatos
+
+            if len(candidatos_finais) == 1:
+                chave_grupo = next(iter(candidatos_finais))
+            elif len(candidatos_finais) > 1:
+                posicao = bus.get("position")
+                linhas_desempate = set()
+                if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao:
+                    linhas_desempate = _linhas_provaveis_por_posicao(posicao["lat"], posicao["lon"]) & candidatos_finais
+                if len(linhas_desempate) == 1:
+                    chave_grupo = next(iter(linhas_desempate))
+                else:
+                    chave_grupo = ("AMBIGUO", tuple(sorted(candidatos_finais)))
+            else:
+                chave_grupo = ("NAO_IDENTIFICADO",)
+
+            grupos_por_linha_resolvida.setdefault(chave_grupo, []).append(bus)
 
         total_atraso = 0
         count_com_atraso = 0
-        resumo = f"Dados de frota em tempo real (Guimabus) — TODAS AS LINHAS, {len(veiculos)} autocarro(s) em circulação, agrupados por cor (possível = linha):\n"
+        resumo = f"Dados de frota em tempo real (Guimabus) — TODAS AS LINHAS, {len(veiculos)} autocarro(s) em circulação:\n"
 
-        for cor, buses_do_grupo in grupos_por_cor.items():
-            cor_norm = str(cor).strip().upper()
-            if cor_norm in CORES_LINHA_CONFIRMADAS:
-                linha_provavel_txt = f" — linha CONFIRMADA: {CORES_LINHA_CONFIRMADAS[cor_norm]} (verificado manualmente, não é estimativa)"
+        for chave_grupo, buses_do_grupo in grupos_por_linha_resolvida.items():
+            if isinstance(chave_grupo, str):
+                nome_linha = linha_para_info.get(chave_grupo, {}).get("nome", "")
+                cabecalho = f"Linha {_formatar_numero_linha(chave_grupo)} — {nome_linha}"
+            elif chave_grupo[0] == "AMBIGUO":
+                nomes = [f"{_formatar_numero_linha(l)} ({linha_para_info.get(l, {}).get('nome','')})" for l in chave_grupo[1]]
+                cabecalho = f"Linha não confirmada com certeza — candidatas: {', '.join(nomes)}"
             else:
-                linhas_do_grupo = set()
-                for bus in buses_do_grupo:
-                    posicao = bus.get("position")
-                    if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao:
-                        linhas_do_grupo |= _linhas_provaveis_por_posicao(posicao["lat"], posicao["lon"])
+                cabecalho = "Linha não identificada"
 
-                if len(linhas_do_grupo) == 1:
-                    linha_provavel_txt = f" — linha provável: {next(iter(linhas_do_grupo))} (estimado, NÃO confirmado pela API)"
-                elif len(linhas_do_grupo) > 1:
-                    linha_provavel_txt = f" — linhas possíveis: {', '.join(sorted(linhas_do_grupo))} (estimado, ambíguo)"
-                else:
-                    linha_provavel_txt = " — linha não identificada"
-
-            resumo += f"\n🎨 Grupo cor {cor} ({len(buses_do_grupo)} autocarro(s)){linha_provavel_txt}:\n"
+            resumo += f"\n🚌 {cabecalho} ({len(buses_do_grupo)} autocarro(s)):\n"
 
             for bus in buses_do_grupo:
                 id_bus = bus.get("id", "N/A")
@@ -1236,19 +1322,32 @@ def get_guimabus_data(route_id: str = None):
             resumo += f"\n--- Estatística: Atraso médio da frota completa: {media:.1f} minutos. ---"
 
         if route_id:
-            resumo += (
-                f"\n\n⚠️ NOT CONFIRMED: foi pedida a linha {route_id} especificamente. A API não indica "
-                f"a linha por veículo de forma oficial — a 'linha provável' de cada grupo de cor acima "
-                f"é uma ESTIMATIVA baseada em proximidade a paragens conhecidas, não uma confirmação. "
-                f"Se um grupo indicar linha {route_id} como provável, comunica isso como estimativa, "
-                f"nunca como facto confirmado. Se nenhum grupo apontar para a linha {route_id}, diz "
-                f"honestamente que não foi possível confirmar autocarros dessa linha neste momento."
-            )
+            route_id_norm = str(route_id).strip().upper()
+            # Normaliza para o formato "nameShort" da tabela oficial (ex: "11" -> "011").
+            candidatos_id = {route_id_norm}
+            if route_id_norm.isdigit():
+                candidatos_id.add(route_id_norm.zfill(3))
+                candidatos_id.add(route_id_norm.lstrip("0") or "0")
+            info_linha_pedida = next((linha_para_info[c] for c in candidatos_id if c in linha_para_info), None)
+
+            if info_linha_pedida:
+                resumo += (
+                    f"\n\nℹ️ Foi pedida a linha {route_id} ({info_linha_pedida['nome']}). Procura acima "
+                    f"pelo grupo com esse número de linha no cabeçalho — se nenhum grupo corresponder, "
+                    f"é porque não há autocarros dessa linha em circulação neste momento (diz isto "
+                    f"honestamente, não inventes)."
+                )
+            else:
+                resumo += (
+                    f"\n\n⚠️ NOT CONFIRMED: a linha '{route_id}' não foi encontrada na tabela oficial de "
+                    f"linhas — confirma o número com o utilizador antes de assumir que não existe."
+                )
         resumo += (
-            "\n\nℹ️ Nota: a API não devolve o sentido (Ida/Volta) nem a linha oficialmente. O "
-            "agrupamento por cor e a 'linha provável' são heurísticas baseadas em observação "
-            "(cores repetidas entre veículos + proximidade GPS a paragens conhecidas) — comunica "
-            "sempre isto como estimativa, nunca como facto confirmado pela API."
+            "\n\nℹ️ Nota: a API não devolve o sentido (Ida/Volta) de cada autocarro. A linha de cada "
+            "grupo acima vem de uma tabela OFICIAL da Guimabus (não é uma estimativa) exceto quando "
+            "o cabeçalho diz explicitamente 'não confirmada com certeza' — nesses casos raros, "
+            "comunica isso como estimativa. NUNCA menciones cores nem ids internos da base de dados "
+            "ao utilizador — só o número e o nome da linha interessam."
         )
         return resumo
     except Exception as e:
@@ -2882,6 +2981,7 @@ if prompt:
                 - find_nearest_stop: finds the nearest stop (geographically) to a parish or place. It NEVER confirms which line serves that stop — that must always be verified afterwards with 'plan_trip_with_transfer' or 'query_line_schedule_cache'. NEVER invent the line number from this tool alone. Use this only when you just need the stop, not the full route — for routes use 'plan_trip_from_place'.
                 - search_places_by_type: takes a type/category of place (e.g. "café", "restaurant", "pharmacy", "supermarket") and returns the list of places of that type found on the static map of Guimarães (geo_guimaraes.json). Use this tool whenever the user asks to "discover"/"list"/"what options are there" for a type of place, instead of inventing establishment names. Once you find a name, you can use 'find_nearest_stop', 'generate_google_maps_link' or 'plan_trip_from_place' with that exact name.
                 - query_transit_notices_tool: reads the live notices feed (Guimabus's official Facebook page, via an RSS proxy) for roadworks, strikes, traffic conditioning, service changes, or special/holiday schedules. ALWAYS use this when asked about disruptions, "obras", "greve", service changes, or anything currently affecting the service — never guess or claim you have no way to check.
+                - list_all_lines_tool: lists ALL officially active lines (number and name only) directly from the Guimabus official API — ALWAYS use this when asked "what lines exist"/"quais linhas há" instead of relying on memory or the schedule cache, since this list is fetched live and automatically reflects lines added or discontinued by Guimabus, with no manual updates needed.
 
                 MANDATORY PLANNING LOGIC:
                 1. - If the origin OR the destination is any place (café, street, address, factory, point of interest) and not an obvious stop/parish, use "plan_trip_from_place" directly — don't try to guess the stop manually.
@@ -2900,6 +3000,7 @@ if prompt:
                 14. Even if you've already found a solution, you must check all of them.
                 15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
                 16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, you MUST use 'query_transit_notices_tool' before answering — never say you have no way to check, and never invent a notice that tool didn't return.
+                17. NEVER mention hex color codes or internal database ids (the small numeric "id" field from the official line list, e.g. "3" or "39") to the user — these are internal implementation details. Only ever refer to a line by its official short number (e.g. "11", "N11", "2300") and its full name (e.g. "Pereirinhas | Gandarela"). Whenever asked what lines exist, use 'list_all_lines_tool' instead of relying on memory or the schedule cache, since it reflects the live official list automatically.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
                 If a tool's result contains "⚠️ NOT CONFIRMED", "📍", "🌙", or "ℹ️", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact, NEVER present a night-line-only leg ("🌙" warning) as if it were a normal daytime option without flagging it clearly, and NEVER drop an "ℹ️" note about missing real-time fields (e.g. direction/next-stop data) just to make the answer sound more complete — always mention explicitly which detail you could NOT confirm."""
@@ -2985,7 +3086,7 @@ if prompt:
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
                 
-                agent_tools = [get_guimabus_data, get_stop_schedule, query_line_schedule_cache, query_pass_types_cache_tool, query_fare_table_cache, plan_trip_with_transfer, plan_trip_from_place, query_stop_parish_tool, generate_google_maps_link, find_nearest_stop, search_places_by_type, query_transit_notices_tool]
+                agent_tools = [get_guimabus_data, get_stop_schedule, query_line_schedule_cache, query_pass_types_cache_tool, query_fare_table_cache, plan_trip_with_transfer, plan_trip_from_place, query_stop_parish_tool, generate_google_maps_link, find_nearest_stop, search_places_by_type, query_transit_notices_tool, list_all_lines_tool]
                 
                 candidate_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
                 response = None
