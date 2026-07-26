@@ -1052,6 +1052,31 @@ DICIONARIO_PARAGENS_CONHECIDAS = {
     "estacao": "1005"
 }
 
+# Tradução de códigos de estado técnico da API para português simples. Os nomes
+# de campo/valores exatos da API real não são conhecidos com certeza (não há
+# acesso à documentação nem à rede a partir daqui) — esta lista cobre os
+# padrões mais comuns em APIs de tracking de frotas; se a API devolver um
+# código fora desta lista, mostramos o valor tal como veio, em vez de inventar
+# uma tradução.
+_STATUS_GUIMABUS_PT = {
+    "incomingat": "a chegar à paragem",
+    "atstop": "parado na paragem",
+    "enroute": "em trajeto",
+    "onroute": "em trajeto",
+    "departing": "a partir da paragem",
+    "delayed": "atrasado",
+    "stopped": "parado",
+    "moving": "em movimento",
+    "idle": "parado (sem serviço)",
+    "outofservice": "fora de serviço",
+}
+
+def _traduzir_status_bus(status_bruto):
+    if not status_bruto:
+        return "estado desconhecido"
+    chave = str(status_bruto).strip().lower()
+    return _STATUS_GUIMABUS_PT.get(chave, str(status_bruto))
+
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
@@ -1076,16 +1101,38 @@ def get_guimabus_data(route_id: str = None):
 
         total_atraso = 0
         count_com_atraso = 0
+        algum_bus_com_proxima_paragem = False
         resumo = "Dados de frota em tempo real (Guimabus):\n"
         for bus in veiculos:
             id_bus = _first_value(bus, ["id", "vehicleId", "vehicle_id", "code"], "N/A")
             linha = _first_value(bus, ["line", "lineName", "route", "routeShortName", "routeId"], None)
-            status = _first_value(bus, ["busStatus", "status", "state"], "N/A")
+            status_bruto = _first_value(bus, ["busStatus", "status", "state"], None)
             atraso = _first_value(bus, ["delay", "delayMinutes", "delay_min"], None)
+            proxima_paragem = _first_value(bus, [
+                "nextStop", "nextStopName", "proximaParagem", "destinationStop",
+                "headsign", "nextStopDescription", "stopName"
+            ], None)
+            eta_proxima = _first_value(bus, [
+                "etaNextStop", "nextStopEta", "minutesToNextStop", "timeToNextStop",
+                "eta", "etaMinutes", "waitTime", "waitingTime"
+            ], None)
+            distancia_proxima = _first_value(bus, [
+                "distanceToNextStop", "distance", "distanceMeters", "distanceToStop"
+            ], None)
 
             linha_txt = f" (Linha {linha})" if linha else ""
             atraso_txt = f"{atraso}min" if atraso is not None else "desconhecido"
-            resumo += f"- Autocarro {id_bus}{linha_txt}: Status {status} (Atraso: {atraso_txt})\n"
+            status_txt = _traduzir_status_bus(status_bruto)
+            resumo += f"- Autocarro {id_bus}{linha_txt}: {status_txt} (Atraso: {atraso_txt})"
+
+            if proxima_paragem:
+                algum_bus_com_proxima_paragem = True
+                resumo += f" — próxima paragem: {proxima_paragem}"
+                if eta_proxima is not None:
+                    resumo += f" (chega em ~{eta_proxima} min)"
+                elif distancia_proxima is not None:
+                    resumo += f" (a ~{distancia_proxima}m)"
+            resumo += "\n"
 
             if isinstance(atraso, (int, float)):
                 total_atraso += atraso
@@ -1094,6 +1141,13 @@ def get_guimabus_data(route_id: str = None):
         if count_com_atraso > 0:
             media = total_atraso / count_com_atraso
             resumo += f"\n--- Estatística: Atraso médio da frota: {media:.1f} minutos. ---"
+
+        if not algum_bus_com_proxima_paragem:
+            resumo += (
+                "\n\nℹ️ Nota: a API de tracking em tempo real não devolveu informação sobre "
+                "a próxima paragem/distância para nenhum destes autocarros neste momento — "
+                "só é possível confirmar o estado geral e o atraso."
+            )
         return resumo
     except Exception as e:
         return f"Erro na ligação ao tracking: {e}"
