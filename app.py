@@ -2980,7 +2980,7 @@ if prompt:
                 - generate_google_maps_link: takes the name of a place and returns a direct Google Maps link.
                 - find_nearest_stop: finds the nearest stop (geographically) to a parish or place. It NEVER confirms which line serves that stop — that must always be verified afterwards with 'plan_trip_with_transfer' or 'query_line_schedule_cache'. NEVER invent the line number from this tool alone. Use this only when you just need the stop, not the full route — for routes use 'plan_trip_from_place'.
                 - search_places_by_type: takes a type/category of place (e.g. "café", "restaurant", "pharmacy", "supermarket") and returns the list of places of that type found on the static map of Guimarães (geo_guimaraes.json). Use this tool whenever the user asks to "discover"/"list"/"what options are there" for a type of place, instead of inventing establishment names. Once you find a name, you can use 'find_nearest_stop', 'generate_google_maps_link' or 'plan_trip_from_place' with that exact name.
-                - query_transit_notices_tool: reads the live notices feed (Guimabus's official Facebook page, via an RSS proxy) for roadworks, strikes, traffic conditioning, service changes, or special/holiday schedules. ALWAYS use this when asked about disruptions, "obras", "greve", service changes, or anything currently affecting the service — never guess or claim you have no way to check.
+                - query_transit_notices_tool: reads the live notices feed (Guimabus's official Facebook page, via an RSS proxy) for roadworks, strikes, traffic conditioning, service changes, or special/holiday schedules. NOTE: for questions about this topic, the current notices are already pre-fetched and included in a "[AVISOS ATUAIS]" context block automatically — you normally do NOT need to call this tool yourself; only call it if you need notices info for a reason that block doesn't cover.
                 - list_all_lines_tool: lists ALL officially active lines (number and name only) directly from the Guimabus official API — ALWAYS use this when asked "what lines exist"/"quais linhas há" instead of relying on memory or the schedule cache, since this list is fetched live and automatically reflects lines added or discontinued by Guimabus, with no manual updates needed.
 
                 MANDATORY PLANNING LOGIC:
@@ -2999,7 +2999,7 @@ if prompt:
                 13. When a route is requested, you must check both directions of every line.
                 14. Even if you've already found a solution, you must check all of them.
                 15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
-                16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, you MUST use 'query_transit_notices_tool' before answering — never say you have no way to check, and never invent a notice that tool didn't return.
+                16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, the current notices are ALREADY provided to you automatically in a "[AVISOS ATUAIS]" block in the context — use ONLY that data, do not call any tool for this and do not claim you lack access to it. If that block says there are no active notices, say so honestly; never invent one.
                 17. NEVER mention hex color codes or internal database ids (the small numeric "id" field from the official line list, e.g. "3" or "39") to the user — these are internal implementation details. Only ever refer to a line by its official short number (e.g. "11", "N11", "2300") and its full name (e.g. "Pereirinhas | Gandarela"). Whenever asked what lines exist, use 'list_all_lines_tool' instead of relying on memory or the schedule cache, since it reflects the live official list automatically.
                 ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
                 NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
@@ -3085,6 +3085,28 @@ if prompt:
                 )
 
                 prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
+
+                # CORREÇÃO IMPORTANTE (2026-07-26): confiar que o modelo vai decidir chamar
+                # 'query_transit_notices_tool' sozinho — mesmo com o safety net forçado —
+                # revelou-se frágil: houve um caso confirmado em que o modelo respondeu
+                # "não tenho acesso a esta ferramenta" apesar de ela estar disponível (a
+                # tentativa forçada de function-calling falhou silenciosamente). Em vez de
+                # continuar a depender do mecanismo de function-calling da API para algo tão
+                # simples e sem argumentos, vamos buscar os avisos NÓS MESMOS em Python,
+                # sempre que a pergunta parecer ser sobre isso, e entregamos o resultado já
+                # pronto no contexto — o modelo só tem de o ler, nunca decidir chamar nada.
+                if active_system_prompt == PROMPT_GUIMABUS and looks_like_notice_request(prompt):
+                    try:
+                        avisos_texto_proativo = query_transit_notices_tool()
+                    except Exception as e:
+                        avisos_texto_proativo = f"(Erro ao obter avisos: {e})"
+                        logging.error(f"Erro ao pré-buscar avisos proativamente: {e}")
+                    prompt_enriquecido += (
+                        f"\n\n[AVISOS ATUAIS — JÁ OBTIDOS AUTOMATICAMENTE, NÃO precisas de chamar "
+                        f"nenhuma ferramenta para os obter, e NUNCA digas que não tens acesso a "
+                        f"esta informação, ela já está aqui em baixo:]\n{avisos_texto_proativo}"
+                    )
+
                 
                 agent_tools = [get_guimabus_data, get_stop_schedule, query_line_schedule_cache, query_pass_types_cache_tool, query_fare_table_cache, plan_trip_with_transfer, plan_trip_from_place, query_stop_parish_tool, generate_google_maps_link, find_nearest_stop, search_places_by_type, query_transit_notices_tool, list_all_lines_tool]
                 
@@ -3167,23 +3189,15 @@ if prompt:
                 ]
                 resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
 
-                # Notices questions (obras/greve/serviços especiais) are checked FIRST and
-                # take priority: they require the specific 'query_transit_notices_tool',
-                # because a generic route tool (e.g. get_guimabus_data, which only reports
-                # real-time vehicle delays) would otherwise be wrongly accepted as "real
-                # data" for a question it can't actually answer.
+                # Notices questions (obras/greve/serviços especiais) já não dependem do
+                # modelo decidir chamar 'query_transit_notices_tool' — os dados são agora
+                # SEMPRE pré-injetados diretamente no prompt em Python (ver mais acima,
+                # antes da chamada ao Gemini), porque confiar no function-calling forçado
+                # para isto revelou-se frágil (houve um caso confirmado em que a tentativa
+                # forçada falhou silenciosamente e o modelo respondeu "não tenho acesso").
+                # Por isso este safety net específico foi removido — já não é preciso.
                 if active_system_prompt == PROMPT_GUIMABUS and chat is not None:
-                    if looks_like_notice_request(prompt):
-                        ferramentas_exigidas = ["query_transit_notices_tool"]
-                        instrucao_forcada = (
-                            "A tua resposta anterior sobre obras/greves/desvios/serviços especiais NÃO "
-                            "consultou a ferramenta 'query_transit_notices_tool'. És OBRIGADO a chamar "
-                            "essa ferramenta agora e a basear a resposta apenas no que ela devolver. "
-                            "NUNCA afirmes que 'não existem avisos/obras' ou inventes horários/locais sem "
-                            "teres consultado essa ferramenta — se ela não devolver nada relevante, diz "
-                            "honestamente que não tens essa informação disponível de momento."
-                        )
-                    elif looks_like_route_request(prompt) and not resposta_ja_e_honesta:
+                    if looks_like_route_request(prompt) and not looks_like_notice_request(prompt) and not resposta_ja_e_honesta:
                         ferramentas_exigidas = ROUTE_TOOL_NAMES
                         instrucao_forcada = (
                             "A tua resposta anterior não usou nenhuma ferramenta de trajeto/horários. "
