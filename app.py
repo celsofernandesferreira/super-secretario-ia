@@ -1271,8 +1271,12 @@ def get_line_metadata():
     Cache de 24h porque esta informação (nomes/cores das linhas) muda muito
     raramente, ao contrário da posição da frota que muda a cada minuto.
     """
-    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
-    url = "https://gmr.elevensystems.pt/api/route"
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://gmr.elevensystems.pt/', 'Origin': 'https://gmr.elevensystems.pt'}
+    # CORREÇÃO (2026-07-26): o endpoint correto é "/api/routes" (plural), não
+    # "/api/route" (singular) — confirmado pelo utilizador. Este erro de digitação
+    # explica as falhas intermitentes anteriores: estávamos a bater num endpoint
+    # errado, que ou não existe ou se comporta de forma inconsistente.
+    url = "https://gmr.elevensystems.pt/api/routes"
     # IMPORTANTE: esta função NÃO tem try/except a engolir erros — se a chamada
     # falhar, a exceção propaga-se para quem a chamou. Isto é DE PROPÓSITO: como
     # a função tem cache de 24h (@st.cache_data), se apanhássemos o erro aqui e
@@ -1305,7 +1309,7 @@ def get_line_metadata():
 
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
-    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://gmr.elevensystems.pt/', 'Origin': 'https://gmr.elevensystems.pt'}
     url = "https://gmr.elevensystems.pt/api/locations"
     # NOTA IMPORTANTE (confirmado pelo utilizador em 2026-07-26): o parâmetro
     # "routeId" NÃO filtra de forma fiável — houve um caso confirmado em que a
@@ -1493,7 +1497,7 @@ def get_stop_schedule(stop_id: str):
             
     if id_numérico or origem_texto.isdigit():
         target_id = id_numérico if id_numérico else origem_texto
-        headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
+        headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://gmr.elevensystems.pt/', 'Origin': 'https://gmr.elevensystems.pt'}
         url = f"https://gmr.elevensystems.pt/api/stops/{target_id}/routes"
         params = {"shape": "true", "passengerInfo": "true"}
 
