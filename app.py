@@ -16,6 +16,7 @@ import folium
 import email.utils
 import math
 import hmac
+import hashlib
 import difflib
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -283,6 +284,17 @@ def initialize_db():
             freguesia TEXT,
             fonte TEXT,
             ultima_atualizacao TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cache_avisos_facebook (
+            texto_hash TEXT PRIMARY KEY,
+            texto TEXT,
+            imagem TEXT,
+            primeira_deteccao TEXT,
+            ultima_deteccao TEXT,
+            data_fim_texto TEXT,
+            prioridade INTEGER
         )
     """)
     cursor.execute("""
@@ -828,10 +840,29 @@ def get_facebook_notices():
     # 1. NOVO URL DO FETCHRSS
     url_rss = "https://fetchrss.com/feed/1wk44d0rp6kO1wk41H0MeFRi.rss"
     avisos_ativos = []
-    todos_avisos = [] 
-    
+    todos_avisos = []
+
     agora_utc = datetime.now(timezone.utc)
     agora_local = datetime.now()
+    timestamp_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
+
+    # LIMITAÇÃO CONHECIDA (confirmada pelo utilizador em 2026-07-26): o plano
+    # gratuito do fetchrss.com só devolve um punhado de posts mais recentes da
+    # página. Um aviso ainda genuinamente ativo (ex: obras a decorrer há
+    # semanas) pode "sair" dessa janela reduzida e desaparecer do feed, mesmo
+    # continuando válido na realidade. Para não perder essa informação, guardamos
+    # cada aviso visto numa tabela local (cache_avisos_facebook) e, em cada
+    # pedido, combinamos os avisos frescos do RSS com os que já tínhamos
+    # guardado e que ainda estão dentro da sua janela de validade — mesmo que já
+    # não apareçam no feed ao vivo naquele momento.
+    conn, cursor = None, None
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+    except Exception as e:
+        logging.error(f"Erro ao ligar à BD para cache de avisos: {e}")
+
+    hashes_vistos_agora = set()
 
     try:
         response = requests.get(url_rss, timeout=10)
@@ -862,6 +893,8 @@ def get_facebook_notices():
             
             texto_minusculas = clean_text.lower() + " " + title.lower()
             texto_final = clean_text if len(clean_text) > 5 else title
+            texto_hash = hashlib.md5(texto_final.encode("utf-8")).hexdigest()
+            hashes_vistos_agora.add(texto_hash)
             
             aviso_temp = {
                 "texto": texto_final, 
@@ -870,7 +903,16 @@ def get_facebook_notices():
             }
             todos_avisos.append(aviso_temp)
             
-            if any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"]):
+            resolvido = any(palavra in texto_minusculas for palavra in ["resolvido", "terminado", "já passou", "reaberto"])
+            if resolvido:
+                # Confirmação fresca de que já não está ativo — remove da memória
+                # persistente, mesmo que antes tivéssemos guardado uma data de fim
+                # futura para ele.
+                if cursor:
+                    try:
+                        cursor.execute("DELETE FROM cache_avisos_facebook WHERE texto_hash = ?", (texto_hash,))
+                    except Exception:
+                        pass
                 continue
 
             data_fim_texto = extract_future_date(texto_minusculas)
@@ -878,6 +920,11 @@ def get_facebook_notices():
 
             if data_fim_texto:
                 if data_fim_texto < agora_local:
+                    if cursor:
+                        try:
+                            cursor.execute("DELETE FROM cache_avisos_facebook WHERE texto_hash = ?", (texto_hash,))
+                        except Exception:
+                            pass
                     continue
                 dias_ate_fim = (data_fim_texto - agora_local).days
                 prioridade_calculada = 1000 - max(dias_ate_fim, 0)
@@ -904,17 +951,82 @@ def get_facebook_notices():
             
             aviso_temp["prioridade"] = prioridade_calculada
             avisos_ativos.append(aviso_temp)
-            
-        avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
-        
-        if not avisos_ativos and todos_avisos:
-            return todos_avisos[:2]
-        
-        return avisos_ativos
+
+            # Grava/atualiza este aviso na memória persistente, para continuarmos
+            # a saber dele mesmo se sair da janela reduzida do RSS gratuito.
+            if cursor:
+                try:
+                    data_fim_iso = data_fim_texto.strftime("%Y-%m-%d") if data_fim_texto else None
+                    cursor.execute("""
+                        INSERT INTO cache_avisos_facebook (texto_hash, texto, imagem, primeira_deteccao, ultima_deteccao, data_fim_texto, prioridade)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(texto_hash) DO UPDATE SET
+                            ultima_deteccao = excluded.ultima_deteccao,
+                            data_fim_texto = excluded.data_fim_texto,
+                            prioridade = excluded.prioridade,
+                            imagem = excluded.imagem
+                    """, (texto_hash, texto_final, img_url, timestamp_atual, timestamp_atual, data_fim_iso, prioridade_calculada))
+                except Exception as e:
+                    logging.error(f"Erro ao gravar aviso em cache: {e}")
             
     except Exception as e:
         logging.error(f"Native RSS error: {e}")
-        
+
+    # Complementa com avisos guardados anteriormente que ainda estão dentro da
+    # janela de validade, mas que já não apareceram no feed fresco desta vez
+    # (por já não estarem entre os poucos posts mais recentes do plano gratuito).
+    if cursor:
+        try:
+            cursor.execute("SELECT texto_hash, texto, imagem, ultima_deteccao, data_fim_texto, prioridade FROM cache_avisos_facebook")
+            for texto_hash, texto, imagem, ultima_deteccao, data_fim_texto_str, prioridade in cursor.fetchall():
+                if texto_hash in hashes_vistos_agora:
+                    continue  # já processado acima com dados frescos desta vez
+
+                ainda_valido = False
+                if data_fim_texto_str:
+                    try:
+                        data_fim = datetime.strptime(data_fim_texto_str, "%Y-%m-%d")
+                        ainda_valido = data_fim >= agora_local
+                    except Exception:
+                        ainda_valido = False
+                else:
+                    try:
+                        ultima = datetime.strptime(ultima_deteccao, "%Y-%m-%d %H:%M:%S")
+                        ainda_valido = (agora_local - ultima).days <= 7
+                    except Exception:
+                        ainda_valido = False
+
+                if ainda_valido:
+                    avisos_ativos.append({"texto": texto, "imagem": imagem, "prioridade": prioridade})
+                else:
+                    try:
+                        cursor.execute("DELETE FROM cache_avisos_facebook WHERE texto_hash = ?", (texto_hash,))
+                    except Exception:
+                        pass
+        except Exception as e:
+            logging.error(f"Erro ao ler cache de avisos persistente: {e}")
+
+    if conn:
+        try:
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    # Remove duplicados (por texto) que possam ter entrado tanto do feed fresco
+    # como da memória persistente, mantendo a versão de maior prioridade.
+    avisos_por_texto = {}
+    for a in avisos_ativos:
+        chave = a["texto"]
+        if chave not in avisos_por_texto or a["prioridade"] > avisos_por_texto[chave]["prioridade"]:
+            avisos_por_texto[chave] = a
+    avisos_ativos = list(avisos_por_texto.values())
+
+    avisos_ativos.sort(key=lambda x: x["prioridade"], reverse=True)
+
+    if not avisos_ativos and todos_avisos:
+        return todos_avisos[:2]
+
     return avisos_ativos
 
 def render_notices_footer(anuncios_ativos, ui):
@@ -1111,7 +1223,11 @@ def list_all_lines_tool():
     lista em tempo real à API oficial (com cache de 24h), por isso deteta
     automaticamente se uma linha for descontinuada ou adicionada pela Guimabus,
     sem precisar de qualquer atualização manual do código."""
-    cor_para_linhas, linha_para_info = get_line_metadata()
+    try:
+        cor_para_linhas, linha_para_info = get_line_metadata()
+    except Exception as e:
+        logging.error(f"Falha ao obter metadados de linhas em list_all_lines_tool: {e}")
+        return "Não foi possível obter a lista oficial de linhas neste momento (falha de ligação) — tenta novamente dentro de momentos."
     if not linha_para_info:
         return "Não foi possível obter a lista oficial de linhas neste momento — tenta novamente mais tarde."
 
@@ -1157,30 +1273,35 @@ def get_line_metadata():
     """
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
     url = "https://gmr.elevensystems.pt/api/route"
-    try:
-        response = requests.get(url, headers=headers, timeout=8)
-        response.raise_for_status()
-        linhas = response.json()
-        if not isinstance(linhas, list):
-            return {}, {}
+    # IMPORTANTE: esta função NÃO tem try/except a engolir erros — se a chamada
+    # falhar, a exceção propaga-se para quem a chamou. Isto é DE PROPÓSITO: como
+    # a função tem cache de 24h (@st.cache_data), se apanhássemos o erro aqui e
+    # devolvêssemos dicionários vazios, o Streamlit guardaria esse resultado
+    # VAZIO em cache durante 24 horas inteiras, mesmo que a API voltasse a
+    # funcionar 2 minutos depois — foi exatamente isto que causou "Linha não
+    # identificada" para todos os autocarros de repente (confirmado pelo
+    # utilizador em 2026-07-26). Deixando a exceção propagar, o Streamlit NÃO
+    # guarda o falhanço em cache, e a próxima chamada tenta logo outra vez.
+    response = requests.get(url, headers=headers, timeout=8)
+    response.raise_for_status()
+    linhas = response.json()
+    if not isinstance(linhas, list):
+        raise ValueError("Resposta da API de linhas não é uma lista, como esperado.")
 
-        cor_para_linhas = {}
-        linha_para_info = {}
-        for linha in linhas:
-            nome_curto = str(linha.get("nameShort", "")).strip().upper()
-            cor = str(linha.get("color", "")).strip().upper()
-            if not nome_curto:
-                continue
-            linha_para_info[nome_curto] = {
-                "nome": linha.get("name", ""),
-                "ativa": linha.get("isActive", True),
-            }
-            if cor:
-                cor_para_linhas.setdefault(cor, set()).add(nome_curto)
-        return cor_para_linhas, linha_para_info
-    except Exception as e:
-        logging.error(f"Erro ao obter metadados oficiais das linhas: {e}")
-        return {}, {}
+    cor_para_linhas = {}
+    linha_para_info = {}
+    for linha in linhas:
+        nome_curto = str(linha.get("nameShort", "")).strip().upper()
+        cor = str(linha.get("color", "")).strip().upper()
+        if not nome_curto:
+            continue
+        linha_para_info[nome_curto] = {
+            "nome": linha.get("name", ""),
+            "ativa": linha.get("isActive", True),
+        }
+        if cor:
+            cor_para_linhas.setdefault(cor, set()).add(nome_curto)
+    return cor_para_linhas, linha_para_info
 
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
@@ -1214,7 +1335,11 @@ def get_guimabus_data(route_id: str = None):
         # proximidade GPS a paragens conhecidas como DESEMPATE, mas só entre os
         # candidatos que a tabela oficial já reduziu — não é preciso pesquisar
         # todas as linhas existentes como acontecia antes de termos esta tabela.
-        cor_para_linhas, linha_para_info = get_line_metadata()
+        try:
+            cor_para_linhas, linha_para_info = get_line_metadata()
+        except Exception as e:
+            logging.error(f"Falha ao obter metadados de linhas em get_guimabus_data: {e}")
+            cor_para_linhas, linha_para_info = {}, {}
 
         mapa_paragem_linhas = {}
         try:
