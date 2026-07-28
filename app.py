@@ -1497,8 +1497,17 @@ def get_guimabus_data(route_id: str = None):
                     linhas_desempate = _linhas_provaveis_por_posicao(posicao["lat"], posicao["lon"]) & candidatos_finais
                 if len(linhas_desempate) == 1:
                     chave_grupo = next(iter(linhas_desempate))
+                elif len(linhas_desempate) > 1:
+                    # Autocarro está genuinamente perto de uma paragem que consta na
+                    # lista OFICIAL de mais do que uma das linhas candidatas (ex:
+                    # "Centro Cultural Vila Flor" nas linhas 012 e 014 — troço inicial
+                    # comum antes de se separarem). Isto não é falta de dados nossa,
+                    # é uma ambiguidade real: só o sentido/destino do autocarro (que a
+                    # API não fornece) resolveria isto com certeza.
+                    chave_grupo = ("AMBIGUO_PARAGEM_COMUM", tuple(sorted(candidatos_finais)))
                 else:
-                    chave_grupo = ("AMBIGUO", tuple(sorted(candidatos_finais)))
+                    # Não há nenhuma paragem oficial destas linhas perto o suficiente.
+                    chave_grupo = ("AMBIGUO_SEM_PARAGEM_PROXIMA", tuple(sorted(candidatos_finais)))
             else:
                 chave_grupo = ("NAO_IDENTIFICADO",)
 
@@ -1512,9 +1521,16 @@ def get_guimabus_data(route_id: str = None):
             if isinstance(chave_grupo, str):
                 nome_linha = linha_para_info.get(chave_grupo, {}).get("nome", "")
                 cabecalho = f"Linha {_formatar_numero_linha(chave_grupo)} — {nome_linha}"
-            elif chave_grupo[0] == "AMBIGUO":
+            elif chave_grupo[0] == "AMBIGUO_PARAGEM_COMUM":
                 nomes = [f"{_formatar_numero_linha(l)} ({linha_para_info.get(l, {}).get('nome','')})" for l in chave_grupo[1]]
-                cabecalho = f"Linha não confirmada com certeza — candidatas: {', '.join(nomes)}"
+                cabecalho = (
+                    f"Linha não confirmada — autocarro numa paragem OFICIALMENTE partilhada por: "
+                    f"{', '.join(nomes)} (troço comum entre estas linhas; impossível distinguir só "
+                    f"pela posição GPS, seria preciso saber o sentido/destino do autocarro)"
+                )
+            elif chave_grupo[0] == "AMBIGUO_SEM_PARAGEM_PROXIMA":
+                nomes = [f"{_formatar_numero_linha(l)} ({linha_para_info.get(l, {}).get('nome','')})" for l in chave_grupo[1]]
+                cabecalho = f"Linha não confirmada — candidatas por cor: {', '.join(nomes)} (autocarro não está perto de nenhuma paragem oficial conhecida destas linhas)"
             else:
                 cabecalho = "Linha não identificada"
 
