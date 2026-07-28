@@ -1302,10 +1302,81 @@ def get_line_metadata():
         linha_para_info[nome_curto] = {
             "nome": linha.get("name", ""),
             "ativa": linha.get("isActive", True),
+            "id_interno": linha.get("id"),
         }
         if cor:
             cor_para_linhas.setdefault(cor, set()).add(nome_curto)
     return cor_para_linhas, linha_para_info
+
+@st.cache_data(ttl=604800)  # 7 dias — as paragens de cada linha mudam muito raramente
+def get_all_routes_stops():
+    """Vai buscar, para TODAS as linhas oficiais, a lista REAL de paragens (com
+    coordenadas GPS exatas) diretamente da API — endpoint confirmado pelo
+    utilizador em 2026-07-26: https://gmr.elevensystems.pt/api/routes/{id}
+    (onde {id} é o campo interno 'id' de /api/routes, ex: '4' para a linha 012).
+
+    Isto é MUITO mais fiável do que o índice construído a partir de texto
+    extraído de PDFs (geo_guimaraes.json / cache_paragens_linha), e serve
+    principalmente para desempatar linhas que partilham a mesma cor (ex: 012 e
+    014), comparando a que linha as paragens mais próximas de um autocarro
+    realmente pertencem, segundo dados OFICIAIS da própria Guimabus.
+
+    Devolve dois dicionários:
+    - paragem_para_linhas: {"campo da feira": {"011", "012"}, ...} (nomes já
+      normalizados com _normalize_stop_name)
+    - linha_para_paragens: {"012": [("CENTRAL DE CAMIONAGEM...", lat, lon), ...], ...}
+
+    Cache de 7 dias porque isto é essencialmente estático — só muda se a
+    Guimabus alterar percursos, algo raro. Se TODAS as linhas falharem ao
+    obter dados, a exceção propaga-se (não fica em cache vazio — mesma lição
+    aplicada em get_line_metadata); se só ALGUMAS falharem, os dados parciais
+    das que resultaram são devolvidos na mesma, o que já é uma melhoria.
+    """
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://gmr.elevensystems.pt/', 'Origin': 'https://gmr.elevensystems.pt'}
+    resp_linhas = requests.get("https://gmr.elevensystems.pt/api/routes", headers=headers, timeout=8)
+    resp_linhas.raise_for_status()
+    lista_linhas = resp_linhas.json()
+    if not isinstance(lista_linhas, list):
+        raise ValueError("Resposta de /api/routes não é uma lista.")
+
+    paragem_para_linhas = {}
+    linha_para_paragens = {}
+    falhas = 0
+
+    for linha in lista_linhas:
+        route_internal_id = linha.get("id")
+        nome_curto = str(linha.get("nameShort", "")).strip().upper()
+        if not route_internal_id or not nome_curto:
+            continue
+        try:
+            resp_rota = requests.get(
+                f"https://gmr.elevensystems.pt/api/routes/{route_internal_id}",
+                headers=headers, timeout=8
+            )
+            resp_rota.raise_for_status()
+            detalhe = resp_rota.json()
+        except Exception as e:
+            falhas += 1
+            logging.error(f"Falha ao obter paragens da linha {nome_curto} (id {route_internal_id}): {e}")
+            continue
+
+        paragens_desta_linha = []
+        for stop in detalhe.get("stops", []):
+            stage = stop.get("stage", {})
+            nome_paragem = stage.get("name")
+            posicao = stage.get("position", {})
+            lat, lon = posicao.get("lat"), posicao.get("lon")
+            if nome_paragem and lat is not None and lon is not None:
+                paragens_desta_linha.append((nome_paragem, lat, lon))
+                paragem_para_linhas.setdefault(_normalize_stop_name(nome_paragem), set()).add(nome_curto)
+
+        if paragens_desta_linha:
+            linha_para_paragens[nome_curto] = paragens_desta_linha
+
+    if not linha_para_paragens and falhas > 0:
+        raise RuntimeError(f"Não foi possível obter dados de paragens de nenhuma linha ({falhas} falhas).")
+
+    return paragem_para_linhas, linha_para_paragens
 
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
@@ -1345,27 +1416,54 @@ def get_guimabus_data(route_id: str = None):
             logging.error(f"Falha ao obter metadados de linhas em get_guimabus_data: {e}")
             cor_para_linhas, linha_para_info = {}, {}
 
-        mapa_paragem_linhas = {}
+        # Fonte PRIMÁRIA de desempate: paragens OFICIAIS de cada linha (com
+        # coordenadas GPS exatas), confirmadas pelo utilizador em 2026-07-26 via
+        # https://gmr.elevensystems.pt/api/routes/{id}. Muito mais fiável do que
+        # o índice local construído a partir de texto extraído de PDFs — por
+        # isso usamos as coordenadas oficiais DIRETAMENTE (sem passar pelo
+        # LOCAL_MAP), calculando a distância do autocarro a cada paragem oficial
+        # de cada linha candidata.
+        linha_para_paragens_oficial = {}
         try:
-            conn = sqlite3.connect("agente_memoria.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT linha, paragem FROM cache_paragens_linha")
-            for linha_id, paragem in cursor.fetchall():
-                mapa_paragem_linhas.setdefault(_normalize_stop_name(paragem), set()).add(linha_id)
-            conn.close()
-        except Exception:
-            pass
+            _, linha_para_paragens_oficial = get_all_routes_stops()
+        except Exception as e:
+            logging.error(f"Falha ao obter paragens oficiais em get_guimabus_data: {e}")
+
+        # Fonte de RESERVA: índice local (cache_paragens_linha + geo_guimaraes.json,
+        # construído a partir dos PDFs de horários) — só é usado se a fonte
+        # oficial acima falhar completamente (ex: falha de rede nesta atualização).
+        mapa_paragem_linhas_local = {}
+        if not linha_para_paragens_oficial:
+            try:
+                conn = sqlite3.connect("agente_memoria.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT linha, paragem FROM cache_paragens_linha")
+                for linha_id, paragem in cursor.fetchall():
+                    mapa_paragem_linhas_local.setdefault(_normalize_stop_name(paragem), set()).add(linha_id)
+                conn.close()
+            except Exception:
+                pass
 
         def _linhas_provaveis_por_posicao(lat, lon, raio_m=250):
-            if not LOCAL_MAP:
-                return set()
             linhas = set()
+            if linha_para_paragens_oficial:
+                # Fonte oficial: percorre as paragens de cada linha candidata e
+                # calcula a distância real à posição do autocarro.
+                for linha_id, paragens in linha_para_paragens_oficial.items():
+                    for _nome_paragem, plat, plon in paragens:
+                        if calculate_distance(lat, lon, plat, plon) <= raio_m:
+                            linhas.add(linha_id)
+                            break
+                return linhas
+            # Fallback: índice local construído a partir de PDFs + geo_guimaraes.json.
+            if not LOCAL_MAP:
+                return linhas
             for dados_local in LOCAL_MAP.values():
                 if dados_local.get("tipo") in ["bus_stop", "public_transport"]:
                     d = calculate_distance(lat, lon, dados_local["lat"], dados_local["lon"])
                     if d <= raio_m:
                         nome_norm = _normalize_stop_name(dados_local.get("nome_real", ""))
-                        linhas |= mapa_paragem_linhas.get(nome_norm, set())
+                        linhas |= mapa_paragem_linhas_local.get(nome_norm, set())
             return linhas
 
         def _paragem_mais_perto(lat, lon):
