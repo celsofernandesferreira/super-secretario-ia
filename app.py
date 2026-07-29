@@ -1382,12 +1382,40 @@ def get_all_routes_stops():
 def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://gmr.elevensystems.pt/', 'Origin': 'https://gmr.elevensystems.pt'}
     url = "https://gmr.elevensystems.pt/api/locations"
-    # NOTA IMPORTANTE (confirmado pelo utilizador em 2026-07-26): o parâmetro
-    # "routeId" NÃO filtra de forma fiável — houve um caso confirmado em que a
-    # linha 11 estava genuinamente em circulação, mas o pedido filtrado por
-    # routeId=11 devolveu uma lista vazia. Por isso deixámos de o enviar à API:
-    # pedimos SEMPRE a frota completa (todas as linhas).
+
+    # Metadados oficiais das linhas — precisamos deles JÁ AQUI (antes do pedido de
+    # frota) para resolver route_id -> id interno.
+    try:
+        cor_para_linhas, linha_para_info = get_line_metadata()
+    except Exception as e:
+        logging.error(f"Falha ao obter metadados de linhas em get_guimabus_data: {e}")
+        cor_para_linhas, linha_para_info = {}, {}
+
+    # DESCOBERTA IMPORTANTE (confirmada pelo utilizador em 2026-07-26): o parâmetro
+    # "routeId" da API FILTRA CORRETAMENTE — mas espera o id INTERNO de
+    # /api/routes (ex: "4" para a linha "012"), NÃO o número da linha que os
+    # utilizadores conhecem (ex: "12"). A tentativa anterior falhava porque
+    # estávamos a enviar o número errado. Resolvendo o número da linha para o id
+    # interno antes de pedir, conseguimos filtragem 100% fiável, sem precisar de
+    # nenhuma heurística de cor/GPS.
+    id_interno_pedido = None
+    info_linha_pedida = None
+    if route_id:
+        route_id_norm = str(route_id).strip().upper()
+        candidatos_id = {route_id_norm}
+        if route_id_norm.isdigit():
+            candidatos_id.add(route_id_norm.zfill(3))
+            candidatos_id.add(route_id_norm.lstrip("0") or "0")
+        for c in candidatos_id:
+            if c in linha_para_info:
+                info_linha_pedida = linha_para_info[c]
+                id_interno_pedido = info_linha_pedida.get("id_interno")
+                break
+
     params = {"passengerInfo": "true"}
+    filtro_confiavel = bool(id_interno_pedido)
+    if filtro_confiavel:
+        params["routeId"] = id_interno_pedido
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=8)
@@ -1399,10 +1427,62 @@ def get_guimabus_data(route_id: str = None):
             return "Não foi possível ler os dados da Guimabus (resposta em formato inesperado)."
 
         veiculos = _extract_vehicle_list(dados)
+
+        # --- CAMINHO RÁPIDO E FIÁVEL: foi pedida uma linha específica e conseguimos
+        # resolvê-la para o id interno — a API já filtrou por nós no servidor, não
+        # precisamos de nenhuma heurística de cor/GPS aqui. ---
+        if filtro_confiavel:
+            nome_linha = info_linha_pedida.get("nome", "")
+            if not veiculos:
+                return (
+                    f"Não há nenhum autocarro da linha {route_id} ({nome_linha}) em circulação neste "
+                    f"momento — CONFIRMADO pelo filtro oficial da API (routeId={id_interno_pedido}), "
+                    f"não é uma limitação nossa de deteção."
+                )
+
+            resumo = f"Linha {route_id} — {nome_linha} — {len(veiculos)} autocarro(s) em circulação (filtro oficial CONFIRMADO pela API):\n"
+            total_atraso, count_com_atraso = 0, 0
+            for bus in veiculos:
+                id_bus = bus.get("id", "N/A")
+                delay = bus.get("delay")
+                velocidade = bus.get("speed")
+                status_pontualidade = _traduzir_pontualidade_bus(bus.get("status"))
+                status_fisico = _traduzir_status_bus(bus.get("busStatus"))
+                atraso_txt = f"{delay}min" if delay is not None else "desconhecido"
+                resumo += f"- Autocarro ID {id_bus}: {status_fisico}, {status_pontualidade} (Atraso: {atraso_txt})"
+
+                if isinstance(velocidade, (int, float)):
+                    resumo += " — parado" if velocidade == 0 else f" — {velocidade} km/h"
+
+                posicao = bus.get("position")
+                if isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao and LOCAL_MAP:
+                    paragem_perto, dist_perto = None, float("inf")
+                    for dados_local in LOCAL_MAP.values():
+                        if dados_local.get("tipo") in ["bus_stop", "public_transport"]:
+                            d = calculate_distance(posicao["lat"], posicao["lon"], dados_local["lat"], dados_local["lon"])
+                            if d < dist_perto:
+                                dist_perto, paragem_perto = d, dados_local.get("nome_real")
+                    if paragem_perto:
+                        resumo += f" — perto de '{paragem_perto}' (~{int(dist_perto)}m)"
+
+                resumo += "\n"
+                if isinstance(delay, (int, float)):
+                    total_atraso += delay
+                    count_com_atraso += 1
+
+            if count_com_atraso > 0:
+                resumo += f"\n--- Estatística: Atraso médio desta linha: {total_atraso / count_com_atraso:.1f} minutos. ---"
+            resumo += "\n\nℹ️ Nota: a API não devolve o sentido (Ida/Volta) de cada autocarro."
+            return resumo
+
+        # --- CAMINHO DE RESERVA: sem linha específica pedida (visão geral de toda a
+        # frota), ou o número de linha pedido não foi reconhecido. Aqui sim
+        # precisamos de agrupar por cor + desempate por GPS, porque a API não filtra
+        # (não foi pedido nenhum routeId neste caminho). ---
         if not veiculos:
             return "Não há nenhum autocarro da Guimabus em circulação neste momento (frota completa, todas as linhas)."
 
-        # Tabela OFICIAL cor->linha(s), confirmada via https://gmr.elevensystems.pt/api/route
+        # Tabela OFICIAL cor->linha(s), confirmada via https://gmr.elevensystems.pt/api/routes
         # (2026-07-26). A maioria das cores mapeia para 1 única linha; algumas são
         # partilhadas por pares de linhas "circulares" (variantes de ida/volta do
         # mesmo trajeto físico) ou pelas linhas noturnas/serviços especiais (que
@@ -1410,11 +1490,6 @@ def get_guimabus_data(route_id: str = None):
         # proximidade GPS a paragens conhecidas como DESEMPATE, mas só entre os
         # candidatos que a tabela oficial já reduziu — não é preciso pesquisar
         # todas as linhas existentes como acontecia antes de termos esta tabela.
-        try:
-            cor_para_linhas, linha_para_info = get_line_metadata()
-        except Exception as e:
-            logging.error(f"Falha ao obter metadados de linhas em get_guimabus_data: {e}")
-            cor_para_linhas, linha_para_info = {}, {}
 
         # Fonte PRIMÁRIA de desempate: paragens OFICIAIS de cada linha (com
         # coordenadas GPS exatas), confirmadas pelo utilizador em 2026-07-26 via
@@ -1564,27 +1639,11 @@ def get_guimabus_data(route_id: str = None):
             media = total_atraso / count_com_atraso
             resumo += f"\n--- Estatística: Atraso médio da frota completa: {media:.1f} minutos. ---"
 
-        if route_id:
-            route_id_norm = str(route_id).strip().upper()
-            # Normaliza para o formato "nameShort" da tabela oficial (ex: "11" -> "011").
-            candidatos_id = {route_id_norm}
-            if route_id_norm.isdigit():
-                candidatos_id.add(route_id_norm.zfill(3))
-                candidatos_id.add(route_id_norm.lstrip("0") or "0")
-            info_linha_pedida = next((linha_para_info[c] for c in candidatos_id if c in linha_para_info), None)
-
-            if info_linha_pedida:
-                resumo += (
-                    f"\n\nℹ️ Foi pedida a linha {route_id} ({info_linha_pedida['nome']}). Procura acima "
-                    f"pelo grupo com esse número de linha no cabeçalho — se nenhum grupo corresponder, "
-                    f"é porque não há autocarros dessa linha em circulação neste momento (diz isto "
-                    f"honestamente, não inventes)."
-                )
-            else:
-                resumo += (
-                    f"\n\n⚠️ NOT CONFIRMED: a linha '{route_id}' não foi encontrada na tabela oficial de "
-                    f"linhas — confirma o número com o utilizador antes de assumir que não existe."
-                )
+        if route_id and not info_linha_pedida:
+            resumo += (
+                f"\n\n⚠️ NOT CONFIRMED: a linha '{route_id}' não foi encontrada na tabela oficial de "
+                f"linhas — confirma o número com o utilizador antes de assumir que não existe."
+            )
         resumo += (
             "\n\nℹ️ Nota: a API não devolve o sentido (Ida/Volta) de cada autocarro. A linha de cada "
             "grupo acima vem de uma tabela OFICIAL da Guimabus (não é uma estimativa) exceto quando "
@@ -3212,7 +3271,7 @@ if prompt:
                 {LANGUAGE_INSTRUCTION}
 
                 You have these tools related to the local Guimabus fleet:
-                - get_guimabus_data: real-time status of the ENTIRE fleet (all lines at once) — position, speed, delay, and punctuality for every vehicle currently circulating. It does NOT tell you which line each vehicle belongs to (the API doesn't expose that, and the routeId filter parameter was confirmed unreliable, so it's no longer used). If the user asks about a specific line's real-time status, call this tool anyway (it returns the whole fleet), but be honest that you cannot confirm which vehicle(s), if any, belong to that specific line — never guess based on vehicle ID patterns or anything else not explicitly returned.
+                - get_guimabus_data: real-time fleet status. Pass route_id (the line's short number, e.g. "11" or "012") to get a RELIABLE, server-confirmed filter for just that line — the tool resolves the number to the correct internal route id automatically. Without route_id, returns the entire fleet grouped by line (using official colour data, with GPS-based tie-breaking only for the rare lines that share a colour — clearly flagged as an estimate when that happens).
                 - get_stop_schedule: forecast of waiting times for a specific stop.
                 - query_line_schedule_cache: queries the local cache to read fixed schedules and timetables.
                 - query_pass_types_cache_tool: reads the pass types.
