@@ -18,6 +18,20 @@ import math
 import hmac
 import hashlib
 import difflib
+import threading
+try:
+    # Caminho correto em versões modernas do Streamlit (>= ~1.12).
+    from streamlit.runtime.scriptrunner import add_script_run_ctx
+except ImportError:
+    try:
+        # Caminho usado em versões mais antigas do Streamlit.
+        from streamlit.scriptrunner import add_script_run_ctx
+    except ImportError:
+        # Última reserva: sem isto, threads em segundo plano não conseguem
+        # aceder com segurança ao st.session_state. Definimos uma função vazia
+        # para a app não rebentar ao arrancar — nesse caso o processamento em
+        # segundo plano é desativado automaticamente (ver USA_THREAD_FUNDO abaixo).
+        add_script_run_ctx = None
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
@@ -416,8 +430,14 @@ def normalize_search_name(texto):
 ROUTE_TOOL_NAMES = [
     "get_guimabus_data", "get_stop_schedule", "query_line_schedule_cache",
     "plan_trip_with_transfer", "plan_trip_from_place",
-    "find_nearest_stop", "query_stop_parish_tool",
+    "find_nearest_stop", "query_stop_parish_tool", "query_stop_line_times_tool",
+    "estimate_bus_eta_tool",
 ]
+
+# Ferramentas que, quando chamadas, indicam que a pergunta era sobre planear
+# uma viagem de A para B (não só consultar uma linha isolada) — usadas pelo
+# safety net dedicado abaixo, que exige query_stop_line_times_tool a seguir.
+TRIP_PLANNING_TOOL_NAMES = ["plan_trip_with_transfer", "plan_trip_from_place"]
 
 _ROUTE_KEYWORDS_PT = [
     "linha", "horario", "horário", "autocarro", "guimabus", "paragem", "paragens",
@@ -1378,6 +1398,23 @@ def get_all_routes_stops():
 
     return paragem_para_linhas, linha_para_paragens
 
+def _resolver_linha_para_id_interno(route_id, linha_para_info):
+    """Dado o número de uma linha (ex: '12', 'N11') tal como o utilizador o
+    conhece, resolve para o id INTERNO usado por /api/locations?routeId=...
+    (ex: '4' para a linha '012') e a informação completa dessa linha. Devolve
+    (id_interno, info_linha) ou (None, None) se não encontrar."""
+    if not route_id:
+        return None, None
+    route_id_norm = str(route_id).strip().upper()
+    candidatos_id = {route_id_norm}
+    if route_id_norm.isdigit():
+        candidatos_id.add(route_id_norm.zfill(3))
+        candidatos_id.add(route_id_norm.lstrip("0") or "0")
+    for c in candidatos_id:
+        if c in linha_para_info:
+            return linha_para_info[c].get("id_interno"), linha_para_info[c]
+    return None, None
+
 @st.cache_data(ttl=60)
 def get_guimabus_data(route_id: str = None):
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://gmr.elevensystems.pt/', 'Origin': 'https://gmr.elevensystems.pt'}
@@ -1398,19 +1435,7 @@ def get_guimabus_data(route_id: str = None):
     # estávamos a enviar o número errado. Resolvendo o número da linha para o id
     # interno antes de pedir, conseguimos filtragem 100% fiável, sem precisar de
     # nenhuma heurística de cor/GPS.
-    id_interno_pedido = None
-    info_linha_pedida = None
-    if route_id:
-        route_id_norm = str(route_id).strip().upper()
-        candidatos_id = {route_id_norm}
-        if route_id_norm.isdigit():
-            candidatos_id.add(route_id_norm.zfill(3))
-            candidatos_id.add(route_id_norm.lstrip("0") or "0")
-        for c in candidatos_id:
-            if c in linha_para_info:
-                info_linha_pedida = linha_para_info[c]
-                id_interno_pedido = info_linha_pedida.get("id_interno")
-                break
+    id_interno_pedido, info_linha_pedida = _resolver_linha_para_id_interno(route_id, linha_para_info)
 
     params = {"passengerInfo": "true"}
     filtro_confiavel = bool(id_interno_pedido)
@@ -1655,11 +1680,136 @@ def get_guimabus_data(route_id: str = None):
     except Exception as e:
         return f"Erro na ligação ao tracking: {e}"
 
+# Velocidade média assumida para autocarros urbanos, incluindo paragens e
+# trânsito — usada só para dar uma ORDEM DE GRANDEZA de tempo, nunca uma
+# previsão oficial. Ajustável se se notar que as estimativas ficam
+# sistematicamente longe da realidade.
+_VELOCIDADE_MEDIA_KMH_ESTIMATIVA = 18
+
+def estimate_bus_eta_tool(linha: str, paragem_destino: str):
+    """Estima quanto tempo falta para um autocarro de uma linha chegar a uma
+    paragem específica. IMPORTANTE: a API real-time da Guimabus NÃO fornece
+    ETAs prontos (confirmado — o endpoint que se tentava usar para isso nunca
+    foi validado como real). Em vez disso, esta ferramenta calcula uma
+    ESTIMATIVA a partir de dados que JÁ confirmámos como reais:
+    1. A posição GPS atual de cada autocarro dessa linha (via routeId oficial).
+    2. A sequência oficial de paragens dessa linha, com coordenadas exatas
+       (via /api/routes/{id}).
+    Calcula a distância ao longo da sequência de paragens entre a posição
+    atual do autocarro e a paragem pedida, e divide por uma velocidade média
+    assumida. Isto é sempre comunicado como estimativa aproximada, nunca como
+    previsão oficial — a Guimabus não fornece isso."""
+    try:
+        cor_para_linhas, linha_para_info = get_line_metadata()
+    except Exception as e:
+        return f"Não foi possível obter a lista oficial de linhas para calcular a estimativa: {e}"
+
+    id_interno, info_linha = _resolver_linha_para_id_interno(linha, linha_para_info)
+    if not id_interno:
+        return f"⚠️ NOT CONFIRMED: a linha '{linha}' não foi encontrada na tabela oficial de linhas."
+
+    try:
+        _, linha_para_paragens = get_all_routes_stops()
+    except Exception as e:
+        return f"Não foi possível obter a sequência oficial de paragens desta linha para calcular a estimativa: {e}"
+
+    nome_curto_linha = next((k for k, v in linha_para_info.items() if v.get("id_interno") == id_interno), None)
+    paragens_da_linha = linha_para_paragens.get(nome_curto_linha) if nome_curto_linha else None
+    if not paragens_da_linha:
+        return f"Não tenho a sequência oficial de paragens da linha {linha} para calcular a estimativa."
+
+    # Localiza a paragem pedida na sequência oficial (correspondência tolerante).
+    paragem_norm = _normalize_stop_name(paragem_destino)
+    idx_destino = None
+    for i, (nome, plat, plon) in enumerate(paragens_da_linha):
+        if paragem_norm in _normalize_stop_name(nome) or _normalize_stop_name(nome) in paragem_norm:
+            idx_destino = i
+            break
+    if idx_destino is None:
+        return (
+            f"⚠️ NOT CONFIRMED: não encontrei a paragem '{paragem_destino}' na sequência oficial de "
+            f"paragens da linha {linha}. Confirma o nome exato — pode não ser servida por esta linha."
+        )
+
+    # Vai buscar a frota em tempo real, filtrada com fiabilidade por esta linha
+    # (mesmo mecanismo confirmado usado em get_guimabus_data).
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://gmr.elevensystems.pt/', 'Origin': 'https://gmr.elevensystems.pt'}
+    try:
+        response = requests.get(
+            "https://gmr.elevensystems.pt/api/locations",
+            headers=headers, params={"passengerInfo": "true", "routeId": id_interno}, timeout=8
+        )
+        response.raise_for_status()
+        veiculos = _extract_vehicle_list(response.json())
+    except Exception as e:
+        return f"Erro ao consultar a frota em tempo real desta linha: {e}"
+
+    if not veiculos:
+        return f"Não há nenhum autocarro da linha {linha} em circulação neste momento (confirmado pela API), por isso não é possível estimar um ETA."
+
+    resumo = f"Estimativa de chegada a '{paragem_destino}' (linha {linha} — {info_linha.get('nome','')}):\n\n"
+    for bus in veiculos:
+        posicao = bus.get("position")
+        id_bus = bus.get("id", "N/A")
+        if not (isinstance(posicao, dict) and "lat" in posicao and "lon" in posicao):
+            resumo += f"- Autocarro {id_bus}: sem posição GPS disponível neste momento.\n"
+            continue
+
+        # Localiza a paragem oficial mais próxima da posição atual do autocarro,
+        # para saber em que ponto da sequência ele está.
+        idx_atual, menor_dist = None, float("inf")
+        for i, (nome, plat, plon) in enumerate(paragens_da_linha):
+            d = calculate_distance(posicao["lat"], posicao["lon"], plat, plon)
+            if d < menor_dist:
+                menor_dist, idx_atual = d, i
+
+        if idx_atual is None:
+            resumo += f"- Autocarro {id_bus}: não foi possível localizá-lo na sequência de paragens.\n"
+            continue
+
+        if idx_atual == idx_destino:
+            resumo += f"- Autocarro {id_bus}: já está mesmo junto a '{paragem_destino}' (a ~{int(menor_dist)}m).\n"
+            continue
+
+        if idx_destino < idx_atual:
+            resumo += (
+                f"- Autocarro {id_bus}: já passou por '{paragem_destino}' nesta volta "
+                f"(está mais à frente na sequência do percurso); numa linha circular só voltará lá "
+                f"depois de completar a volta toda — não é possível estimar isso com confiança.\n"
+            )
+            continue
+
+        # Soma a distância paragem-a-paragem entre a posição atual e o destino.
+        distancia_total_m = 0.0
+        for i in range(idx_atual, idx_destino):
+            _, lat1, lon1 = paragens_da_linha[i]
+            _, lat2, lon2 = paragens_da_linha[i + 1]
+            distancia_total_m += calculate_distance(lat1, lon1, lat2, lon2)
+
+        distancia_km = distancia_total_m / 1000
+        minutos_estimados = (distancia_km / _VELOCIDADE_MEDIA_KMH_ESTIMATIVA) * 60
+        num_paragens_em_falta = idx_destino - idx_atual
+
+        resumo += (
+            f"- Autocarro {id_bus}: ~{int(minutos_estimados)} min ESTIMADOS "
+            f"({num_paragens_em_falta} paragem(ns) até lá, ~{distancia_km:.1f} km pela sequência oficial "
+            f"de paragens, assumindo {_VELOCIDADE_MEDIA_KMH_ESTIMATIVA} km/h médios).\n"
+        )
+
+    resumo += (
+        "\n⚠️ NOT CONFIRMED: isto é uma ESTIMATIVA calculada a partir da posição GPS atual e da "
+        "sequência oficial de paragens — NÃO é uma previsão oficial da Guimabus (a API não fornece "
+        "ETAs prontos). Trânsito, paragens para embarque/desembarque e semáforos não estão "
+        "contabilizados; o valor real pode ser bastante diferente. Comunica isto sempre como "
+        "estimativa aproximada ao utilizador."
+    )
+    return resumo
+
 @st.cache_data(ttl=30)
 def get_stop_schedule(stop_id: str):
     if not stop_id:
         return "É necessário indicar o ID da paragem."
-    
+
     origem_texto = str(stop_id).strip().lower()
     id_numérico = None
     
@@ -1876,6 +2026,100 @@ def query_line_schedule_cache(linha_id: str):
         return f"Não existem horários em cache para a linha {linha_id}. Peça ao administrador para rodar a Sincronização Geral."
     except Exception as e:
         return f"Erro na leitura da cache SQLite: {e}"
+
+def _obter_conteudo_bruto_linha(linha_id: str):
+    """Vai buscar só o texto bruto (conteudo_txt) da cache de horários de uma
+    linha, sem formatação extra — usado internamente por ferramentas que
+    precisam de processar o texto, não de o mostrar diretamente ao utilizador."""
+    entrada = str(linha_id).strip().upper()
+    candidatos = [entrada]
+    if entrada.isdigit():
+        sem_zeros = entrada.lstrip('0') or '0'
+        if sem_zeros not in candidatos:
+            candidatos.append(sem_zeros)
+        candidatos.append(entrada.zfill(3))
+    try:
+        conn = sqlite3.connect("agente_memoria.db")
+        cursor = conn.cursor()
+        resultado = None
+        for candidato in candidatos:
+            cursor.execute("SELECT conteudo_txt FROM cache_horarios WHERE linha = ?", (candidato,))
+            resultado = cursor.fetchone()
+            if resultado:
+                break
+        conn.close()
+        return resultado[0] if resultado else None
+    except Exception:
+        return None
+
+def _extrair_horarios_de_paragem(texto_linha: str, nome_paragem: str):
+    """Dado o texto completo (bruto) dos horários de uma linha, e o nome de uma
+    paragem específica, encontra a(s) linha(s) de texto correspondentes a essa
+    paragem e devolve APENAS os horários REAIS (formato HH:MM) — os valores
+    '-' são descartados aqui, em Python, de forma determinística.
+
+    Isto existe porque pedir ao modelo de IA para distinguir '-' (não passa
+    nesta viagem) de uma hora real, dentro de uma tabela de texto densa com
+    muitas colunas, revelou-se pouco fiável — exatamente o tipo de tarefa que
+    deve ser feita em código, não deixada ao critério do modelo (ver regra 10
+    do prompt, que tentava ensinar isto só por texto e não chegava)."""
+    if not texto_linha or not nome_paragem:
+        return []
+    nome_norm = _normalize_stop_name(nome_paragem)
+    padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2}))*)\s*$')
+    resultados = []
+    for linha_texto in texto_linha.split("\n"):
+        linha_texto = linha_texto.strip()
+        if not linha_texto or "|" in linha_texto or linha_texto.startswith("[P"):
+            continue
+        m = padrao.match(linha_texto)
+        if not m:
+            continue
+        nome_linha_atual = m.group("nome").strip(" -\t")
+        nome_linha_norm = _normalize_stop_name(nome_linha_atual)
+        # Correspondência tolerante: paragem pedida tem de aparecer como
+        # substring do nome encontrado (ou vice-versa), para aceitar pequenas
+        # variações de escrita entre o que o utilizador escreveu e o nome
+        # exato no PDF oficial.
+        if nome_norm not in nome_linha_norm and nome_linha_norm not in nome_norm:
+            continue
+        entradas = m.group("horarios").split()
+        horarios_reais = [e for e in entradas if e != "-" and re.match(r'^\d{1,2}:\d{2}$', e)]
+        if horarios_reais:
+            resultados.append((nome_linha_atual, horarios_reais))
+    return resultados
+
+def query_stop_line_times_tool(linha: str, paragem: str):
+    """Ferramenta: dado o número de uma linha e o nome de uma paragem
+    específica, devolve APENAS os horários reais em que essa linha passa
+    nessa paragem — já filtrados em Python. Os '-' que aparecem no PDF
+    oficial significam 'esta viagem específica não passa nesta paragem' e são
+    removidos automaticamente; NUNCA os apresentes como se fossem horários.
+    Usa esta ferramenta sempre que o utilizador perguntar por horários de uma
+    linha NUMA PARAGEM ESPECÍFICA (ex: 'a que horas passa a 163 na EB23 de
+    Briteiros'), em vez de tentar ler a tabela completa de horários e
+    interpretar os '-' sozinho."""
+    conteudo = _obter_conteudo_bruto_linha(linha)
+    if not conteudo:
+        return f"Não existem horários em cache para a linha {linha}. Peça ao administrador para rodar a Sincronização Geral."
+
+    resultados = _extrair_horarios_de_paragem(conteudo, paragem)
+    if not resultados:
+        return (
+            f"⚠️ NOT CONFIRMED: não encontrei a paragem '{paragem}' no texto de horários da linha "
+            f"{linha}. Pode não ser servida por esta linha, ou o nome pode estar escrito de forma "
+            f"diferente no PDF oficial — confirma o nome exato com o utilizador antes de concluir "
+            f"que a linha não passa lá."
+        )
+
+    resumo = (
+        f"Horários REAIS em que a linha {linha} passa em '{paragem}' (já filtrados — os "
+        f"marcadores '-' do PDF oficial foram removidos automaticamente porque significam "
+        f"'esta viagem não passa aqui', não uma hora de passagem):\n\n"
+    )
+    for nome_encontrado, horarios in resultados:
+        resumo += f"- {nome_encontrado}: {', '.join(horarios)}\n"
+    return resumo
 
 def load_knowledge_base():
     contexto = ""
@@ -2977,14 +3221,22 @@ def render_game(ui):
                 btnGravar.disabled = true; btnGravar.innerText = "💾...";
                 // Não lemos window.parent.location (isso é bloqueado como leitura
                 // entre origens diferentes, ex: no Streamlit Cloud). Em vez disso,
-                // criamos um link normal com target="_parent" e simulamos um clique —
-                // a navegação por clique num link é sempre permitida pelo browser,
-                // mesmo que o iframe seja tratado como uma origem diferente.
+                // criamos um link normal e simulamos um clique — a navegação por
+                // clique num link é sempre permitida pelo browser, mesmo que o
+                // iframe seja tratado como uma origem diferente.
+                // CORREÇÃO (2026-07): usar target="_top" em vez de "_parent".
+                // O componente de HTML do Streamlit pode aninhar MAIS DE UM nível
+                // de iframe (o iframe do componente + o próprio sandbox do
+                // Streamlit) — "_parent" só escapa UM nível, podendo ficar preso
+                // num iframe intermédio sem nunca chegar à página principal (e por
+                // isso o Python nunca via os query params e o recorde não era
+                // gravado). "_top" aponta sempre para a janela do browser mais
+                // externa, escapando todos os níveis de iframe de uma vez.
                 try {{
                     var novaQuery = "?save_nome=" + encodeURIComponent(nome) + "&save_pontos=" + encodeURIComponent(score / 10);
                     var link = document.createElement("a");
                     link.href = novaQuery;
-                    link.target = "_parent";
+                    link.target = "_top";
                     document.body.appendChild(link);
                     link.click();
                     link.remove();
@@ -3246,298 +3498,349 @@ elif audio_file:
             except Exception as e:
                 st.error(f"{ui['audio_error']} {e}")
 
-if prompt:
+def _processar_pergunta_completa(prompt, language, modo_ativo_anterior, historico_mensagens):
+    """Faz TODO o trabalho pesado de responder a uma pergunta — escolha de modo,
+    montagem do prompt, chamadas à API do Gemini, safety nets anti-alucinação —
+    e DEVOLVE o resultado num dicionário, em vez de desenhar UI diretamente
+    (nada de st.markdown/st.error aqui dentro). Isto é o que permite correr esta
+    função numa thread em SEGUNDO PLANO (ver mais abaixo, no fluxo principal):
+    o resto da app continua responsiva a cliques (jogo, passes, botões do admin,
+    etc.) enquanto a API demora a responder, em vez de bloquear o script inteiro
+    durante os 10-25 segundos que a chamada pode demorar.
+
+    Devolve um dicionário:
+      {"ok": True, "full_response": str, "novo_modo_ativo": str}
+      ou
+      {"ok": False, "erro_chave": "api_limit" | "model_error" | "generico", "detalhe": str}
+    """
+    ui = UI_TEXT[language]
+    try:
+        contexto_base = load_knowledge_base()
+
+        LANGUAGE_INSTRUCTION = "CRUCIAL LANGUAGE RULE: You MUST respond entirely in European Portuguese (pt-PT)." if language == "PT" else "CRUCIAL LANGUAGE RULE: You MUST respond entirely in English."
+
+        SCHEDULE_INSTRUCTION = (
+            "MANDATÓRIO: Sempre que o utilizador perguntar como ir de um local para outro (viagem de A para B), tens OBRIGATORIAMENTE de apresentar os horários REAIS de passagem na paragem de origem e na paragem de destino, usando a ferramenta `query_stop_line_times_tool(linha, paragem)` para CADA linha encontrada — esta ferramenta já filtra os marcadores '-' (que significam 'esta viagem não passa aqui') e devolve só as horas reais. NUNCA uses `query_line_schedule_cache` (tabela completa não filtrada) para este fim, e NUNCA leias tu próprio a tabela bruta tentando distinguir horas de '-' — isso já se mostrou pouco fiável. `query_line_schedule_cache` só deve ser usada quando o utilizador pedir explicitamente o horário COMPLETO de uma linha (todas as paragens), não para uma viagem entre dois pontos específicos. Após descobrires as linhas (rota direta ou transbordo), consulta SEMPRE os horários reais das paragens relevantes antes de responderes. No final da resposta, coloca os links oficiais."
+            if language == "PT" else
+            "MANDATORY: Whenever asked for directions from A to B, you MUST present the REAL departure/arrival times at the origin and destination stops, using `query_stop_line_times_tool(linha, paragem)` for EACH line found — this tool already filters out '-' markers (meaning 'this trip doesn't stop here') and returns only real times. NEVER use `query_line_schedule_cache` (the full unfiltered table) for this purpose, and never try to read the raw table yourself and tell times apart from '-' markers — that has proven unreliable. `query_line_schedule_cache` should only be used when the user explicitly asks for a line's COMPLETE timetable (all stops), not for a point-to-point trip. Always query the real stop times before answering. At the end, include the official links."
+        )
+
+        PROMPT_GUIMABUS = f"""You are Celso Ferreira's Elite Executive Assistant.
+        You are an Agent focused on automation, support and IT infrastructure.
+
+        {LANGUAGE_INSTRUCTION}
+
+        You have these tools related to the local Guimabus fleet:
+        - get_guimabus_data: real-time fleet status. Pass route_id (the line's short number, e.g. "11" or "012") to get a RELIABLE, server-confirmed filter for just that line — the tool resolves the number to the correct internal route id automatically. Without route_id, returns the entire fleet grouped by line (using official colour data, with GPS-based tie-breaking only for the rare lines that share a colour — clearly flagged as an estimate when that happens).
+        - get_stop_schedule: forecast of waiting times for a specific stop.
+        - query_line_schedule_cache: queries the local cache to read fixed schedules and timetables.
+        - query_pass_types_cache_tool: reads the pass types.
+        - query_fare_table_cache: reads the full fare table.
+        - plan_trip_with_transfer: given the name of an origin and destination stop, says whether there is a direct line or suggests a transfer.
+        - plan_trip_from_place: like the previous one, but accepts ANY PLACE (cafés, streets, addresses, factories), not just stops/parishes — resolves each place to the nearest stop automatically and then plans the route. USE THIS instead of manually chaining 'find_nearest_stop' + 'plan_trip_with_transfer' whenever the origin or destination isn't clearly already a known stop or parish.
+        - query_stop_parish_tool: says which parish a stop is in.
+        - generate_google_maps_link: takes the name of a place and returns a direct Google Maps link.
+        - find_nearest_stop: finds the nearest stop (geographically) to a parish or place. It NEVER confirms which line serves that stop — that must always be verified afterwards with 'plan_trip_with_transfer' or 'query_line_schedule_cache'. NEVER invent the line number from this tool alone. Use this only when you just need the stop, not the full route — for routes use 'plan_trip_from_place'.
+        - search_places_by_type: takes a type/category of place (e.g. "café", "restaurant", "pharmacy", "supermarket") and returns the list of places of that type found on the static map of Guimarães (geo_guimaraes.json). Use this tool whenever the user asks to "discover"/"list"/"what options are there" for a type of place, instead of inventing establishment names. Once you find a name, you can use 'find_nearest_stop', 'generate_google_maps_link' or 'plan_trip_from_place' with that exact name.
+        - query_transit_notices_tool: reads the live notices feed (Guimabus's official Facebook page, via an RSS proxy) for roadworks, strikes, traffic conditioning, service changes, or special/holiday schedules. NOTE: for questions about this topic, the current notices are already pre-fetched and included in a "[AVISOS ATUAIS]" context block automatically — you normally do NOT need to call this tool yourself; only call it if you need notices info for a reason that block doesn't cover.
+        - list_all_lines_tool: lists ALL officially active lines (number and name only) directly from the Guimabus official API — ALWAYS use this when asked "what lines exist"/"quais linhas há" instead of relying on memory or the schedule cache, since this list is fetched live and automatically reflects lines added or discontinued by Guimabus, with no manual updates needed.
+        - query_stop_line_times_tool: given a line number and a SPECIFIC stop name, returns ONLY the real departure times at that stop — the '-' markers from the official PDF (meaning "this trip doesn't stop here") are already filtered out in Python before you see them. ALWAYS use this instead of reading the raw schedule table yourself and trying to tell times apart from '-' markers — that manual reading has proven unreliable, this tool does it deterministically.
+        - estimate_bus_eta_tool: given a line number and a destination stop, estimates how many minutes until a currently-circulating bus of that line reaches that stop — calculated from real-time GPS position + the official stop sequence, NOT an official ETA (the Guimabus API doesn't provide one). ALWAYS present this as an approximate estimate, never as a guaranteed arrival time. Use this whenever asked "quanto falta para o autocarro chegar a X" / "how long until the bus reaches X".
+
+        MANDATORY PLANNING LOGIC:
+        1. - If the origin OR the destination is any place (café, street, address, factory, point of interest) and not an obvious stop/parish, use "plan_trip_from_place" directly — don't try to guess the stop manually.
+        2. - If origin and destination are already names of known stops or parishes, use "plan_trip_with_transfer" with the exact names. If it closely resembles a stop, mention that. When in doubt, ask the user.
+        3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
+        4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
+        5. If a route has several lines (direct or for either leg of a transfer), you MUST list ALL of them, not just one or two examples — never summarise with "e.g." or pick just one when the tool returned several.
+        6. Whenever a schedule is requested WITHOUT the user mentioning a specific day, you MUST use the "TIPO DE DIA PARA EFEITOS DE HORÁRIOS" value given in the system context (Dia Útil / Sábado / Domingo e Feriados) — it is already calculated for you, NEVER calculate the day of the week yourself and never assume "Dia Útil" by default if today happens to be a weekend or holiday. Inside the schedule text returned by the tools, read ONLY the section matching that day type (usually under headers like "Dias Úteis", "Sábados", "Domingos e Feriados"). If the user explicitly asks about a different day (e.g. "e ao sábado?", "e num feriado?"), use that instead of today's.
+        7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
+        8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
+        9. From any stop it is possible to transfer in the centre of Guimarães by walking between the stops s.goncalo, central de camionagem, s.damaso norte or s.damaso sul. Even if it takes two or three transfers, you must find a solution.
+        10. Whenever asked at what times a line passes at a SPECIFIC stop, use 'query_stop_line_times_tool' — it already filters out the '-' markers for you in Python. Do NOT try to read the raw schedule table text yourself and manually tell apart a real time from a '-' marker; that has proven unreliable. Only fall back to reading the raw table (via query_line_schedule_cache) when the user wants the FULL timetable for the whole line, not a specific stop.
+        11. Check all outbound and return schedules — some schedules span several pages.
+        12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
+        13. When a route is requested, you must check both directions of every line.
+        14. Even if you've already found a solution, you must check all of them.
+        15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
+        16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, the current notices are ALREADY provided to you automatically in a "[AVISOS ATUAIS]" block in the context — use ONLY that data, do not call any tool for this and do not claim you lack access to it. If that block says there are no active notices, say so honestly; never invent one.
+        17. NEVER mention hex color codes or internal database ids (the small numeric "id" field from the official line list, e.g. "3" or "39") to the user — these are internal implementation details. Only ever refer to a line by its official short number (e.g. "11", "N11", "2300") and its full name (e.g. "Pereirinhas | Gandarela"). Whenever asked what lines exist, use 'list_all_lines_tool' instead of relying on memory or the schedule cache, since it reflects the live official list automatically.
+        ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
+        NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
+        If a tool's result contains "⚠️ NOT CONFIRMED", "📍", "🌙", or "ℹ️", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact, NEVER present a night-line-only leg ("🌙" warning) as if it were a normal daytime option without flagging it clearly, and NEVER drop an "ℹ️" note about missing real-time fields (e.g. direction/next-stop data) just to make the answer sound more complete — always mention explicitly which detail you could NOT confirm."""
+
+        PROMPT_INTERVIEW = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
+        Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
+        Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
+
+        PROMPT_RECRUITER = f"""You are Celso Ferreira's Professional Presentation Agent, aimed at recruiters and anyone wanting to know his background.
+
+        {LANGUAGE_INSTRUCTION}
+
+        Your goal is to:
+        1. Answer questions about Celso's CV, skills, professional experience and background, ALWAYS using the information available in the Knowledge Base provided in the context (.md files). NEVER invent dates, companies, roles, technologies or facts about Celso that are not in the Knowledge Base — if the information isn't there, clearly say you don't have that information available, instead of inventing it.
+        2. If the user says something like "quero treinar para uma entrevista" or "I want to train for an interview", let them know you are about to start a technical interview simulation in English (the role switch is handled automatically by the system in the next step).
+        3. If the user presents a technical/IT problem (e.g. "the server went down", "network error", any kind of failure), demonstrate how Celso would solve it — you MUST start the answer with the sentence 'O Celso resolveria este problema desta forma:' (or, in English, 'Celso would solve this problem like this:') and explain the reasoning step by step, following IT best practices. This is meant to show a recruiter how Celso actually thinks and works.
+
+        Always keep a professional, confident and clear tone — you are representing Celso to potential employers. NEVER invent information about Celso outside the Knowledge Base."""
+
+        PROMPT_PROJECT = f"""You are the Agent that explains this project to anyone who asks about it — recruiters, curious visitors, or Celso himself.
+
+        {LANGUAGE_INSTRUCTION}
+
+        This project is an AI agent application built by Celso Ferreira, in Streamlit (Python), with these main components:
+        - A conversational assistant (Guimabus Mode) that uses the Gemini API with function calling to check the fleet's real-time status, schedules and fares (cached locally in SQLite), plan routes with transfers, and resolve locations (cafés, streets, addresses) through a static map (geo_guimaraes.json) with a live geocoding fallback via OpenStreetMap/Nominatim.
+        - An anti-hallucination safety net that forces the model to use real tools before answering questions about routes/schedules, instead of inventing data from the model's generic knowledge.
+        - A notices footer that reads an RSS feed from the Guimabus Facebook page, filters and prioritises notices (roadworks/events with a confirmed end date vs. recent generic posts) and shows them scrolling in the app's footer.
+        - A document-verification system (for pass applications) that uses Gemini to analyse uploaded images/PDFs.
+        - Audio transcription, to allow voice input.
+        - A Knowledge Base built from Markdown files, injected into the model's context, to answer with verified facts instead of generic knowledge.
+        - Three conversation modes (Guimabus, Recruiter, Project) that share the same chat interface, with automatic detection of which prompt/persona to use based on keywords in the question.
+
+        Whenever someone asks about the project, explain it clearly and concisely, adapting the level of detail to what is asked (e.g. "what technologies does it use" focuses on the stack; "why did you build this" focuses on the project's purpose/goal). NEVER invent features that don't exist in the system."""
+
+        normalized_prompt = prompt.lower()
+        project_triggers = ["este projeto", "sobre o projeto", "sobre este projeto", "como foi feito", "como foi construido", "que tecnologias", "stack", "arquitetura", "arquitectura", "this project", "how was this built", "tech stack"]
+        recruiter_triggers_strong = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "helpdesk", "ticket"]
+        recruiter_triggers_it_problem = ["problema", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
+
+        novo_modo_ativo = modo_ativo_anterior
+        if any(word in normalized_prompt for word in project_triggers):
+            active_system_prompt = PROMPT_PROJECT
+            novo_modo_ativo = "project"
+        elif "entrevista" in normalized_prompt or "interview" in normalized_prompt:
+            active_system_prompt = PROMPT_INTERVIEW
+            novo_modo_ativo = "interview"
+        elif any(word in normalized_prompt for word in recruiter_triggers_strong):
+            active_system_prompt = PROMPT_RECRUITER
+            novo_modo_ativo = "recruiter"
+        elif looks_like_route_request(prompt):
+            active_system_prompt = PROMPT_GUIMABUS
+            novo_modo_ativo = "guimabus"
+        elif any(word in normalized_prompt for word in recruiter_triggers_it_problem):
+            active_system_prompt = PROMPT_RECRUITER
+            novo_modo_ativo = "recruiter"
+        else:
+            _mapa_modos = {"project": PROMPT_PROJECT, "interview": PROMPT_INTERVIEW, "recruiter": PROMPT_RECRUITER, "guimabus": PROMPT_GUIMABUS}
+            active_system_prompt = _mapa_modos.get(modo_ativo_anterior, PROMPT_GUIMABUS)
+            novo_modo_ativo = modo_ativo_anterior
+
+        historico_api = []
+        for msg in historico_mensagens:
+            if msg["content"] not in [ui["initial_msg"], UI_TEXT["PT"]["initial_msg"], UI_TEXT["EN"]["initial_msg"]]:
+                role_api = "model" if msg["role"] == "assistant" else "user"
+                historico_api.append({"role": role_api, "parts": [msg["content"]]})
+
+        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+        tipo_dia_hoje = _tipo_de_dia_pt(agora)
+        nome_dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
+        contexto_data = (
+            f"[DATA E HORA ATUAL DO SISTEMA: {agora.strftime('%Y-%m-%d %H:%M')} ({nome_dia_semana}). "
+            f"TIPO DE DIA PARA EFEITOS DE HORÁRIOS (já calculado, não precisas de calcular): {tipo_dia_hoje}.]"
+        )
+
+        prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
+
+        if active_system_prompt == PROMPT_GUIMABUS and looks_like_notice_request(prompt):
+            try:
+                avisos_texto_proativo = query_transit_notices_tool()
+            except Exception as e:
+                avisos_texto_proativo = f"(Erro ao obter avisos: {e})"
+                logging.error(f"Erro ao pré-buscar avisos proativamente: {e}")
+            prompt_enriquecido += (
+                f"\n\n[AVISOS ATUAIS — JÁ OBTIDOS AUTOMATICAMENTE, NÃO precisas de chamar "
+                f"nenhuma ferramenta para os obter, e NUNCA digas que não tens acesso a "
+                f"esta informação, ela já está aqui em baixo:]\n{avisos_texto_proativo}"
+            )
+
+        agent_tools = [get_guimabus_data, get_stop_schedule, query_line_schedule_cache, query_pass_types_cache_tool, query_fare_table_cache, plan_trip_with_transfer, plan_trip_from_place, query_stop_parish_tool, generate_google_maps_link, find_nearest_stop, search_places_by_type, query_transit_notices_tool, list_all_lines_tool, query_stop_line_times_tool, estimate_bus_eta_tool]
+
+        candidate_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+        response = None
+        last_model_error = None
+        chat = None
+        history_len_before = 0
+
+        for model_name in candidate_models:
+            try:
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    system_instruction=active_system_prompt,
+                    tools=agent_tools,
+                    generation_config={"temperature": 0.2},
+                )
+                chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
+                history_len_before = len(chat.history)
+                response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
+                break
+            except Exception as e:
+                last_model_error = e
+                continue
+
+        if response is None:
+            if last_model_error is not None and "429" in str(last_model_error):
+                return {"ok": False, "erro_chave": "api_limit", "detalhe": str(last_model_error)}
+            return {"ok": False, "erro_chave": "model_error", "detalhe": str(last_model_error)}
+
+        def _called_real_tool(chat_obj, desde_indice, nomes_permitidos=None):
+            nomes = nomes_permitidos if nomes_permitidos is not None else ROUTE_TOOL_NAMES
+            try:
+                for entrada in chat_obj.history[desde_indice:]:
+                    for part in getattr(entrada, "parts", []):
+                        fc = getattr(part, "function_call", None)
+                        if fc and getattr(fc, "name", None) in nomes:
+                            return True
+            except Exception:
+                pass
+            return False
+
+        _FRASES_INCERTEZA_HONESTA = [
+            "não encontrei", "nao encontrei", "não consegui", "nao consegui",
+            "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
+            "não tenho informação", "não disponho", "não existem linhas",
+            "sem transbordo", "sem informação",
+        ]
+        resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
+
+        if active_system_prompt == PROMPT_GUIMABUS and chat is not None:
+            # Verificação ESTRITA e prioritária: se a pergunta envolveu planear uma
+            # viagem (chamou plan_trip_with_transfer/plan_trip_from_place), os
+            # horários apresentados TÊM de vir de 'query_stop_line_times_tool'
+            # (que filtra os '-'), nunca só de 'query_line_schedule_cache' (tabela
+            # completa não filtrada) — caso contrário corre-se o risco de mostrar
+            # horários de viagens que não passam mesmo na paragem pedida. Isto usa
+            # o mesmo padrão já aplicado aos avisos: uma ferramenta genérica não
+            # pode "passar no teste" por uma pergunta que precisa de uma ferramenta
+            # mais específica.
+            usou_planeamento_viagem = _called_real_tool(chat, history_len_before, TRIP_PLANNING_TOOL_NAMES)
+            usou_horarios_filtrados = _called_real_tool(chat, history_len_before, ["query_stop_line_times_tool"])
+
+            if usou_planeamento_viagem and not usou_horarios_filtrados and not resposta_ja_e_honesta:
+                ferramentas_exigidas = ["query_stop_line_times_tool"]
+                instrucao_forcada = (
+                    "Planeaste uma viagem mas não confirmaste os horários reais das paragens com "
+                    "'query_stop_line_times_tool'. És OBRIGADO a chamar essa ferramenta agora para "
+                    "cada linha e paragem relevante, e a basear os horários SÓ no que ela devolver. "
+                    "NUNCA uses 'query_line_schedule_cache' para isto nem leias a tabela bruta "
+                    "tentando adivinhar quais entradas são horas reais — os '-' TÊM de ser ignorados, "
+                    "e só esta ferramenta garante isso corretamente."
+                )
+            elif looks_like_route_request(prompt) and not looks_like_notice_request(prompt) and not resposta_ja_e_honesta:
+                ferramentas_exigidas = ROUTE_TOOL_NAMES
+                instrucao_forcada = (
+                    "A tua resposta anterior não usou nenhuma ferramenta de trajeto/horários. "
+                    "Repete a resposta, mas és OBRIGADO a consultar uma ferramenta real "
+                    "(plan_trip_from_place, plan_trip_with_transfer, "
+                    "query_line_schedule_cache, get_stop_schedule ou "
+                    "find_nearest_stop) antes de responderes. "
+                    "NUNCA inventes linhas ou horários que não venham da ferramenta."
+                )
+            else:
+                ferramentas_exigidas = None
+                instrucao_forcada = None
+
+            if ferramentas_exigidas and not _called_real_tool(chat, history_len_before, ferramentas_exigidas):
+                logging.error(f"Possible hallucination detected (missing call to {ferramentas_exigidas}) for the prompt: {prompt}")
+                try:
+                    forced_tool_config = {
+                        "function_calling_config": {
+                            "mode": "ANY",
+                            "allowed_function_names": ferramentas_exigidas,
+                        }
+                    }
+                    forced_response = chat.send_message(
+                        instrucao_forcada,
+                        tool_config=forced_tool_config,
+                        request_options={"timeout": 25}
+                    )
+                    response = forced_response
+                except Exception as e:
+                    logging.error(f"Anti-hallucination safety net failure: {e}")
+
+        full_response = response.text
+        return {"ok": True, "full_response": full_response, "novo_modo_ativo": novo_modo_ativo}
+    except Exception as e:
+        return {"ok": False, "erro_chave": "generico", "detalhe": str(e)}
+
+
+def _thread_processar_pergunta(prompt, language, modo_ativo_anterior, historico_mensagens, resultado_ref):
+    """Wrapper que corre _processar_pergunta_completa numa thread e guarda o
+    resultado no dicionário partilhado 'resultado_ref' (passado por referência),
+    marcando "pronto" por último para o script principal saber quando ler."""
+    resultado = _processar_pergunta_completa(prompt, language, modo_ativo_anterior, historico_mensagens)
+    resultado_ref.update(resultado)
+    resultado_ref["pronto"] = True
+
+
+if "chat_processando" not in st.session_state:
+    st.session_state.chat_processando = False
+
+# --- Início de um novo pedido: arranca o processamento em SEGUNDO PLANO ---
+# Só aceita um novo prompt se não houver já um em curso, para evitar pedidos
+# sobrepostos. Isto NÃO bloqueia o resto da app — o resto do script (jogo,
+# passes, botões do admin) continua a correr normalmente noutras interações
+# enquanto a thread trabalha, porque a chamada lenta à API já não está aqui.
+if prompt and not st.session_state.chat_processando:
     save_message_db(st.session_state.session_id, "user", prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar="👤"):
-        st.markdown(prompt)
 
-    with st.chat_message("assistant", avatar="💼"):
-        with st.spinner(ui["processing_agent"]):
-            try:
-                contexto_base = load_knowledge_base()
-                
-                LANGUAGE_INSTRUCTION = "CRUCIAL LANGUAGE RULE: You MUST respond entirely in European Portuguese (pt-PT)." if st.session_state.language == "PT" else "CRUCIAL LANGUAGE RULE: You MUST respond entirely in English."
+    st.session_state.chat_processando = True
+    st.session_state.chat_resultado = {"pronto": False}
+    historico_para_thread = list(st.session_state.messages[:-1])
 
-                SCHEDULE_INSTRUCTION = (
-                    "MANDATÓRIO: Sempre que o utilizador perguntar como ir de um local para outro, ou pedir horários, tens OBRIGATORIAMENTE de apresentar as horas de partida/chegada lendo a cache da ferramenta `query_line_schedule_cache`. NUNCA mandes apenas as linhas ou os links sem mostrar os horários no texto. Após descobrires as linhas (seja rota direta ou transbordo), FAZ SEMPRE query aos horários dessas linhas. No final da resposta, coloca os links oficiais." 
-                    if st.session_state.language == "PT" else 
-                    "MANDATORY: Whenever asked for directions or schedules, you MUST present the departure/arrival times by using the `query_line_schedule_cache` tool for the suggested lines. NEVER just output the lines without schedules. Always query the schedules for the lines you find. At the end, include the official links."
-                )
+    if add_script_run_ctx is not None:
+        thread_agente = threading.Thread(
+            target=_thread_processar_pergunta,
+            args=(
+                prompt,
+                st.session_state.language,
+                st.session_state.get("modo_ativo", "guimabus"),
+                historico_para_thread,
+                st.session_state.chat_resultado,
+            ),
+            daemon=True,
+        )
+        add_script_run_ctx(thread_agente)
+        thread_agente.start()
+    else:
+        # Reserva: se não foi possível importar add_script_run_ctx (versão do
+        # Streamlit muito antiga/incompatível), processa de forma síncrona como
+        # antes — mais lento a reagir a cliques nesse caso, mas continua a
+        # funcionar corretamente.
+        st.session_state.chat_resultado = _processar_pergunta_completa(
+            prompt, st.session_state.language, st.session_state.get("modo_ativo", "guimabus"), historico_para_thread
+        )
+        st.session_state.chat_resultado["pronto"] = True
 
-                PROMPT_GUIMABUS = f"""You are Celso Ferreira's Elite Executive Assistant.
-                You are an Agent focused on automation, support and IT infrastructure.
+    st.rerun()
 
-                {LANGUAGE_INSTRUCTION}
-
-                You have these tools related to the local Guimabus fleet:
-                - get_guimabus_data: real-time fleet status. Pass route_id (the line's short number, e.g. "11" or "012") to get a RELIABLE, server-confirmed filter for just that line — the tool resolves the number to the correct internal route id automatically. Without route_id, returns the entire fleet grouped by line (using official colour data, with GPS-based tie-breaking only for the rare lines that share a colour — clearly flagged as an estimate when that happens).
-                - get_stop_schedule: forecast of waiting times for a specific stop.
-                - query_line_schedule_cache: queries the local cache to read fixed schedules and timetables.
-                - query_pass_types_cache_tool: reads the pass types.
-                - query_fare_table_cache: reads the full fare table.
-                - plan_trip_with_transfer: given the name of an origin and destination stop, says whether there is a direct line or suggests a transfer.
-                - plan_trip_from_place: like the previous one, but accepts ANY PLACE (cafés, streets, addresses, factories), not just stops/parishes — resolves each place to the nearest stop automatically and then plans the route. USE THIS instead of manually chaining 'find_nearest_stop' + 'plan_trip_with_transfer' whenever the origin or destination isn't clearly already a known stop or parish.
-                - query_stop_parish_tool: says which parish a stop is in.
-                - generate_google_maps_link: takes the name of a place and returns a direct Google Maps link.
-                - find_nearest_stop: finds the nearest stop (geographically) to a parish or place. It NEVER confirms which line serves that stop — that must always be verified afterwards with 'plan_trip_with_transfer' or 'query_line_schedule_cache'. NEVER invent the line number from this tool alone. Use this only when you just need the stop, not the full route — for routes use 'plan_trip_from_place'.
-                - search_places_by_type: takes a type/category of place (e.g. "café", "restaurant", "pharmacy", "supermarket") and returns the list of places of that type found on the static map of Guimarães (geo_guimaraes.json). Use this tool whenever the user asks to "discover"/"list"/"what options are there" for a type of place, instead of inventing establishment names. Once you find a name, you can use 'find_nearest_stop', 'generate_google_maps_link' or 'plan_trip_from_place' with that exact name.
-                - query_transit_notices_tool: reads the live notices feed (Guimabus's official Facebook page, via an RSS proxy) for roadworks, strikes, traffic conditioning, service changes, or special/holiday schedules. NOTE: for questions about this topic, the current notices are already pre-fetched and included in a "[AVISOS ATUAIS]" context block automatically — you normally do NOT need to call this tool yourself; only call it if you need notices info for a reason that block doesn't cover.
-                - list_all_lines_tool: lists ALL officially active lines (number and name only) directly from the Guimabus official API — ALWAYS use this when asked "what lines exist"/"quais linhas há" instead of relying on memory or the schedule cache, since this list is fetched live and automatically reflects lines added or discontinued by Guimabus, with no manual updates needed.
-
-                MANDATORY PLANNING LOGIC:
-                1. - If the origin OR the destination is any place (café, street, address, factory, point of interest) and not an obvious stop/parish, use "plan_trip_from_place" directly — don't try to guess the stop manually.
-                2. - If origin and destination are already names of known stops or parishes, use "plan_trip_with_transfer" with the exact names. If it closely resembles a stop, mention that. When in doubt, ask the user.
-                3. - {SCHEDULE_INSTRUCTION} If you've already found it in these steps, skip find_nearest_stop.
-                4. - find_nearest_stop: finds the official bus stop nearest to any café, factory or geographic point of interest (based on the static distance JSON, with a fallback to live geocoding).
-                5. If a route has several lines (direct or for either leg of a transfer), you MUST list ALL of them, not just one or two examples — never summarise with "e.g." or pick just one when the tool returned several.
-                6. Whenever a schedule is requested WITHOUT the user mentioning a specific day, you MUST use the "TIPO DE DIA PARA EFEITOS DE HORÁRIOS" value given in the system context (Dia Útil / Sábado / Domingo e Feriados) — it is already calculated for you, NEVER calculate the day of the week yourself and never assume "Dia Útil" by default if today happens to be a weekend or holiday. Inside the schedule text returned by the tools, read ONLY the section matching that day type (usually under headers like "Dias Úteis", "Sábados", "Domingos e Feriados"). If the user explicitly asks about a different day (e.g. "e ao sábado?", "e num feriado?"), use that instead of today's.
-                7. Whenever asked about schedules, reply politely only, without mentioning this system's technical functions, unless technical functions are specifically requested.
-                8. Any line starting with N is a night line, unless night lines are specifically requested or it's a time only they cover. Give priority to day lines.
-                9. From any stop it is possible to transfer in the centre of Guimarães by walking between the stops s.goncalo, central de camionagem, s.damaso norte or s.damaso sul. Even if it takes two or three transfers, you must find a solution.
-                10. In the schedules, only a time listed directly opposite the stop means it passes there at that time.
-                11. Check all outbound and return schedules — some schedules span several pages.
-                12. When "guimaraes" is requested, it means goncalo, central de camionagem, s.damaso norte or s.damaso sul.
-                13. When a route is requested, you must check both directions of every line.
-                14. Even if you've already found a solution, you must check all of them.
-                15. FORMATTING: whenever you present a transfer plan or a set of schedules with more than one line/departure, use a Markdown table (columns like "Linha", "Sentido", "Partidas") instead of plain bullet lists — it's much easier to read. Use one table per leg of the trip when there's a transfer. Always include every line and every departure time the tools returned for that leg; never truncate the table or omit rows to keep the answer short.
-                16. Whenever asked about roadworks, strikes, service disruptions, traffic conditioning, or special/holiday schedules, the current notices are ALREADY provided to you automatically in a "[AVISOS ATUAIS]" block in the context — use ONLY that data, do not call any tool for this and do not claim you lack access to it. If that block says there are no active notices, say so honestly; never invent one.
-                17. NEVER mention hex color codes or internal database ids (the small numeric "id" field from the official line list, e.g. "3" or "39") to the user — these are internal implementation details. Only ever refer to a line by its official short number (e.g. "11", "N11", "2300") and its full name (e.g. "Pereirinhas | Gandarela"). Whenever asked what lines exist, use 'list_all_lines_tool' instead of relying on memory or the schedule cache, since it reflects the live official list automatically.
-                ANTI-HALLUCINATION RULE — THE MOST IMPORTANT OF ALL:
-                NEVER invent, estimate or "fill in" data that the tools or the Knowledge Base did not give you. NEVER assume or invent a date from memory. If you can't find the information in the database, apologise and clearly say the information is not available.
-                If a tool's result contains "⚠️ NOT CONFIRMED", "📍", "🌙", or "ℹ️", you are REQUIRED to communicate that uncertainty to the user in the same terms (e.g. "I don't have exact confirmation, but..."). NEVER present a stop/line found only by name/title similarity as if it were a confirmed fact, NEVER present a night-line-only leg ("🌙" warning) as if it were a normal daytime option without flagging it clearly, and NEVER drop an "ℹ️" note about missing real-time fields (e.g. direction/next-stop data) just to make the answer sound more complete — always mention explicitly which detail you could NOT confirm."""
-                
-                PROMPT_INTERVIEW = """You are an expert IT Technical Recruiter interviewing Celso Ferreira for an IT role.
-                Conduct the interview strictly in English. Ask one tough, deep technical or behavioral question at a time.
-                Evaluate Celso's response professionally based on IT best practices and keep the interviewer persona realistic."""
-
-                PROMPT_RECRUITER = f"""You are Celso Ferreira's Professional Presentation Agent, aimed at recruiters and anyone wanting to know his background.
-
-                {LANGUAGE_INSTRUCTION}
-
-                Your goal is to:
-                1. Answer questions about Celso's CV, skills, professional experience and background, ALWAYS using the information available in the Knowledge Base provided in the context (.md files). NEVER invent dates, companies, roles, technologies or facts about Celso that are not in the Knowledge Base — if the information isn't there, clearly say you don't have that information available, instead of inventing it.
-                2. If the user says something like "quero treinar para uma entrevista" or "I want to train for an interview", let them know you are about to start a technical interview simulation in English (the role switch is handled automatically by the system in the next step).
-                3. If the user presents a technical/IT problem (e.g. "the server went down", "network error", any kind of failure), demonstrate how Celso would solve it — you MUST start the answer with the sentence 'O Celso resolveria este problema desta forma:' (or, in English, 'Celso would solve this problem like this:') and explain the reasoning step by step, following IT best practices. This is meant to show a recruiter how Celso actually thinks and works.
-
-                Always keep a professional, confident and clear tone — you are representing Celso to potential employers. NEVER invent information about Celso outside the Knowledge Base."""
-
-                PROMPT_PROJECT = f"""You are the Agent that explains this project to anyone who asks about it — recruiters, curious visitors, or Celso himself.
-
-                {LANGUAGE_INSTRUCTION}
-
-                This project is an AI agent application built by Celso Ferreira, in Streamlit (Python), with these main components:
-                - A conversational assistant (Guimabus Mode) that uses the Gemini API with function calling to check the fleet's real-time status, schedules and fares (cached locally in SQLite), plan routes with transfers, and resolve locations (cafés, streets, addresses) through a static map (geo_guimaraes.json) with a live geocoding fallback via OpenStreetMap/Nominatim.
-                - An anti-hallucination safety net that forces the model to use real tools before answering questions about routes/schedules, instead of inventing data from the model's generic knowledge.
-                - A notices footer that reads an RSS feed from the Guimabus Facebook page, filters and prioritises notices (roadworks/events with a confirmed end date vs. recent generic posts) and shows them scrolling in the app's footer.
-                - A document-verification system (for pass applications) that uses Gemini to analyse uploaded images/PDFs.
-                - Audio transcription, to allow voice input.
-                - A Knowledge Base built from Markdown files, injected into the model's context, to answer with verified facts instead of generic knowledge.
-                - Three conversation modes (Guimabus, Recruiter, Project) that share the same chat interface, with automatic detection of which prompt/persona to use based on keywords in the question.
-
-                Whenever someone asks about the project, explain it clearly and concisely, adapting the level of detail to what is asked (e.g. "what technologies does it use" focuses on the stack; "why did you build this" focuses on the project's purpose/goal). NEVER invent features that don't exist in the system."""
-
-                normalized_prompt = prompt.lower()
-                project_triggers = ["este projeto", "sobre o projeto", "sobre este projeto", "como foi feito", "como foi construido", "que tecnologias", "stack", "arquitetura", "arquitectura", "this project", "how was this built", "tech stack"]
-                # Split into two tiers: "strong" recruiter signals are unambiguous (CV,
-                # hiring, skills) and should always switch mode. The "IT problem" words
-                # are intentionally generic (so a recruiter can say "give me a problem")
-                # but the same words show up naturally in transport questions (e.g. "há
-                # algum problema na linha 170?"), so they only switch mode when the
-                # message doesn't otherwise look like a route/schedule question.
-                recruiter_triggers_strong = ["cv", "curriculo", "currículo", "recrutador", "recruiter", "contratar", "hire", "experiencia profissional", "experiência profissional", "competencias", "competências", "skills", "helpdesk", "ticket"]
-                recruiter_triggers_it_problem = ["problema", "avaria", "erro", "servidor", "computador", "rede", "suporte", "falha", "problem", "error", "server", "computer", "network", "support"]
-
-                if any(word in normalized_prompt for word in project_triggers):
-                    active_system_prompt = PROMPT_PROJECT
-                    st.session_state.modo_ativo = "project"
-                elif "entrevista" in normalized_prompt or "interview" in normalized_prompt:
-                    active_system_prompt = PROMPT_INTERVIEW
-                    st.session_state.modo_ativo = "interview"
-                elif any(word in normalized_prompt for word in recruiter_triggers_strong):
-                    active_system_prompt = PROMPT_RECRUITER
-                    st.session_state.modo_ativo = "recruiter"
-                elif looks_like_route_request(prompt):
-                    active_system_prompt = PROMPT_GUIMABUS
-                    st.session_state.modo_ativo = "guimabus"
-                elif any(word in normalized_prompt for word in recruiter_triggers_it_problem):
-                    active_system_prompt = PROMPT_RECRUITER
-                    st.session_state.modo_ativo = "recruiter"
-                else:
-                    # No clear signal in this specific message — instead of silently
-                    # resetting to Guimabus (which used to break the thread of an
-                    # ongoing Recruiter/Project conversation on any generic follow-up
-                    # like "e no fim de semana?" or "podes explicar melhor?"), keep
-                    # whatever mode the conversation was already in.
-                    _mapa_modos = {"project": PROMPT_PROJECT, "interview": PROMPT_INTERVIEW, "recruiter": PROMPT_RECRUITER, "guimabus": PROMPT_GUIMABUS}
-                    active_system_prompt = _mapa_modos.get(st.session_state.get("modo_ativo", "guimabus"), PROMPT_GUIMABUS)
-
-                historico_api = []
-                for msg in st.session_state.messages[:-1]:
-                    if msg["content"] not in [ui["initial_msg"], UI_TEXT["PT"]["initial_msg"], UI_TEXT["EN"]["initial_msg"]]:
-                        role_api = "model" if msg["role"] == "assistant" else "user"
-                        historico_api.append({"role": role_api, "parts": [msg["content"]]})
-                
-                agora = datetime.now(ZoneInfo("Europe/Lisbon"))
-                tipo_dia_hoje = _tipo_de_dia_pt(agora)
-                nome_dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
-                contexto_data = (
-                    f"[DATA E HORA ATUAL DO SISTEMA: {agora.strftime('%Y-%m-%d %H:%M')} ({nome_dia_semana}). "
-                    f"TIPO DE DIA PARA EFEITOS DE HORÁRIOS (já calculado, não precisas de calcular): {tipo_dia_hoje}.]"
-                )
-
-                prompt_enriquecido = f"{contexto_data}\n\n{contexto_base}\n\nUser Prompt: {prompt}"
-
-                # CORREÇÃO IMPORTANTE (2026-07-26): confiar que o modelo vai decidir chamar
-                # 'query_transit_notices_tool' sozinho — mesmo com o safety net forçado —
-                # revelou-se frágil: houve um caso confirmado em que o modelo respondeu
-                # "não tenho acesso a esta ferramenta" apesar de ela estar disponível (a
-                # tentativa forçada de function-calling falhou silenciosamente). Em vez de
-                # continuar a depender do mecanismo de function-calling da API para algo tão
-                # simples e sem argumentos, vamos buscar os avisos NÓS MESMOS em Python,
-                # sempre que a pergunta parecer ser sobre isso, e entregamos o resultado já
-                # pronto no contexto — o modelo só tem de o ler, nunca decidir chamar nada.
-                if active_system_prompt == PROMPT_GUIMABUS and looks_like_notice_request(prompt):
-                    try:
-                        avisos_texto_proativo = query_transit_notices_tool()
-                    except Exception as e:
-                        avisos_texto_proativo = f"(Erro ao obter avisos: {e})"
-                        logging.error(f"Erro ao pré-buscar avisos proativamente: {e}")
-                    prompt_enriquecido += (
-                        f"\n\n[AVISOS ATUAIS — JÁ OBTIDOS AUTOMATICAMENTE, NÃO precisas de chamar "
-                        f"nenhuma ferramenta para os obter, e NUNCA digas que não tens acesso a "
-                        f"esta informação, ela já está aqui em baixo:]\n{avisos_texto_proativo}"
-                    )
-
-                
-                agent_tools = [get_guimabus_data, get_stop_schedule, query_line_schedule_cache, query_pass_types_cache_tool, query_fare_table_cache, plan_trip_with_transfer, plan_trip_from_place, query_stop_parish_tool, generate_google_maps_link, find_nearest_stop, search_places_by_type, query_transit_notices_tool, list_all_lines_tool]
-                
-                candidate_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
-                response = None
-                last_model_error = None
-                chat = None
-                history_len_before = 0
-
-                for model_name in candidate_models:
-                    try:
-                        model = genai.GenerativeModel(
-                            model_name=model_name,
-                            system_instruction=active_system_prompt,
-                            tools=agent_tools,
-                            # A low, fixed temperature makes tool-calling decisions far
-                            # more consistent: with the provider's default sampling, the
-                            # exact same question could sometimes trigger a real tool
-                            # call and sometimes get an "I don't know" answer purely by
-                            # chance. Factual/route questions should behave the same way
-                            # every time they're asked.
-                            generation_config={"temperature": 0.2},
-                        )
-                        chat = model.start_chat(history=historico_api, enable_automatic_function_calling=True)
-                        history_len_before = len(chat.history)
-                        response = chat.send_message(prompt_enriquecido, request_options={"timeout": 25})
-                        break
-                    except Exception as e:
-                        last_model_error = e
-                        continue
-
-                if response is None:
-                    if last_model_error is not None and "429" in str(last_model_error):
-                        st.error(ui["api_limit"])
-                    else:
-                        st.error(ui["model_error"])
-                    st.stop()
-
-                def _called_real_tool(chat_obj, desde_indice, nomes_permitidos=None):
-                    """Checks whether, since 'since_index', the chat history contains a
-                    real call to one of 'nomes_permitidos' (defaults to ROUTE_TOOL_NAMES),
-                    instead of the model having answered purely from its own generic
-                    knowledge — or, worse, from the WRONG tool for the question asked."""
-                    nomes = nomes_permitidos if nomes_permitidos is not None else ROUTE_TOOL_NAMES
-                    try:
-                        for entrada in chat_obj.history[desde_indice:]:
-                            for part in getattr(entrada, "parts", []):
-                                fc = getattr(part, "function_call", None)
-                                if fc and getattr(fc, "name", None) in nomes:
-                                    return True
-                    except Exception:
-                        pass
-                    return False
-
-                # 🛡️ ANTI-HALLUCINATION SAFETY NET
-                # If the question is clearly about routes/lines/schedules and the model did NOT
-                # call any real tool, it answered "off the top of its head" — exactly
-                # what happens when it invents line numbers. We force a new attempt
-                # in which it is required to consult a real tool before answering.
-                #
-                # Important exception: if the model already answered with honest uncertainty
-                # (e.g. "I could not find...", "not confirmed"), it did NOT hallucinate — it
-                # correctly admitted it doesn't know. Forcing a retry in that case only adds
-                # latency (a second full API call, up to +25s) and risks the model being
-                # forced to call a tool with made-up arguments just to satisfy the rule,
-                # producing a worse answer than the honest one it already gave. So we skip
-                # the retry whenever the response already shows that honesty.
-                #
-                # IMPORTANT — this used to be two separate checks (a general route check
-                # and a stricter notices check), each capable of firing its OWN forced
-                # retry. That meant a single user message could trigger up to 3 total
-                # Gemini API calls (1 initial + 2 retries), burning through the free daily
-                # quota much faster than necessary. They are now unified into ONE check
-                # that decides which tool(s) to require and fires AT MOST one retry.
-                _FRASES_INCERTEZA_HONESTA = [
-                    "não encontrei", "nao encontrei", "não consegui", "nao consegui",
-                    "não confirmado", "not confirmed", "could not find", "não tenho essa informação",
-                    "não tenho informação", "não disponho", "não existem linhas",
-                    "sem transbordo", "sem informação",
-                ]
-                resposta_ja_e_honesta = any(f in response.text.lower() for f in _FRASES_INCERTEZA_HONESTA)
-
-                # Notices questions (obras/greve/serviços especiais) já não dependem do
-                # modelo decidir chamar 'query_transit_notices_tool' — os dados são agora
-                # SEMPRE pré-injetados diretamente no prompt em Python (ver mais acima,
-                # antes da chamada ao Gemini), porque confiar no function-calling forçado
-                # para isto revelou-se frágil (houve um caso confirmado em que a tentativa
-                # forçada falhou silenciosamente e o modelo respondeu "não tenho acesso").
-                # Por isso este safety net específico foi removido — já não é preciso.
-                if active_system_prompt == PROMPT_GUIMABUS and chat is not None:
-                    if looks_like_route_request(prompt) and not looks_like_notice_request(prompt) and not resposta_ja_e_honesta:
-                        ferramentas_exigidas = ROUTE_TOOL_NAMES
-                        instrucao_forcada = (
-                            "A tua resposta anterior não usou nenhuma ferramenta de trajeto/horários. "
-                            "Repete a resposta, mas és OBRIGADO a consultar uma ferramenta real "
-                            "(plan_trip_from_place, plan_trip_with_transfer, "
-                            "query_line_schedule_cache, get_stop_schedule ou "
-                            "find_nearest_stop) antes de responderes. "
-                            "NUNCA inventes linhas ou horários que não venham da ferramenta."
-                        )
-                    else:
-                        ferramentas_exigidas = None
-                        instrucao_forcada = None
-
-                    if ferramentas_exigidas and not _called_real_tool(chat, history_len_before, ferramentas_exigidas):
-                        logging.error(f"Possible hallucination detected (missing call to {ferramentas_exigidas}) for the prompt: {prompt}")
-                        try:
-                            forced_tool_config = {
-                                "function_calling_config": {
-                                    "mode": "ANY",
-                                    "allowed_function_names": ferramentas_exigidas,
-                                }
-                            }
-                            forced_response = chat.send_message(
-                                instrucao_forcada,
-                                tool_config=forced_tool_config,
-                                request_options={"timeout": 25}
-                            )
-                            response = forced_response
-                        except Exception as e:
-                            logging.error(f"Anti-hallucination safety net failure: {e}")
-
-                full_response = response.text
-
+# --- Pedido em curso: mostra um indicador e faz "polling" leve (1s de cada vez) ---
+# Cada verificação é rápida (não está bloqueada na chamada à API, que corre na
+# thread separada), por isso qualquer clique noutro botão da app (jogo, passes,
+# admin) durante este intervalo é processado quase de imediato, em vez de ficar
+# à espera dos 10-25 segundos que a resposta do agente pode demorar.
+if st.session_state.chat_processando:
+    resultado = st.session_state.chat_resultado
+    if resultado.get("pronto"):
+        st.session_state.chat_processando = False
+        with st.chat_message("assistant", avatar="💼"):
+            if resultado.get("ok"):
+                full_response = resultado["full_response"]
+                st.session_state.modo_ativo = resultado["novo_modo_ativo"]
                 st.markdown(full_response)
-                
                 save_message_db(st.session_state.session_id, "assistant", full_response)
                 st.download_button(ui["download_txt"], full_response, "resposta.txt")
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
-                
-            except Exception as e:
-                st.error(f"Erro detetado no pipeline do agente: {e}")
+            else:
+                chave = resultado.get("erro_chave")
+                if chave == "api_limit":
+                    st.error(ui["api_limit"])
+                elif chave == "model_error":
+                    st.error(ui["model_error"])
+                else:
+                    st.error(f"Erro detetado no pipeline do agente: {resultado.get('detalhe')}")
+    else:
+        with st.chat_message("assistant", avatar="💼"):
+            st.markdown(f"⏳ {ui['processing_agent']}")
+        time.sleep(1)
+        st.rerun()
