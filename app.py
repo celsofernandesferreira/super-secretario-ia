@@ -2055,19 +2055,34 @@ def _obter_conteudo_bruto_linha(linha_id: str):
 def _extrair_horarios_de_paragem(texto_linha: str, nome_paragem: str):
     """Dado o texto completo (bruto) dos horários de uma linha, e o nome de uma
     paragem específica, encontra a(s) linha(s) de texto correspondentes a essa
-    paragem e devolve APENAS os horários REAIS (formato HH:MM) — os valores
-    '-' são descartados aqui, em Python, de forma determinística.
+    paragem e devolve os horários REAIS (formato HH:MM) — os valores '-' são
+    descartados aqui, em Python, de forma determinística.
 
     Isto existe porque pedir ao modelo de IA para distinguir '-' (não passa
     nesta viagem) de uma hora real, dentro de uma tabela de texto densa com
     muitas colunas, revelou-se pouco fiável — exatamente o tipo de tarefa que
     deve ser feita em código, não deixada ao critério do modelo (ver regra 10
-    do prompt, que tentava ensinar isto só por texto e não chegava)."""
+    do prompt, que tentava ensinar isto só por texto e não chegava).
+
+    CORREÇÃO IMPORTANTE (confirmada pelo utilizador com um caso real da linha
+    163): a versão anterior tinha dois bugs relacionados:
+    1. Não distinguia correspondência EXATA de nome de correspondência
+       aproximada (substring) — se houvesse uma paragem parecida mas
+       diferente com horários reais, esta podia "vazar" por engano em vez da
+       paragem exata pedida (que podia ter só '-').
+    2. Descartava silenciosamente paragens encontradas mas sem NENHUM horário
+       real (todas '-') — em vez de reportar honestamente "esta paragem
+       existe mas nunca é servida", o código simplesmente ignorava essa linha
+       e podia cair para outra paragem parecida com horários reais.
+    Agora a correspondência exata tem sempre prioridade (mesmo sem horários
+    reais), e só se recorre a correspondências aproximadas — e só às que têm
+    horários reais — se não existir nenhuma exata."""
     if not texto_linha or not nome_paragem:
         return []
     nome_norm = _normalize_stop_name(nome_paragem)
     padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2}))*)\s*$')
-    resultados = []
+    resultados_exatos = []
+    resultados_aproximados = []
     for linha_texto in texto_linha.split("\n"):
         linha_texto = linha_texto.strip()
         if not linha_texto or "|" in linha_texto or linha_texto.startswith("[P"):
@@ -2077,17 +2092,22 @@ def _extrair_horarios_de_paragem(texto_linha: str, nome_paragem: str):
             continue
         nome_linha_atual = m.group("nome").strip(" -\t")
         nome_linha_norm = _normalize_stop_name(nome_linha_atual)
-        # Correspondência tolerante: paragem pedida tem de aparecer como
-        # substring do nome encontrado (ou vice-versa), para aceitar pequenas
-        # variações de escrita entre o que o utilizador escreveu e o nome
-        # exato no PDF oficial.
-        if nome_norm not in nome_linha_norm and nome_linha_norm not in nome_norm:
-            continue
         entradas = m.group("horarios").split()
         horarios_reais = [e for e in entradas if e != "-" and re.match(r'^\d{1,2}:\d{2}$', e)]
-        if horarios_reais:
-            resultados.append((nome_linha_atual, horarios_reais))
-    return resultados
+
+        if nome_linha_norm == nome_norm:
+            # Correspondência EXATA — prioridade máxima, mesmo sem horários
+            # reais (é importante saber que existe mas nunca é servida, em vez
+            # de cair silenciosamente para outra paragem parecida).
+            resultados_exatos.append((nome_linha_atual, horarios_reais))
+        elif nome_norm in nome_linha_norm or nome_linha_norm in nome_norm:
+            resultados_aproximados.append((nome_linha_atual, horarios_reais))
+
+    if resultados_exatos:
+        return resultados_exatos
+    # Só recorre a aproximadas, e só às que realmente têm horários reais —
+    # nunca deixamos uma aproximação sem horários "ganhar" silenciosamente.
+    return [r for r in resultados_aproximados if r[1]]
 
 def query_stop_line_times_tool(linha: str, paragem: str):
     """Ferramenta: dado o número de uma linha e o nome de uma paragem
@@ -2112,13 +2132,27 @@ def query_stop_line_times_tool(linha: str, paragem: str):
             f"que a linha não passa lá."
         )
 
+    # Se a(s) correspondência(s) encontrada(s) não tiverem NENHUM horário real,
+    # a paragem existe na tabela mas NUNCA é servida por esta linha (todas as
+    # entradas dessa linha são '-') — reporta isto explicitamente, nunca cai
+    # silenciosamente para outra paragem parecida.
+    if all(not horarios for _, horarios in resultados):
+        nomes_encontrados = ", ".join(nome for nome, _ in resultados)
+        return (
+            f"A paragem '{nomes_encontrados}' consta da tabela de horários da linha {linha}, mas "
+            f"NUNCA é servida por nenhuma viagem desta linha — todas as entradas dessa linha na "
+            f"tabela oficial são '-'. Esta linha NÃO serve esta paragem; confirma se existe outra "
+            f"linha que sirva."
+        )
+
     resumo = (
         f"Horários REAIS em que a linha {linha} passa em '{paragem}' (já filtrados — os "
         f"marcadores '-' do PDF oficial foram removidos automaticamente porque significam "
         f"'esta viagem não passa aqui', não uma hora de passagem):\n\n"
     )
     for nome_encontrado, horarios in resultados:
-        resumo += f"- {nome_encontrado}: {', '.join(horarios)}\n"
+        if horarios:
+            resumo += f"- {nome_encontrado}: {', '.join(horarios)}\n"
     return resumo
 
 def load_knowledge_base():
