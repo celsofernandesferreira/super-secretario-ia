@@ -2052,7 +2052,49 @@ def _obter_conteudo_bruto_linha(linha_id: str):
     except Exception:
         return None
 
-def _extrair_horarios_de_paragem(texto_linha: str, nome_paragem: str):
+# Padrões de cabeçalho de secção usados nos PDFs oficiais da Guimabus para
+# separar as tabelas de "Dias Úteis" / "Sábados" / "Domingos e Feriados"
+# dentro do MESMO ficheiro (confirmado pelo utilizador: um único PDF pode ter
+# várias tabelas, e sem separar por secção o código estava a juntar horários
+# de dias diferentes na mesma resposta — o bug real por trás dos horários
+# duplicados/misturados que apareciam para a mesma paragem).
+_CABECALHOS_TIPO_DIA = {
+    "Dia Útil": [r'dias?\s+úteis?', r'\bd\.?\s*u\.?\b'],
+    "Sábado": [r's[áa]bados?'],
+    "Domingo e Feriados": [r'domingos?\s+e\s+feriados?', r'dom(?:ingos?)?\s*[/e]\s*fer(?:iados?)?'],
+}
+
+def _segmentar_texto_por_tipo_dia(texto: str):
+    """Divide o texto bruto de horários em segmentos por tipo de dia (Dia Útil /
+    Sábado / Domingo e Feriados), detetando cabeçalhos de secção linha a linha.
+    Devolve um dicionário {tipo_dia: texto_do_segmento}. Se não conseguir
+    detetar nenhum cabeçalho reconhecível, devolve {"TODO": texto} — o PDF não
+    está segmentado por dia, ou usa uma formatação diferente da esperada."""
+    if not texto:
+        return {"TODO": texto}
+    linhas = texto.split("\n")
+    marcadores = []
+    for i, linha_texto in enumerate(linhas):
+        linha_lower = linha_texto.lower().strip()
+        # Só considera cabeçalhos linhas curtas (títulos de secção, não uma
+        # linha de horários que por coincidência contenha estas palavras).
+        if len(linha_lower) > 60:
+            continue
+        for tipo_dia, padroes in _CABECALHOS_TIPO_DIA.items():
+            if any(re.search(p, linha_lower) for p in padroes):
+                marcadores.append((i, tipo_dia))
+                break
+    if not marcadores:
+        return {"TODO": texto}
+
+    segmentos = {}
+    for idx, (linha_idx, tipo_dia) in enumerate(marcadores):
+        fim = marcadores[idx + 1][0] if idx + 1 < len(marcadores) else len(linhas)
+        texto_segmento = "\n".join(linhas[linha_idx:fim])
+        segmentos[tipo_dia] = segmentos.get(tipo_dia, "") + "\n" + texto_segmento
+    return segmentos
+
+def _extrair_horarios_de_paragem(texto_linha: str, nome_paragem: str, tipo_dia: str = None):
     """Dado o texto completo (bruto) dos horários de uma linha, e o nome de uma
     paragem específica, encontra a(s) linha(s) de texto correspondentes a essa
     paragem e devolve os horários REAIS (formato HH:MM) — os valores '-' são
@@ -2076,14 +2118,33 @@ def _extrair_horarios_de_paragem(texto_linha: str, nome_paragem: str):
        e podia cair para outra paragem parecida com horários reais.
     Agora a correspondência exata tem sempre prioridade (mesmo sem horários
     reais), e só se recorre a correspondências aproximadas — e só às que têm
-    horários reais — se não existir nenhuma exata."""
+    horários reais — se não existir nenhuma exata.
+
+    CORREÇÃO ADICIONAL (confirmada com um segundo caso real, horários
+    duplicados/misturados): o PDF de uma linha pode conter VÁRIAS tabelas no
+    mesmo ficheiro — "Dias Úteis", "Sábados", "Domingos e Feriados" — todas
+    com uma linha para a mesma paragem, mas com horários DIFERENTES. Sem
+    filtrar por secção, esta função encontrava a paragem em todas as tabelas
+    e juntava tudo, produzindo listas de horários duplicadas/sem sentido. Se
+    'tipo_dia' for indicado, a pesquisa restringe-se primeiro à secção certa
+    do texto (via _segmentar_texto_por_tipo_dia)."""
     if not texto_linha or not nome_paragem:
         return []
+
+    texto_a_usar = texto_linha
+    if tipo_dia:
+        segmentos = _segmentar_texto_por_tipo_dia(texto_linha)
+        if tipo_dia in segmentos:
+            texto_a_usar = segmentos[tipo_dia]
+        # Se não encontrar segmento específico ('TODO' = PDF não segmentado
+        # por dia), mantém o texto completo como reserva — melhor mostrar
+        # algo com um aviso do que nada.
+
     nome_norm = _normalize_stop_name(nome_paragem)
     padrao = re.compile(r'^(?P<nome>.+?)\s+(?P<horarios>(?:-|\d{1,2}:\d{2})(?:\s+(?:-|\d{1,2}:\d{2}))*)\s*$')
     resultados_exatos = []
     resultados_aproximados = []
-    for linha_texto in texto_linha.split("\n"):
+    for linha_texto in texto_a_usar.split("\n"):
         linha_texto = linha_texto.strip()
         if not linha_texto or "|" in linha_texto or linha_texto.startswith("[P"):
             continue
@@ -2112,9 +2173,11 @@ def _extrair_horarios_de_paragem(texto_linha: str, nome_paragem: str):
 def query_stop_line_times_tool(linha: str, paragem: str):
     """Ferramenta: dado o número de uma linha e o nome de uma paragem
     específica, devolve APENAS os horários reais em que essa linha passa
-    nessa paragem — já filtrados em Python. Os '-' que aparecem no PDF
-    oficial significam 'esta viagem específica não passa nesta paragem' e são
-    removidos automaticamente; NUNCA os apresentes como se fossem horários.
+    nessa paragem, JÁ FILTRADOS PARA O TIPO DE DIA DE HOJE (Dia Útil/Sábado/
+    Domingo e Feriados, calculado automaticamente — não precisas de indicar
+    isso). Os '-' que aparecem no PDF oficial significam 'esta viagem
+    específica não passa nesta paragem' e são removidos automaticamente;
+    NUNCA os apresentes como se fossem horários.
     Usa esta ferramenta sempre que o utilizador perguntar por horários de uma
     linha NUMA PARAGEM ESPECÍFICA (ex: 'a que horas passa a 163 na EB23 de
     Briteiros'), em vez de tentar ler a tabela completa de horários e
@@ -2123,7 +2186,15 @@ def query_stop_line_times_tool(linha: str, paragem: str):
     if not conteudo:
         return f"Não existem horários em cache para a linha {linha}. Peça ao administrador para rodar a Sincronização Geral."
 
-    resultados = _extrair_horarios_de_paragem(conteudo, paragem)
+    # Calcula o tipo de dia de HOJE em Python (nunca deixado ao critério do
+    # modelo) e usa-o para restringir a pesquisa à secção certa do PDF, caso
+    # este tenha várias tabelas (Dias Úteis/Sábados/Domingos) no mesmo texto —
+    # ver nota na função _extrair_horarios_de_paragem sobre o bug de horários
+    # duplicados/misturados que isto corrige.
+    tipo_dia_completo = _tipo_de_dia_pt(datetime.now(ZoneInfo("Europe/Lisbon")))
+    tipo_dia_base = tipo_dia_completo.split(" (")[0]  # remove sufixo "(hoje é feriado: X)" se existir
+
+    resultados = _extrair_horarios_de_paragem(conteudo, paragem, tipo_dia=tipo_dia_base)
     if not resultados:
         return (
             f"⚠️ NOT CONFIRMED: não encontrei a paragem '{paragem}' no texto de horários da linha "
@@ -2139,14 +2210,13 @@ def query_stop_line_times_tool(linha: str, paragem: str):
     if all(not horarios for _, horarios in resultados):
         nomes_encontrados = ", ".join(nome for nome, _ in resultados)
         return (
-            f"A paragem '{nomes_encontrados}' consta da tabela de horários da linha {linha}, mas "
-            f"NUNCA é servida por nenhuma viagem desta linha — todas as entradas dessa linha na "
-            f"tabela oficial são '-'. Esta linha NÃO serve esta paragem; confirma se existe outra "
-            f"linha que sirva."
+            f"A paragem '{nomes_encontrados}' consta da tabela de horários da linha {linha} ({tipo_dia_base}), "
+            f"mas NUNCA é servida por nenhuma viagem desta linha nesse dia — todas as entradas são "
+            f"'-'. Esta linha NÃO serve esta paragem hoje; confirma se existe outra linha que sirva."
         )
 
     resumo = (
-        f"Horários REAIS em que a linha {linha} passa em '{paragem}' (já filtrados — os "
+        f"Horários REAIS ({tipo_dia_base}) em que a linha {linha} passa em '{paragem}' (já filtrados — os "
         f"marcadores '-' do PDF oficial foram removidos automaticamente porque significam "
         f"'esta viagem não passa aqui', não uma hora de passagem):\n\n"
     )
